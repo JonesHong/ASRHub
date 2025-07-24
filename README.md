@@ -31,47 +31,30 @@ ASR Hub 是一個功能強大的語音辨識中介系統，整合多種 ASR（Au
 - Linux/macOS/Windows
 - 記憶體：建議 4GB 以上（視使用的 ASR 模型而定）
 
-### 安裝
+### 安裝與設置
 
+詳細的安裝與設置步驟請參考 [SETUP.md](SETUP.md)
+
+快速步驟：
 ```bash
 # 克隆專案
-git clone https://github.com/asrhub/asr-hub.git
-cd asr-hub
+git clone https://github.com/JonesHong/ASRHub.git
+cd ASRHub
 
-# 建立虛擬環境
+# 建立虛擬環境並安裝依賴
 python -m venv venv
 source venv/bin/activate  # Linux/macOS
-# 或
-venv\Scripts\activate  # Windows
-
-# 安裝依賴
 pip install -r requirements.txt
-pip install -e .
-```
 
-### 配置
-
-1. 複製配置範例檔案：
-```bash
+# 設置配置
 cp config/base.sample.yaml config/base.yaml
-```
+# 編輯 config/base.yaml 填入您的設定
 
-2. 編輯 `config/base.yaml` 設定您的配置
+# 生成配置類別（重要！）
+yaml2py --config config/base.yaml --output ./src/config
 
-3. 設定環境變數（可選）：
-```bash
-export DB_PASSWORD=your_password
-export API_PORT=8080
-```
-
-### 執行
-
-```bash
-# 開發模式
+# 執行
 python -m src.core.asr_hub
-
-# 或使用命令列工具
-asr-hub --config config/base.yaml
 ```
 
 ## 📖 架構概覽
@@ -151,6 +134,7 @@ response = requests.post('http://localhost:8080/control', json={
 
 ## 📚 文件
 
+- [設置指南](SETUP.md)
 - [軟體需求規格說明書](SRS.md)
 - [開發原則](PRINCIPLE.md)
 - [專案架構](PROJECT_STRUCTURE.md)
