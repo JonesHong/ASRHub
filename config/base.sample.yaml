@@ -1,0 +1,277 @@
+# ASR Hub 配置檔案範例
+# 將此檔案複製為 base.yaml 並根據您的需求修改設定值
+# 支援環境變數替換: ${VAR_NAME} 或 ${VAR_NAME:default_value}
+
+# ===== 系統核心設定 =====
+system:
+  name: "ASR_Hub"
+  version: "0.1.0"
+  mode: ${APP_ENV:development}  # development, production, testing
+  debug: ${DEBUG:true}
+
+# ===== 日誌設定 =====
+logging:
+  path: "./logs"
+  rotation: "100 MB"      # 日誌輪替：可用 "daily", "100 MB", "7 days" 等
+  retention: "30 days"    # 日誌保留期限
+  level: ${LOG_LEVEL:INFO}  # TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "detailed"      # detailed, simple, json
+
+# ===== API 設定 =====
+api:
+  # HTTP SSE (Server-Sent Events) 配置
+  http_sse:
+    host: ${API_HOST:0.0.0.0}
+    port: ${API_PORT:8080}
+    cors_enabled: true
+    max_connections: 100
+    timeout: 300  # 秒
+    
+  # WebSocket 配置
+  websocket:
+    enabled: false
+    host: ${WS_HOST:0.0.0.0}
+    port: ${WS_PORT:8081}
+    max_message_size: 10485760  # 10 MB
+    ping_interval: 30
+    
+  # gRPC 配置
+  grpc:
+    enabled: false
+    host: ${GRPC_HOST:0.0.0.0}
+    port: ${GRPC_PORT:50051}
+    max_receive_message_length: 10485760
+    
+  # Socket.IO 配置
+  socketio:
+    enabled: false
+    host: ${SOCKETIO_HOST:0.0.0.0}
+    port: ${SOCKETIO_PORT:8082}
+    cors_allowed_origins: "*"
+    
+  # Redis 配置
+  redis:
+    enabled: false
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    db: ${REDIS_DB:0}
+    password: ${REDIS_PASSWORD:}  # 空字串表示無密碼
+    channel_prefix: "asr_hub:"
+
+# ===== Pipeline 設定 =====
+pipeline:
+  default_sample_rate: 16000
+  buffer_size: 4096
+  max_pipeline_length: 10  # 最大 operator 數量
+  
+  # Pipeline Operators 配置
+  operators:
+    # VAD (Voice Activity Detection) 語音活動偵測
+    vad:
+      enabled: true
+      type: "webrtc"  # webrtc, silero
+      sensitivity: 0.5  # 0.0 - 1.0，越高越敏感
+      frame_duration: 30  # ms
+      padding_duration: 300  # ms
+      
+    # 降噪
+    denoise:
+      enabled: false
+      type: "rnnoise"  # rnnoise, noisereduce
+      strength: 0.7
+      
+    # 取樣率調整
+    sample_rate_adjustment:
+      enabled: true
+      target_rate: 16000
+      quality: "high"  # low, medium, high
+      
+    # 人聲分離
+    voice_separation:
+      enabled: false
+      model: "spleeter"
+      stems: 2  # 2 或 4
+      
+    # 格式轉換
+    format_conversion:
+      enabled: true
+      target_format: "pcm"  # pcm, wav, mp3
+      channels: 1  # 1 (mono) 或 2 (stereo)
+      bits_per_sample: 16
+      
+    # 錄音功能
+    recording:
+      enabled: false
+      path: "./recordings"
+      format: "wav"
+      keep_days: 7
+
+# ===== ASR Provider 設定 =====
+providers:
+  default: "whisper"  # 預設使用的 provider
+  
+  # Local Whisper
+  whisper:
+    enabled: true
+    model_size: ${WHISPER_MODEL:base}  # tiny, base, small, medium, large
+    language: "zh"  # 語言代碼，null 表示自動偵測
+    device: ${WHISPER_DEVICE:cpu}  # cpu, cuda, mps
+    compute_type: "float32"  # float32, float16, int8
+    beam_size: 5
+    best_of: 5
+    temperature: 0.0
+    # 模型下載路徑
+    model_path: "./models/whisper"
+    
+  # FunASR
+  funasr:
+    enabled: false
+    model: "paraformer"  # paraformer, conformer
+    language: "zh"
+    device: "cpu"
+    model_path: "./models/funasr"
+    
+  # Vosk
+  vosk:
+    enabled: false
+    model_path: "./models/vosk/vosk-model-cn-0.22"
+    sample_rate: 16000
+    
+  # Google Cloud Speech-to-Text
+  google_stt:
+    enabled: false
+    credentials_path: ${GOOGLE_APPLICATION_CREDENTIALS:}
+    language_code: "zh-TW"
+    encoding: "LINEAR16"
+    sample_rate: 16000
+    enable_automatic_punctuation: true
+    
+  # OpenAI API
+  openai:
+    enabled: false
+    api_key: ${OPENAI_API_KEY:}
+    model: "whisper-1"
+    language: "zh"
+    temperature: 0.0
+    base_url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+
+# ===== 喚醒詞設定 =====
+wakeword:
+  enabled: false
+  type: "asr_keyword"  # asr_keyword, openwakeword, porcupine
+  keywords: 
+    - "你好小明"
+    - "Hey Assistant"
+    - "小愛同學"
+  sensitivity: 0.5  # 0.0 - 1.0
+  cooldown: 2.0  # 喚醒後的冷卻時間（秒）
+  
+  # OpenWakeWord 特定設定
+  openwakeword:
+    model_path: "./models/wakeword/openwakeword"
+    threshold: 0.5
+    
+  # ASR 關鍵詞特定設定
+  asr_keyword:
+    similarity_threshold: 0.8  # 相似度閾值
+
+# ===== 串流設定 =====
+stream:
+  # 靜音偵測設定
+  silence_timeout: 3.0  # 秒，靜音超過此時間後自動停止
+  initial_silence_timeout: 10.0  # 初始靜音超時
+  
+  # 手動終止
+  manual_termination: true
+  termination_phrase: "結束辨識"  # 說出此詞彙時停止辨識
+  
+  # Busy 模式設定
+  busy_mode:
+    enabled: true
+    continue_listening: true  # busy 狀態時是否繼續聆聽
+    buffer_audio: true  # 是否緩存 busy 期間的音訊
+    max_buffer_duration: 30.0  # 最大緩存時長（秒）
+    
+  # 串流緩衝設定
+  buffer:
+    size: 8192
+    max_chunks: 1000
+    overflow_strategy: "drop_oldest"  # drop_oldest, drop_newest, block
+
+# ===== 效能設定 =====
+performance:
+  # 執行緒池設定
+  thread_pool:
+    min_workers: 2
+    max_workers: 10
+    
+  # 記憶體限制
+  memory:
+    max_usage_mb: 2048
+    gc_threshold: 0.8  # 觸發 GC 的記憶體使用率
+    
+  # 批次處理
+  batch:
+    enabled: false
+    size: 10
+    timeout: 1.0
+
+# ===== 安全設定 =====
+security:
+  # API 認證
+  auth:
+    enabled: false
+    type: "api_key"  # api_key, jwt, oauth2
+    api_keys: []  # 在 base.yaml 中設定實際的 API keys
+    
+  # 速率限制
+  rate_limit:
+    enabled: true
+    requests_per_minute: 60
+    requests_per_hour: 1000
+    
+  # SSL/TLS
+  ssl:
+    enabled: false
+    cert_file: ${SSL_CERT_FILE:}
+    key_file: ${SSL_KEY_FILE:}
+
+# ===== 監控設定 =====
+monitoring:
+  # Metrics
+  metrics:
+    enabled: false
+    export_interval: 60  # 秒
+    
+  # Health Check
+  health_check:
+    enabled: true
+    endpoint: "/health"
+    check_interval: 30  # 秒
+    
+  # 追蹤
+  tracing:
+    enabled: false
+    service_name: "asr-hub"
+    
+# ===== 資料庫設定（可選，用於儲存 session 或日誌）=====
+database:
+  enabled: false
+  type: "sqlite"  # sqlite, postgresql, mysql
+  
+  # SQLite 設定
+  sqlite:
+    path: "./data/asr_hub.db"
+    
+  # PostgreSQL/MySQL 設定
+  host: ${DB_HOST:localhost}
+  port: ${DB_PORT:5432}
+  name: ${DB_NAME:asr_hub}
+  user: ${DB_USER:postgres}
+  password: ${DB_PASSWORD:}  # 敏感資料，會自動遮罩
+  
+  # 連接池設定
+  pool:
+    size: 10
+    max_overflow: 20
+    timeout: 30
