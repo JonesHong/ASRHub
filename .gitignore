@@ -134,9 +134,9 @@ dmypy.json
 Thumbs.db
 
 # Project specific
-config/base.yaml
-config/base.dev.yaml
-config/base.prod.yaml
+config/config.yaml
+config/config.dev.yaml
+config/config.prod.yaml
 logs/*.log
 recordings/*.wav
 recordings/*.mp3
