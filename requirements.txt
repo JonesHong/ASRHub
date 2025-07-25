@@ -1,55 +1,38 @@
-# Core dependencies
+# ASR Hub 依賴套件
+
+# 核心依賴
 yaml2py==0.2.0
 pretty-loguru==1.1.3
+pydantic>=2.11.7
+python-dotenv>=1.1.1
 
-# YAML and configuration
-pyyaml>=6.0
-watchdog>=3.0.0
-python-dotenv>=1.0.0
+# 非同步框架
+fastapi>=0.111.0
+uvicorn[standard]>=0.35.0
+aiofiles>=24.1.0
+httpx>=0.28.1
+sse-starlette>=2.4.1
+python-multipart>=0.0.20
 
-# CLI and visual enhancement
-click>=8.1.0
-rich>=13.0.0
-art>=6.0
+# 音訊處理
+numpy==2.2.6  # librosa 安裝時降級為此版本
+scipy>=1.16.0
+soundfile>=0.13.1
+librosa==0.11.0  # 成功安裝，使用 numba 0.61.2 (支援 Python 3.12)
 
-# Web frameworks (for API)
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
-aiohttp>=3.8.0
-python-socketio>=5.9.0
-grpcio>=1.56.0
-grpcio-tools>=1.56.0
-redis>=4.6.0
+# ASR Providers
+# Whisper
+openai-whisper==20250625  # 成功安裝
+faster-whisper>=1.1.1
 
-# Audio processing
-numpy>=1.24.0
-scipy>=1.10.0
-librosa>=0.10.0
-webrtcvad>=2.0.10
-pydub>=0.25.1
-noisereduce>=3.0.0
 
-# ASR providers (optional, will be installed as needed)
-# openai-whisper>=20230314
-# faster-whisper>=0.10.0
-# vosk>=0.3.45
-# google-cloud-speech>=2.20.0
+# 測試工具（選用）
+pytest>=8.4.1
+pytest-asyncio>=1.1.0
+pytest-cov>=6.2.1
 
-# Development tools
-pytest>=7.4.0
-pytest-cov>=4.1.0
-pytest-asyncio>=0.21.0
-black>=23.7.0
-flake8>=6.1.0
-mypy>=1.5.0
-pre-commit>=3.3.3
-
-# Documentation
-mkdocs>=1.5.0
-mkdocs-material>=9.2.0
-mkdocstrings[python]>=0.23.0
-
-# Utilities
-python-multipart>=0.0.6
-httpx>=0.24.1
-psutil>=5.9.5
+# 開發工具（選用）
+black>=25.1.0
+flake8>=7.3.0
+mypy>=1.17.0
+pre-commit>=4.2.0

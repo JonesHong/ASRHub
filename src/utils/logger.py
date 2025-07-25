@@ -3,7 +3,6 @@ ASR Hub 日誌系統配置
 使用 pretty-loguru 提供美化的日誌輸出
 """
 
-import os
 from typing import Optional
 from pretty_loguru import create_logger, ConfigTemplates, LoggerConfig
 from src.config.manager import ConfigManager
@@ -11,51 +10,69 @@ from src.config.manager import ConfigManager
 # 獲取配置管理器實例
 config = ConfigManager()
 
+# 全域配置實例，確保所有 logger 共享相同的配置和文件
+_global_config: Optional[LoggerConfig] = None
+_shared_logger = None
+
+
+def _get_shared_logger():
+    """獲取或創建共享的 logger 實例"""
+    global _global_config, _shared_logger
+    
+    if _shared_logger is None:
+        # 根據環境選擇配置模板
+        if config.system.mode == "development":
+            _global_config = ConfigTemplates.development()
+        elif config.system.mode == "production":
+            _global_config = ConfigTemplates.production()
+        elif config.system.mode == "testing":
+            _global_config = ConfigTemplates.testing()
+        else:
+            # 預設使用開發環境配置
+            _global_config = ConfigTemplates.development()
+        
+        # 從 ConfigManager 自訂配置
+        _global_config.log_path = config.logging.path
+        _global_config.rotation = config.logging.rotation
+        _global_config.retention = config.logging.retention
+        _global_config.level = config.logging.level
+        
+        # 根據 format 設定調整輸出格式
+        if config.logging.format == "simple":
+            _global_config.format_string = "{time:HH:mm:ss} | {level} | {name} | {message}"
+        elif config.logging.format == "json":
+            _global_config.serialize = True
+        elif config.logging.format == "pretty":
+            # Pretty 格式保持預設（已經很漂亮了）
+            pass
+        # standard 格式使用預設的完整格式
+        
+        # 創建共享的 logger 實例
+        _shared_logger = create_logger("asr_hub", config=_global_config)
+        
+    return _shared_logger
+
 
 def get_logger(module_name: str, custom_config: Optional[LoggerConfig] = None):
     """
     為特定模組建立 logger
     
     Args:
-        module_name: 模組名稱，將作為 logger 名稱的一部分
+        module_name: 模組名稱，將作為日誌的模組標識
         custom_config: 自定義的 LoggerConfig，如果不提供則使用預設配置
         
     Returns:
         配置好的 logger 實例
     """
-    # 根據環境選擇配置模板
-    if custom_config is None:
-        if config.system.mode == "development":
-            logger_config = ConfigTemplates.development()
-        elif config.system.mode == "production":
-            logger_config = ConfigTemplates.production()
-        elif config.system.mode == "testing":
-            logger_config = ConfigTemplates.testing()
-        else:
-            # 預設使用開發環境配置
-            logger_config = ConfigTemplates.development()
-        
-        # 從 ConfigManager 自訂配置
-        logger_config.log_path = config.logging.path
-        logger_config.rotation = config.logging.rotation
-        logger_config.retention = config.logging.retention
-        logger_config.level = config.logging.level
-        
-        # 根據 format 設定調整輸出格式
-        if config.logging.format == "simple":
-            logger_config.format_string = "{time:HH:mm:ss} | {level} | {message}"
-        elif config.logging.format == "json":
-            logger_config.serialize = True
-        # detailed 格式使用預設的完整格式
-        
-    else:
-        logger_config = custom_config
+    if custom_config is not None:
+        # 如果提供了自定義配置，創建獨立的 logger
+        full_name = f"asr_hub.{module_name}"
+        return create_logger(full_name, config=custom_config)
     
-    # 建立完整的 logger 名稱
-    full_name = f"asr_hub.{module_name}"
-    
-    # 建立並返回 logger
-    return create_logger(full_name, config=logger_config)
+    # 使用共享的 logger，透過綁定 context 來區分模組
+    shared_logger = _get_shared_logger()
+    # 綁定模組名稱作為 context，這樣在日誌中可以看到是哪個模組
+    return shared_logger.bind(module=module_name)
 
 
 def setup_global_exception_handler():

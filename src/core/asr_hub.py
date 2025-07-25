@@ -4,9 +4,16 @@ ASR Hub 主要入口類別
 """
 
 import sys
+import asyncio
 from typing import Optional, Dict, Any
 from src.config.manager import ConfigManager
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, setup_global_exception_handler
+from src.core.session_manager import SessionManager
+from src.core.fsm import StateMachine, State
+from src.pipeline.manager import PipelineManager
+from src.providers.manager import ProviderManager
+from src.stream.stream_controller import StreamController
+from src.api.http_sse.server import SSEServer
 
 
 class ASRHub:
@@ -28,6 +35,9 @@ class ASRHub:
         # 建立 logger
         self.logger = get_logger("core")
         
+        # 設置全域異常處理
+        setup_global_exception_handler()
+        
         # 系統資訊
         self.app_name = self.config.system.name
         self.version = self.config.system.version
@@ -39,16 +49,26 @@ class ASRHub:
         self.providers_config = self.config.providers
         self.stream_config = self.config.stream
         
+        # 核心元件
+        self.session_manager = None
+        self.pipeline_manager = None
+        self.provider_manager = None
+        self.stream_controller = None
+        self.api_servers = {}
+        
         # 初始化狀態
         self._initialized = False
+        self._running = False
         
         # 顯示啟動訊息
         self._show_startup_message()
     
     def _show_startup_message(self):
         """使用 pretty-loguru 顯示啟動訊息"""
-        # ASCII 藝術標題
-        self.logger.ascii_header("ASR HUB", font="slant", width=80)
+        # ASCII 藝術標題 - 使用簡單的日誌訊息替代
+        self.logger.info("="*80)
+        self.logger.info("    ASR HUB    ")
+        self.logger.info("="*80)
         
         # 系統資訊區塊
         system_info = [
@@ -76,15 +96,17 @@ class ASRHub:
             f"降噪：{'啟用' if self.pipeline_config.operators.denoise.enabled else '停用'}",
         ]
         
-        self.logger.block("系統初始化", system_info, border_style="blue")
+        # 顯示系統資訊
+        self.logger.info("系統初始化：")
+        for info in system_info:
+            self.logger.info(f"  {info}")
         
         # 記錄啟動事件
         self.logger.success(f"{self.app_name} v{self.version} 啟動成功！")
     
-    def initialize(self):
+    async def initialize(self):
         """
         初始化所有子系統
-        這個方法將在未來實作各模組的初始化邏輯
         """
         if self._initialized:
             self.logger.warning("系統已經初始化，跳過重複初始化")
@@ -92,54 +114,111 @@ class ASRHub:
         
         self.logger.info("開始初始化子系統...")
         
-        # TODO: 初始化 API servers
-        # TODO: 初始化 Pipeline manager
-        # TODO: 初始化 Provider manager
-        # TODO: 初始化 Session manager
-        # TODO: 初始化 Stream controller
-        
-        self._initialized = True
-        self.logger.success("所有子系統初始化完成")
+        try:
+            # 初始化 Session Manager
+            self.logger.debug("初始化 Session Manager...")
+            self.session_manager = SessionManager(
+                max_sessions=self.config.performance.thread_pool.max_workers * 10,
+                session_timeout=int(self.stream_config.silence_timeout * 10)
+            )
+            
+            # 初始化 Pipeline Manager
+            self.logger.debug("初始化 Pipeline Manager...")
+            self.pipeline_manager = PipelineManager(self.pipeline_config.to_dict())
+            await self.pipeline_manager.initialize()
+            
+            # 初始化 Provider Manager
+            self.logger.debug("初始化 Provider Manager...")
+            self.provider_manager = ProviderManager(self.providers_config.to_dict())
+            await self.provider_manager.initialize()
+            
+            # 初始化 Stream Controller
+            self.logger.debug("初始化 Stream Controller...")
+            self.stream_controller = StreamController(
+                self.stream_config.to_dict(),
+                self.session_manager,
+                self.pipeline_manager,
+                self.provider_manager
+            )
+            
+            # 初始化 API Servers
+            await self._initialize_api_servers()
+            
+            self._initialized = True
+            self.logger.success("所有子系統初始化完成")
+            
+        except Exception as e:
+            self.logger.error(f"子系統初始化失敗：{e}")
+            raise
     
-    def start(self):
+    async def _initialize_api_servers(self):
+        """初始化 API 伺服器"""
+        # HTTP SSE Server (always enabled)
+        if True:  # SSE 總是啟用
+            self.logger.debug("初始化 HTTP SSE Server...")
+            sse_config = self.api_config.http_sse.to_dict()
+            self.api_servers["http_sse"] = SSEServer(sse_config, self.session_manager, self.provider_manager)
+        
+        # TODO: 初始化其他 API servers (WebSocket, gRPC, Socket.IO, Redis)
+    
+    async def start(self):
         """啟動 ASR Hub 服務"""
         try:
             self.logger.info("正在啟動 ASR Hub 服務...")
             
-            # 確保系統已初始化
-            if not self._initialized:
-                self.initialize()
-            
-            # TODO: 啟動各個服務
-            
-            self.logger.success("ASR Hub 服務啟動完成")
-            
-            # 保持服務運行
-            self._run_forever()
+            # 直接調用非同步方法
+            await self._async_start()
             
         except KeyboardInterrupt:
             self.logger.info("收到中斷訊號，準備關閉服務...")
-            self.stop()
+            await self.stop()
         except Exception as e:
             self.logger.exception(f"服務啟動失敗：{e}")
-            sys.exit(1)
+            raise
     
-    def stop(self):
+    async def _async_start(self):
+        """非同步啟動服務"""
+        # 確保系統已初始化
+        if not self._initialized:
+            await self.initialize()
+        
+        # 啟動各個 API 服務
+        for name, server in self.api_servers.items():
+            self.logger.debug(f"啟動 {name} server...")
+            await server.start()
+        
+        self._running = True
+        self.logger.success("ASR Hub 服務啟動完成")
+        
+        # 保持服務運行
+        await self._run_forever()
+    
+    async def stop(self):
         """停止 ASR Hub 服務"""
         self.logger.info("正在停止 ASR Hub 服務...")
+        self._running = False
         
-        # TODO: 停止各個服務
-        # TODO: 清理資源
+        # 停止所有 API 服務
+        for name, server in self.api_servers.items():
+            self.logger.debug(f"停止 {name} server...")
+            await server.stop()
+        
+        # 清理資源
+        if self.stream_controller:
+            await self.stream_controller.cleanup()
+        if self.provider_manager:
+            await self.provider_manager.cleanup()
+        if self.pipeline_manager:
+            await self.pipeline_manager.cleanup()
         
         self.logger.success("ASR Hub 服務已停止")
     
-    def _run_forever(self):
+    async def _run_forever(self):
         """保持服務運行"""
-        import time
         self.logger.info("服務正在運行中...（按 Ctrl+C 停止）")
         try:
-            while True:
-                time.sleep(1)
+            while self._running:
+                await asyncio.sleep(1)
         except KeyboardInterrupt:
             pass
     

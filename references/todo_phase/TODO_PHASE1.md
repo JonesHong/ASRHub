@@ -104,12 +104,7 @@
 4. 使用 pretty-loguru 格式化所有日誌輸出
 5. 確保型別安全，充分利用 yaml2py 生成的類別
 
-## 🚀 下一階段預告
-第二階段將專注於：
-- 實作 API 層（HTTP SSE、WebSocket 等）
-- 實作 Pipeline Operators（VAD、降噪等）
-- 整合第一個 ASR Provider（建議從 Whisper 開始）
-- 建立單元測試框架
+
 
 ---
 建立時間：2025-07-24

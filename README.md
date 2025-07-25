@@ -33,7 +33,7 @@ ASR Hub 是一個功能強大的語音辨識中介系統，整合多種 ASR（Au
 
 ### 安裝與設置
 
-詳細的安裝與設置步驟請參考 [SETUP.md](SETUP.md)
+詳細的安裝與設置步驟請參考
 
 快速步驟：
 ```bash
@@ -118,11 +118,11 @@ response = requests.post('http://localhost:8080/control', json={
 - SOLID 原則
 - DRY（Don't Repeat Yourself）
 
-詳見 [PRINCIPLE.md](PRINCIPLE.md)
+詳見 [PRINCIPLE.md](./references/spec/PRINCIPLE.md)
 
 ### 專案結構
 
-詳見 [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)
+詳見 [PROJECT_STRUCTURE.md](./references/spec/PROJECT_STRUCTURE.md)
 
 ### 貢獻指南
 
@@ -134,12 +134,11 @@ response = requests.post('http://localhost:8080/control', json={
 
 ## 📚 文件
 
-- [設置指南](SETUP.md)
-- [軟體需求規格說明書](SRS.md)
-- [開發原則](PRINCIPLE.md)
-- [專案架構](PROJECT_STRUCTURE.md)
-- [第一階段工作清單](TODO_PHASE1.md)
-- [第二階段工作清單](TODO_PHASE2.md)
+- [軟體需求規格說明書](./references/spec/SRS.md)
+- [開發原則](./references/spec/PRINCIPLE.md)
+- [專案架構](./references/spec/PROJECT_STRUCTURE.md)
+- [第一階段工作清單](./references/todo_phase/TODO_PHASE1.md)
+- [第二階段工作清單](./references/todo_phase/TODO_PHASE2.md)
 
 ## 📄 授權
 
@@ -148,8 +147,6 @@ response = requests.post('http://localhost:8080/control', json={
 ## 🤝 致謝
 
 感謝所有貢獻者和以下開源專案：
-- [Loguru](https://github.com/Delgan/loguru) - Python 日誌庫
-- [Rich](https://github.com/Textualize/rich) - 終端美化庫
 - [yaml2py](https://pypi.org/project/yaml2py/) - YAML 配置管理
 - [pretty-loguru](https://pypi.org/project/pretty-loguru/) - 美化日誌輸出
 

@@ -140,8 +140,9 @@ config/base.prod.yaml
 logs/*.log
 recordings/*.wav
 recordings/*.mp3
-models/wakeword/*.pt
-models/vad/*.pt
+models/
+# models/wakeword/*.pt
+# models/vad/*.pt
 
 # yaml2py generated files (contain sensitive data from config)
 src/config/schema.py
