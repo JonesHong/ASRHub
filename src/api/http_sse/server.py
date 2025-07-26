@@ -298,17 +298,17 @@ class SSEServer(APIBase):
                     if not provider_manager:
                         raise HTTPException(status_code=500, detail="Provider Manager not available")
                     
-                    # 獲取指定的 Provider
-                    provider = provider_manager.get_provider(provider_name)
-                    if not provider:
-                        raise HTTPException(status_code=400, detail=f"Provider '{provider_name}' not found")
-                    
                     # 使用 Provider 進行轉譯
                     self.logger.info(f"使用 {provider_name} 轉譯音訊檔案：{audio_path}")
                     
-                    # 呼叫 Provider 的 transcribe_file 方法
-                    result = await provider.transcribe_file(
-                        file_path=audio_path,
+                    # 讀取音訊檔案
+                    with open(audio_path, 'rb') as f:
+                        audio_data = f.read()
+                    
+                    # 使用 ProviderManager 的 transcribe 方法（支援池化）
+                    result = await provider_manager.transcribe(
+                        audio_data=audio_data,
+                        provider_name=provider_name,
                         language=language if language != "auto" else None
                     )
                     
@@ -528,9 +528,6 @@ class SSEServer(APIBase):
                 raise Exception("Provider manager not available")
             
             provider_name = session.provider_config.get("provider", "whisper")
-            provider = self.provider_manager.get_provider(provider_name)
-            if not provider:
-                raise Exception(f"Provider '{provider_name}' not found")
             
             # 透過 pipeline 處理（如果有）
             processed_audio = audio_chunk
@@ -550,9 +547,10 @@ class SSEServer(APIBase):
                 "timestamp": datetime.now().isoformat()
             })
             
-            # 執行實際轉譯
-            result = await provider.transcribe(
+            # 使用 ProviderManager 的 transcribe 方法（支援池化）
+            result = await self.provider_manager.transcribe(
                 audio_data=processed_audio.data if processed_audio else pcm_data,
+                provider_name=provider_name,
                 language=session.provider_config.get("language", "zh")
             )
             

@@ -601,17 +601,14 @@ class WebSocketServer(APIBase):
                         processed_audio = await pipeline.process(audio)
                         processed_audio_data = processed_audio.data
                 
-                # 獲取預設 provider
-                provider = self.provider_manager.get_provider()
-                if not provider:
-                    raise Exception("沒有可用的 ASR Provider")
+                # 使用 ProviderManager 的 transcribe 方法（支援池化）
+                provider_name = self.provider_manager.default_provider
+                self.logger.info(f"使用 {provider_name} 進行轉譯")
                 
                 # 執行轉譯
-                self.logger.info(f"使用 {provider.__class__.__name__} 進行轉譯")
-                
-                # 執行轉譯（目前 provider 不支援 callback）
-                result = await provider.transcribe(
+                result = await self.provider_manager.transcribe(
                     audio_data=processed_audio_data,
+                    provider_name=provider_name,
                     language="zh"  # 預設中文，應該從配置獲取
                 )
                 

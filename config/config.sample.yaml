@@ -123,6 +123,21 @@ providers:
     # 模型下載路徑
     model_path: "./models/whisper"
     
+    # 池化配置 (可選，預設為關閉)
+    pool:
+      enabled: false  # 啟用池化以支援並發處理
+      min_size: 2     # 最小池大小
+      max_size: 5     # 最大池大小（根據記憶體和 GPU 資源調整）
+      idle_timeout: 300.0  # 空閒實例超時時間（秒）
+      acquire_timeout: 30.0  # 獲取實例超時時間（秒）
+      health_check_interval: 60.0  # 健康檢查間隔（秒）
+      # 動態縮放配置
+      auto_scale:
+        enabled: true
+        scale_up_threshold: 0.8  # 使用率超過 80% 時擴展
+        scale_down_threshold: 0.3  # 使用率低於 30% 時縮減
+        scale_interval: 60.0  # 縮放檢查間隔（秒）
+    
   # FunASR
   funasr:
     enabled: false
@@ -130,12 +145,22 @@ providers:
     language: "zh"
     device: "cpu"
     model_path: "./models/funasr"
+    # 池化配置 (可選)
+    pool:
+      enabled: false
+      min_size: 1
+      max_size: 3
     
   # Vosk
   vosk:
     enabled: false
     model_path: "./models/vosk/vosk-model-cn-0.22"
     sample_rate: 16000
+    # 池化配置 (可選)
+    pool:
+      enabled: false
+      min_size: 2
+      max_size: 4
     
   # Google Cloud Speech-to-Text
   google_stt:
