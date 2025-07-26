@@ -4,11 +4,17 @@ ASR Hub Audio Utilities
 """
 
 import numpy as np
-from typing import Tuple, Optional, Union, List
+from typing import Tuple, Optional, Union, List, Dict
 import wave
 import io
+import subprocess
+import tempfile
+import os
 from src.models.audio import AudioFormat, AudioEncoding
 from src.core.exceptions import AudioFormatError
+from src.utils.logger import get_logger
+
+logger = get_logger("utils.audio")
 
 
 def calculate_audio_duration(
@@ -475,3 +481,87 @@ def estimate_speech_rate(
             "duration": duration,
             "word_count": word_count
         }
+
+
+def convert_webm_to_pcm(
+    webm_data: bytes,
+    sample_rate: int = 16000,
+    channels: int = 1
+) -> bytes:
+    """
+    將 WebM 音訊轉換為 PCM 格式
+    
+    Args:
+        webm_data: WebM 格式的音訊資料
+        sample_rate: 目標取樣率
+        channels: 目標聲道數
+        
+    Returns:
+        PCM 格式的音訊資料
+        
+    Raises:
+        AudioFormatError: 如果轉換失敗
+    """
+    try:
+        # 使用 ffmpeg 進行轉換
+        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_input:
+            temp_input.write(webm_data)
+            temp_input.flush()
+            
+            # 設定 ffmpeg 命令
+            cmd = [
+                'ffmpeg',
+                '-i', temp_input.name,
+                '-f', 's16le',  # 16-bit signed little-endian PCM
+                '-acodec', 'pcm_s16le',
+                '-ar', str(sample_rate),
+                '-ac', str(channels),
+                '-'  # 輸出到 stdout
+            ]
+            
+            # 執行轉換
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            pcm_data, error = process.communicate()
+            
+            # 清理臨時檔案
+            os.unlink(temp_input.name)
+            
+            if process.returncode != 0:
+                error_msg = error.decode('utf-8', errors='ignore')
+                raise AudioFormatError(f"FFmpeg 轉換失敗: {error_msg}")
+            
+            logger.info(f"成功轉換 WebM 到 PCM: {len(webm_data)} bytes -> {len(pcm_data)} bytes")
+            return pcm_data
+            
+    except FileNotFoundError:
+        # 如果沒有 ffmpeg，嘗試使用 Python 套件
+        logger.warning("FFmpeg 未安裝，嘗試使用 Python 音訊庫")
+        try:
+            import pydub
+            from pydub import AudioSegment
+            
+            # 將 bytes 轉換為 AudioSegment
+            audio = AudioSegment.from_file(io.BytesIO(webm_data), format="webm")
+            
+            # 轉換參數
+            audio = audio.set_frame_rate(sample_rate)
+            audio = audio.set_channels(channels)
+            audio = audio.set_sample_width(2)  # 16-bit
+            
+            # 導出為 PCM
+            pcm_data = audio.raw_data
+            
+            logger.info(f"使用 pydub 成功轉換: {len(webm_data)} bytes -> {len(pcm_data)} bytes")
+            return pcm_data
+            
+        except ImportError:
+            raise AudioFormatError("需要安裝 ffmpeg 或 pydub 來轉換音訊格式")
+        except Exception as e:
+            raise AudioFormatError(f"音訊轉換失敗: {str(e)}")
+    except Exception as e:
+        raise AudioFormatError(f"WebM 轉換失敗: {str(e)}")

@@ -14,6 +14,8 @@ from src.pipeline.manager import PipelineManager
 from src.providers.manager import ProviderManager
 from src.stream.stream_controller import StreamController
 from src.api.http_sse.server import SSEServer
+from src.api.websocket.server import WebSocketServer
+from src.api.socketio.server import SocketIOServer
 
 
 class ASRHub:
@@ -124,18 +126,17 @@ class ASRHub:
             
             # 初始化 Pipeline Manager
             self.logger.debug("初始化 Pipeline Manager...")
-            self.pipeline_manager = PipelineManager(self.pipeline_config.to_dict())
+            self.pipeline_manager = PipelineManager()
             await self.pipeline_manager.initialize()
             
             # 初始化 Provider Manager
             self.logger.debug("初始化 Provider Manager...")
-            self.provider_manager = ProviderManager(self.providers_config.to_dict())
+            self.provider_manager = ProviderManager()
             await self.provider_manager.initialize()
             
             # 初始化 Stream Controller
             self.logger.debug("初始化 Stream Controller...")
             self.stream_controller = StreamController(
-                self.stream_config.to_dict(),
                 self.session_manager,
                 self.pipeline_manager,
                 self.provider_manager
@@ -156,10 +157,27 @@ class ASRHub:
         # HTTP SSE Server (always enabled)
         if True:  # SSE 總是啟用
             self.logger.debug("初始化 HTTP SSE Server...")
-            sse_config = self.api_config.http_sse.to_dict()
-            self.api_servers["http_sse"] = SSEServer(sse_config, self.session_manager, self.provider_manager)
+            self.api_servers["http_sse"] = SSEServer(self.session_manager, self.provider_manager, self.pipeline_manager)
         
-        # TODO: 初始化其他 API servers (WebSocket, gRPC, Socket.IO, Redis)
+        # WebSocket Server
+        if self.api_config.websocket.enabled:
+            self.logger.debug("初始化 WebSocket Server...")
+            self.api_servers["websocket"] = WebSocketServer(
+                self.session_manager,
+                self.pipeline_manager,
+                self.provider_manager
+            )
+        
+        # Socket.IO Server
+        if self.api_config.socketio.enabled:
+            self.logger.debug("初始化 Socket.IO Server...")
+            self.api_servers["socketio"] = SocketIOServer(
+                self.session_manager,
+                self.pipeline_manager,
+                self.provider_manager
+            )
+        
+        # TODO: 初始化其他 API servers (gRPC, Redis)
     
     async def start(self):
         """啟動 ASR Hub 服務"""
@@ -239,9 +257,19 @@ class ASRHub:
             "api": {
                 "http_sse": {
                     "enabled": True,
-                    "port": self.api_config.http_sse.port
+                    "port": self.api_config.http_sse.port,
+                    "running": "http_sse" in self.api_servers and self.api_servers["http_sse"].is_running()
+                },
+                "websocket": {
+                    "enabled": self.api_config.websocket.enabled,
+                    "port": self.api_config.websocket.port if self.api_config.websocket.enabled else None,
+                    "running": "websocket" in self.api_servers and self.api_servers["websocket"].is_running()
+                },
+                "socketio": {
+                    "enabled": self.api_config.socketio.enabled,
+                    "port": self.api_config.socketio.port if self.api_config.socketio.enabled else None,
+                    "running": "socketio" in self.api_servers and self.api_servers["socketio"].is_running()
                 }
-                # TODO: 添加其他 API 狀態
             },
             "providers": {
                 "default": self.providers_config.default,
@@ -275,7 +303,9 @@ def main():
     
     # 建立並啟動 ASR Hub
     hub = ASRHub(config_path=args.config)
-    hub.start()
+    
+    # 使用 asyncio 運行
+    asyncio.run(hub.start())
 
 
 if __name__ == "__main__":

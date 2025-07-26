@@ -103,7 +103,9 @@ class SessionManager:
             raise SessionError(f"已達到最大 session 數量限制：{self.max_sessions}")
         
         # 建立新 session
-        session = Session(session_id)
+        session = Session()
+        if session_id:
+            session.id = session_id
         
         # 設定額外參數
         if "metadata" in kwargs:

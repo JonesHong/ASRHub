@@ -24,36 +24,46 @@ class SSEServer(APIBase):
     提供基於 SSE 的即時語音轉文字服務
     """
     
-    def __init__(self, config: Dict[str, Any], session_manager: SessionManager, provider_manager=None):
+    def __init__(self, session_manager: SessionManager, provider_manager=None, pipeline_manager=None):
         """
         初始化 SSE Server
+        使用 ConfigManager 獲取配置
         
         Args:
-            config: SSE 配置
             session_manager: Session 管理器
             provider_manager: Provider 管理器（可選）
+            pipeline_manager: Pipeline 管理器（可選）
         """
-        super().__init__(config, session_manager)
+        # 從 ConfigManager 獲取配置
+        config_manager = ConfigManager()
+        sse_config = config_manager.api.http_sse
+        
+        # 轉換為字典以兼容父類
+        config_dict = sse_config.to_dict()
+        super().__init__(config_dict, session_manager)
+        
         self.app = FastAPI(title="ASR Hub SSE API", version="0.1.0")
         self.logger = get_logger("api.sse")
         self.provider_manager = provider_manager
+        self.pipeline_manager = pipeline_manager
         
         # SSE 連線管理
         self.sse_connections: Dict[str, asyncio.Queue] = {}
         self.audio_buffers: Dict[str, bytearray] = {}
+        self.processed_sessions: Set[str] = set()  # 追蹤已處理的 session
         
         # 設定路由
         self._setup_routes()
         
         # 設定 CORS
-        if config.get("cors_enabled", True):
+        if sse_config.cors_enabled:
             self._setup_cors()
         
         # 伺服器配置
-        self.host = config.get("host", "0.0.0.0")
-        self.port = config.get("port", 8080)
-        self.max_connections = config.get("max_connections", 100)
-        self.timeout = config.get("timeout", 300)
+        self.host = sse_config.host
+        self.port = sse_config.port
+        self.max_connections = sse_config.max_connections
+        self.timeout = sse_config.request_timeout
         
         # Uvicorn 伺服器
         self.server = None
@@ -445,22 +455,132 @@ class SSEServer(APIBase):
             session_id: Session ID
             audio_data: 音訊資料
         """
+        # 對於串流模式，我們不在這裡處理音訊
+        # 而是等待 stop 命令後統一處理
+        # 這樣可以避免重複轉譯
+        pass
+    
+    async def _process_all_audio(self, session_id: str):
+        """
+        處理所有緩衝的音訊資料
+        
+        Args:
+            session_id: Session ID
+        """
         try:
-            # TODO: 實際的音訊處理邏輯
-            # 這裡需要調用 Pipeline 和 Provider
+            # 檢查是否已經處理過
+            if session_id in self.processed_sessions:
+                self.logger.warning(f"Session {session_id} 已經處理過，跳過重複處理")
+                return
             
-            # 模擬轉譯結果
-            await self._send_sse_event(session_id, "transcript", {
-                "text": "這是模擬的轉譯結果",
-                "is_final": False,
-                "confidence": 0.95,
+            # 標記為已處理
+            self.processed_sessions.add(session_id)
+            self.logger.info(f"開始處理 Session {session_id} 的音訊資料")
+            
+            # 獲取 session
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                raise Exception("Session not found")
+            
+            # 檢查是否有音訊資料
+            if session_id not in self.audio_buffers or len(self.audio_buffers[session_id]) == 0:
+                await self._send_sse_event(session_id, "error", {
+                    "message": "沒有音訊資料",
+                    "timestamp": datetime.now().isoformat()
+                })
+                return
+            
+            # 獲取完整音訊資料
+            complete_audio = bytes(self.audio_buffers[session_id])
+            self.logger.info(f"處理完整音訊，大小: {len(complete_audio)} bytes")
+            
+            # 發送進度事件
+            await self._send_sse_event(session_id, "progress", {
+                "percentage": 50,
+                "message": "開始處理音訊...",
                 "timestamp": datetime.now().isoformat()
             })
+            
+            # 檢查音訊格式並轉換
+            from src.utils.audio_utils import convert_webm_to_pcm
+            from src.models.audio import AudioChunk, AudioFormat
+            
+            try:
+                # 嘗試轉換音訊格式
+                self.logger.info(f"轉換音訊格式，原始大小: {len(complete_audio)} bytes")
+                pcm_data = convert_webm_to_pcm(complete_audio)
+                self.logger.info(f"轉換成功，PCM 大小: {len(pcm_data)} bytes")
+            except Exception as e:
+                self.logger.error(f"音訊轉換失敗: {e}")
+                # 假設已經是 PCM 格式
+                pcm_data = complete_audio
+            
+            # 建立 AudioChunk
+            audio_chunk = AudioChunk(
+                data=pcm_data,
+                sample_rate=16000,
+                channels=1,
+                format=AudioFormat.PCM
+            )
+            
+            # 獲取 provider
+            if not self.provider_manager:
+                raise Exception("Provider manager not available")
+            
+            provider_name = session.provider_config.get("provider", "whisper")
+            provider = self.provider_manager.get_provider(provider_name)
+            if not provider:
+                raise Exception(f"Provider '{provider_name}' not found")
+            
+            # 透過 pipeline 處理（如果有）
+            processed_audio = audio_chunk
+            if self.pipeline_manager:
+                pipeline = self.pipeline_manager.get_pipeline("default")
+                if pipeline:
+                    processed_audio = await pipeline.process(audio_chunk)
+            
+            # 執行轉譯
+            self.logger.info(f"使用 {provider_name} 進行轉譯")
+            
+            # 發送部分結果
+            await self._send_sse_event(session_id, "transcript", {
+                "text": "正在進行語音辨識...",
+                "is_final": False,
+                "confidence": 0.0,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # 執行實際轉譯
+            result = await provider.transcribe(
+                audio_data=processed_audio.data if processed_audio else pcm_data,
+                language=session.provider_config.get("language", "zh")
+            )
+            
+            if result and result.text:
+                # 發送最終結果
+                await self._send_sse_event(session_id, "transcript", {
+                    "text": result.text,
+                    "is_final": True,
+                    "confidence": result.confidence if hasattr(result, 'confidence') else 0.95,
+                    "language": result.language if hasattr(result, 'language') else "zh",
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                self.logger.info(f"轉譯完成: {result.text[:50]}...")
+            else:
+                await self._send_sse_event(session_id, "error", {
+                    "message": "無法辨識音訊內容",
+                    "timestamp": datetime.now().isoformat()
+                })
+            
+            # 清除緩衝區
+            self.audio_buffers[session_id] = bytearray()
             
         except Exception as e:
             self.logger.error(f"處理音訊錯誤：{e}")
             await self._send_sse_event(session_id, "error", {
-                "message": str(e)
+                "message": str(e),
+                "timestamp": datetime.now().isoformat()
             })
     
     async def _send_sse_event(self, session_id: str, event: str, data: Any):
@@ -490,6 +610,10 @@ class SSEServer(APIBase):
         # 清理音訊緩衝
         if session_id in self.audio_buffers:
             del self.audio_buffers[session_id]
+        
+        # 清理已處理標記
+        if session_id in self.processed_sessions:
+            self.processed_sessions.remove(session_id)
         
         self.logger.debug(f"清理 Session {session_id} 資源")
     
@@ -573,6 +697,13 @@ class SSEServer(APIBase):
                 
             elif command == "stop":
                 self.session_manager.update_session_state(session_id, "IDLE")
+                
+                # 處理緩衝區中的所有音訊
+                if session_id in self.audio_buffers and len(self.audio_buffers[session_id]) > 0:
+                    self.logger.info(f"處理緩衝區音訊，大小: {len(self.audio_buffers[session_id])} bytes")
+                    # 強制處理所有音訊資料
+                    await self._process_all_audio(session_id)
+                
                 await self._send_sse_event(session_id, "status", {
                     "state": "IDLE",
                     "message": "Stopped listening"

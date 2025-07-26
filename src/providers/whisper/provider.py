@@ -13,6 +13,7 @@ from src.providers.base import ProviderBase, TranscriptionResult, StreamingResul
 from src.utils.logger import get_logger
 from src.core.exceptions import ProviderError, ModelError, AudioFormatError
 from src.models.transcript import TranscriptSegment, Word
+from src.config.manager import ConfigManager
 
 
 class WhisperProvider(ProviderBase):
@@ -21,36 +22,36 @@ class WhisperProvider(ProviderBase):
     支援 OpenAI Whisper 和 Faster-Whisper
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self):
         """
         初始化 Whisper Provider
-        
-        Args:
-            config: Provider 配置
-                - model_size: 模型大小 (tiny, base, small, medium, large)
-                - language: 語言代碼，None 表示自動偵測
-                - device: 執行裝置 (cpu, cuda, mps)
-                - compute_type: 計算類型 (float32, float16, int8)
-                - use_faster_whisper: 是否使用 faster-whisper
+        使用 ConfigManager 獲取配置
         """
-        super().__init__(config)
+        # 從 ConfigManager 獲取配置
+        config_manager = ConfigManager()
+        whisper_config = config_manager.providers.whisper
+        
+        # 轉換為字典以兼容父類
+        config_dict = whisper_config.to_dict()
+        super().__init__(config_dict)
+        
         self.logger = get_logger("provider.whisper")
         
         # 模型配置
-        self.model_size = config.get("model_size", "base")
-        self.use_faster_whisper = config.get("use_faster_whisper", True)
+        self.model_size = whisper_config.model_size
+        self.use_faster_whisper = whisper_config.use_faster_whisper
         
         # Whisper 特定參數
-        self.beam_size = config.get("beam_size", 5)
-        self.best_of = config.get("best_of", 5)
-        self.temperature = config.get("temperature", 0.0)
-        self.initial_prompt = config.get("initial_prompt", None)
+        self.beam_size = whisper_config.beam_size
+        self.best_of = whisper_config.best_of
+        self.temperature = whisper_config.temperature
+        self.initial_prompt = whisper_config.initial_prompt
         
         # 模型實例
         self.model = None
         
         # VAD 設定
-        self.vad_filter = config.get("vad_filter", True)
+        self.vad_filter = whisper_config.vad_filter
         
         # 支援的語言
         self.supported_languages = [

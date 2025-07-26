@@ -8,6 +8,7 @@ from src.utils.logger import get_logger
 from src.core.exceptions import ProviderError, ConfigurationError
 from src.providers.base import ProviderBase
 from src.providers.whisper.provider import WhisperProvider
+from src.config.manager import ConfigManager
 
 
 class ProviderManager:
@@ -16,14 +17,12 @@ class ProviderManager:
     負責建立、管理和協調多個 ASR Provider 實例
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self):
         """
         初始化 Provider Manager
-        
-        Args:
-            config: Provider 配置
+        使用 ConfigManager 獲取配置
         """
-        self.config = config
+        self.config_manager = ConfigManager()
         self.logger = get_logger("provider.manager")
         
         # Provider 實例快取
@@ -36,7 +35,7 @@ class ProviderManager:
         }
         
         # 預設 Provider
-        self.default_provider = config.get("default", "whisper")
+        self.default_provider = self.config_manager.providers.default
         
         self._initialized = False
     
@@ -69,32 +68,29 @@ class ProviderManager:
     async def _initialize_enabled_providers(self):
         """初始化所有已啟用的 Providers"""
         # Whisper Provider
-        if self.config.get("whisper", {}).get("enabled", True):
-            await self._create_provider("whisper", self.config.get("whisper", {}))
+        if self.config_manager.providers.whisper.enabled:
+            await self._create_provider("whisper")
         
         # TODO: 初始化其他 providers (FunASR, Vosk, Azure, etc.)
         
         if not self.providers:
             raise ConfigurationError("至少需要啟用一個 ASR Provider")
     
-    async def _create_provider(self, 
-                             name: str, 
-                             config: Dict[str, Any]):
+    async def _create_provider(self, name: str):
         """
         建立並初始化 Provider
         
         Args:
             name: Provider 名稱
-            config: Provider 配置
         """
         if name not in self.provider_registry:
             self.logger.error(f"未知的 Provider 類型：{name}")
             return
         
         try:
-            # 建立 Provider 實例
+            # 建立 Provider 實例 (Provider 會自己從 ConfigManager 獲取配置)
             provider_class = self.provider_registry[name]
-            provider = provider_class(config)
+            provider = provider_class()
             
             # 初始化 Provider
             await provider.initialize()
@@ -110,15 +106,13 @@ class ProviderManager:
     
     async def create_provider(self,
                             name: str,
-                            provider_type: str,
-                            config: Dict[str, Any]) -> ProviderBase:
+                            provider_type: str) -> ProviderBase:
         """
         建立新的 Provider
         
         Args:
             name: Provider 名稱（用於識別）
             provider_type: Provider 類型（如 whisper, funasr）
-            config: Provider 配置
             
         Returns:
             建立的 Provider 實例
@@ -133,9 +127,9 @@ class ProviderManager:
             raise ProviderError(f"未知的 Provider 類型：{provider_type}")
         
         try:
-            # 建立 Provider
+            # 建立 Provider (Provider 會自己從 ConfigManager 獲取配置)
             provider_class = self.provider_registry[provider_type]
-            provider = provider_class(config)
+            provider = provider_class()
             
             # 初始化
             await provider.initialize()
@@ -354,9 +348,8 @@ class ProviderManager:
         
         self.logger.info(f"重新載入 Provider '{name}'...")
         
-        # 獲取現有配置
+        # 獲取現有 provider
         provider = self.providers[name]
-        config = provider.config
         
         # 清理舊的實例
         await provider.cleanup()
@@ -369,7 +362,7 @@ class ProviderManager:
                 break
         
         if provider_type:
-            await self._create_provider(name, config)
+            await self._create_provider(name)
             self.logger.success(f"Provider '{name}' 重新載入完成")
         else:
             self.logger.error(f"無法確定 Provider '{name}' 的類型")

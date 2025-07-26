@@ -13,6 +13,7 @@ from src.pipeline.manager import PipelineManager
 from src.providers.manager import ProviderManager
 from src.models.audio import AudioChunk
 from src.models.session import SessionState
+from src.config.manager import ConfigManager
 
 
 class StreamController:
@@ -22,20 +23,19 @@ class StreamController:
     """
     
     def __init__(self,
-                 config: Dict[str, Any],
                  session_manager: SessionManager,
                  pipeline_manager: PipelineManager,
                  provider_manager: ProviderManager):
         """
         初始化 Stream Controller
+        使用 ConfigManager 獲取配置
         
         Args:
-            config: 串流配置
             session_manager: Session 管理器
             pipeline_manager: Pipeline 管理器
             provider_manager: Provider 管理器
         """
-        self.config = config
+        self.config_manager = ConfigManager()
         self.session_manager = session_manager
         self.pipeline_manager = pipeline_manager
         self.provider_manager = provider_manager
@@ -43,10 +43,11 @@ class StreamController:
         self.logger = get_logger("stream.controller")
         
         # 串流配置
-        self.buffer_size = config.get("buffer_size", 8192)
-        self.silence_timeout = config.get("silence_timeout", 3.0)
-        self.max_segment_duration = config.get("max_segment_duration", 30.0)
-        self.enable_vad = config.get("enable_vad", True)
+        stream_config = self.config_manager.stream
+        self.buffer_size = stream_config.buffer.size
+        self.silence_timeout = stream_config.silence_timeout
+        self.max_segment_duration = stream_config.max_segment_duration
+        self.enable_vad = stream_config.enable_vad
         
         # 活動串流追蹤
         self.active_streams: Dict[str, Dict[str, Any]] = {}

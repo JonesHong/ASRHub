@@ -10,6 +10,7 @@ from src.pipeline.operators.base import BufferingOperator
 from src.utils.logger import get_logger
 from src.core.exceptions import PipelineError, AudioFormatError
 from src.models.audio import AudioChunk, AudioFormat, AudioEncoding
+from src.config.manager import ConfigManager
 
 
 class SampleRateOperator(BufferingOperator):
@@ -18,22 +19,31 @@ class SampleRateOperator(BufferingOperator):
     將音訊轉換為目標取樣率
     """
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self):
         """
         初始化 Sample Rate Operator
-        
-        Args:
-            config: 配置參數
-                - target_rate: 目標取樣率（預設 16000）
-                - quality: 轉換品質 "low", "medium", "high"（預設 "high"）
-                - buffer_size: 緩衝區大小（預設 8192）
+        使用 ConfigManager 獲取配置
         """
-        super().__init__(config)
+        # 從 ConfigManager 獲取配置
+        config_manager = ConfigManager()
+        sr_config = config_manager.pipeline.operators.sample_rate_adjustment
+        pipeline_config = config_manager.pipeline
+        
+        # 轉換為字典以兼容父類
+        # buffer_size 來自 pipeline 層級配置
+        config_dict = {
+            "enabled": sr_config.enabled,
+            "target_rate": sr_config.target_rate,
+            "quality": sr_config.quality,
+            "buffer_size": pipeline_config.buffer_size
+        }
+        super().__init__(config_dict)
+        
         self.logger = get_logger("operator.sample_rate")
         
         # 配置參數
-        self.target_rate = self.config.get("target_rate", 16000)
-        self.quality = self.config.get("quality", "high")
+        self.target_rate = sr_config.target_rate
+        self.quality = sr_config.quality
         
         # 支援的取樣率
         self.supported_rates = [8000, 16000, 22050, 44100, 48000]

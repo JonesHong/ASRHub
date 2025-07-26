@@ -10,20 +10,34 @@ from src.pipeline.base import PipelineBase
 from src.pipeline.operators.base import OperatorBase
 from src.pipeline.operators.sample_rate import SampleRateOperator
 from src.pipeline.validator import PipelineValidator
+from src.config.manager import ConfigManager
 
 
 class DefaultPipeline(PipelineBase):
     """預設的 Pipeline 實作"""
     
+    def __init__(self):
+        """初始化 DefaultPipeline，使用 ConfigManager 獲取配置"""
+        self.config_manager = ConfigManager()
+        # 傳遞必要的配置給父類以通過驗證
+        pipeline_config = self.config_manager.pipeline
+        config_dict = {
+            "sample_rate": pipeline_config.sample_rate,
+            "channels": pipeline_config.channels,
+            "encoding": pipeline_config.encoding,
+            "buffer_size": pipeline_config.buffer_size
+        }
+        super().__init__(config_dict)
+        self.name = "default"  # 設置 Pipeline 名稱
+    
     def _initialize_operators(self):
         """初始化 Pipeline 中的 Operators"""
-        operator_configs = self.config.get("operators", {})
+        # 直接從 ConfigManager 獲取配置
+        operators_config = self.config_manager.pipeline.operators
         
         # Sample Rate Adjustment
-        if operator_configs.get("sample_rate_adjustment", {}).get("enabled", True):
-            self.add_operator(
-                SampleRateOperator(operator_configs.get("sample_rate_adjustment", {}))
-            )
+        if operators_config.sample_rate_adjustment.enabled:
+            self.add_operator(SampleRateOperator())
         
         # TODO: 添加其他 operators (VAD, Denoise, etc.)
 
@@ -34,14 +48,12 @@ class PipelineManager:
     負責建立、管理和協調多個 Pipeline 實例
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self):
         """
         初始化 Pipeline Manager
-        
-        Args:
-            config: Pipeline 配置
+        使用 ConfigManager 獲取配置
         """
-        self.config = config
+        self.config_manager = ConfigManager()
         self.logger = get_logger("pipeline.manager")
         
         # Pipeline 實例快取
@@ -76,7 +88,7 @@ class PipelineManager:
         """建立預設的 Pipeline"""
         try:
             # 建立 Pipeline
-            default_pipeline = DefaultPipeline(self.config)
+            default_pipeline = DefaultPipeline()
             
             # 驗證 Pipeline 配置
             validation_result = self.validator.validate_pipeline(default_pipeline)
@@ -97,15 +109,12 @@ class PipelineManager:
             self.logger.error(f"建立預設 Pipeline 失敗：{e}")
             raise
     
-    async def create_pipeline(self, 
-                            name: str,
-                            config: Dict[str, Any]) -> PipelineBase:
+    async def create_pipeline(self, name: str) -> PipelineBase:
         """
         建立新的 Pipeline
         
         Args:
             name: Pipeline 名稱
-            config: Pipeline 配置
             
         Returns:
             建立的 Pipeline 實例
@@ -117,8 +126,8 @@ class PipelineManager:
             raise PipelineError(f"Pipeline '{name}' 已存在")
         
         try:
-            # 建立 Pipeline
-            pipeline = DefaultPipeline(config)
+            # 建立 Pipeline (使用 ConfigManager)
+            pipeline = DefaultPipeline()
             
             # 驗證配置
             validation_result = self.validator.validate_pipeline(pipeline)

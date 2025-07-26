@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASR Hub 語音辨識測試</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>ASR Hub 語音辨識測試</h1>
+        
+        <div class="protocol-selector">
+            <label for="protocol">選擇通訊協議：</label>
+            <select id="protocol">
+                <option value="websocket">WebSocket</option>
+                <option value="socketio">Socket.io</option>
+                <option value="http_sse">HTTP API</option>
+            </select>
+        </div>
+
+        <div class="controls">
+            <button id="startRecord" class="btn btn-start">開始錄音</button>
+            <button id="stopRecord" class="btn btn-stop" disabled>結束錄音</button>
+            <button id="startRecognition" class="btn btn-recognize" disabled>開始辨識</button>
+        </div>
+        
+        <div class="upload-section">
+            <div class="divider">或</div>
+            <label for="audioFile" class="file-upload-label">
+                <span>選擇音訊檔案</span>
+                <input type="file" id="audioFile" accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg,.mp4" />
+            </label>
+            <div id="fileInfo" class="file-info"></div>
+        </div>
+
+        <div class="status-panel">
+            <h3>狀態</h3>
+            <div id="status" class="status-text">準備就緒</div>
+            <div id="connectionStatus" class="connection-status">未連接</div>
+        </div>
+
+        <div class="audio-panel">
+            <h3>錄音預覽</h3>
+            <audio id="audioPlayer" controls style="display: none;"></audio>
+            <div id="audioInfo" class="audio-info"></div>
+        </div>
+
+        <div class="results-panel">
+            <h3>辨識結果</h3>
+            <div id="results" class="results-text"></div>
+        </div>
+
+        <div class="logs-panel">
+            <h3>連線日誌</h3>
+            <div id="logs" class="logs-text"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
