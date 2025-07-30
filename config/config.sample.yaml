@@ -66,6 +66,19 @@ pipeline:
   
   # Pipeline Operators 配置
   operators:
+    # 喚醒詞偵測
+    wakeword:
+      enabled: true
+      type: "openWakeWord"  # openWakeWord, asr_keyword
+      # OpenWakeWord 特定配置
+      model_path: "models/hi_kmu_0721.onnx"
+      threshold: 0.5
+      debounce_time: 2.0  # 去抖動時間（秒）
+      continuous_detection: true  # 連續偵測模式
+      # 效能設定
+      inference_threads: 1  # 推論執行緒數
+      use_quantized_model: false  # 使用量化模型
+      
     # VAD (Voice Activity Detection) 語音活動偵測
     vad:
       enabled: true
@@ -181,24 +194,61 @@ providers:
     base_url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
 
 # ===== 喚醒詞設定 =====
-wakeword:
-  enabled: false
-  type: "asr_keyword"  # asr_keyword, openwakeword, porcupine
-  keywords: 
-    - "你好小明"
-    - "Hey Assistant"
-    - "小愛同學"
-  sensitivity: 0.5  # 0.0 - 1.0
+wake_word_detection:
+  enabled: true
+  # 系統層監聽器設定
+  system_listener:
+    enabled: true
+    always_on: true  # 系統層持續監聽
+    buffer_size: 4096
+    min_resource_mode: true  # 最小資源消耗模式
+  
+  wake_timeout: 3.0  # 喚醒後的超時時間（秒）
   cooldown: 2.0  # 喚醒後的冷卻時間（秒）
   
-  # OpenWakeWord 特定設定
-  openwakeword:
-    model_path: "./models/wakeword/openwakeword"
-    threshold: 0.5
+  # 喚醒詞模型設定
+  models:
+    # OpenWakeWord 模型
+    - type: openWakeWord
+      enabled: true
+      model_path: "models/hi_kmu_0721.onnx"  # ONNX 模型檔案路徑
+      threshold: 0.5  # 偵測閾值 (0.0 - 1.0)
+      language: "zh-TW"  # 語言代碼
+      # HuggingFace 模型下載設定（當 model_path 不存在時使用）
+      hf_repo_id: "JTBTechnology/kmu_wakeword"  # HuggingFace repo ID
+      hf_filename: "hi_kmu_0721.onnx"  # 模型檔案名稱
+      hf_token: ${HF_TOKEN:}  # HuggingFace token（可選，用於私有模型）
+      # 模型特定設定
+      inference_framework: "onnxruntime"  # onnxruntime, tflite
+      use_gpu: false  # 是否使用 GPU 加速
+      batch_size: 1  # 批次推論大小
+      # 音訊處理設定
+      sample_rate: 16000  # 取樣率
+      window_size: 1280  # 滑動視窗大小（樣本數）
+      score_queue_size: 60  # 評分佇列大小
+      # 效能優化
+      cache_embeddings: true  # 快取嵌入
+      preload_model: true  # 預先載入模型
+      
+    # 可以加入更多模型（未來擴充）
+    # - type: asr_keyword
+    #   enabled: false
+    #   keywords:
+    #     - "你好小明"
+    #     - "Hey Assistant"
+    #   similarity_threshold: 0.8
     
-  # ASR 關鍵詞特定設定
-  asr_keyword:
-    similarity_threshold: 0.8  # 相似度閾值
+  # 喚醒事件設定
+  wake_events:
+    publish_to_api: true  # 是否推送喚醒事件到 API
+    include_audio_context: false  # 是否包含喚醒時的音訊上下文
+    context_duration: 2.0  # 音訊上下文時間（秒）
+    
+  # 多源喚醒支援（未來擴充）
+  multi_source:
+    ui_wake: false  # UI 喚醒
+    visual_wake: false  # 視覺喚醒
+    gesture_wake: false  # 手勢喚醒
 
 # ===== 串流設定 =====
 stream:

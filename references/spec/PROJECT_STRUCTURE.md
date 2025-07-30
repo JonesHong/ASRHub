@@ -93,6 +93,7 @@ ASRHub/
 │   ├── providers/                # ASR Provider 模組
 │   │   ├── __init__.py
 │   │   ├── base.py              # Provider 基礎類別
+│   │   ├── provider_pool.py     # Provider 池化實作
 │   │   ├── funasr/              # FunASR 實作
 │   │   │   ├── __init__.py
 │   │   │   └── provider.py
@@ -108,7 +109,7 @@ ASRHub/
 │   │   ├── openai/              # OpenAI API 實作
 │   │   │   ├── __init__.py
 │   │   │   └── provider.py
-│   │   └── manager.py           # Provider 管理器
+│   │   └── manager.py           # Provider 管理器（支援池化）
 │   │
 │   ├── stream/                   # 串流處理模組
 │   │   ├── __init__.py
@@ -218,6 +219,12 @@ ASRHub/
 - 統一的 Provider 介面
 - 支援多種 ASR 引擎（FunASR、Whisper、Vosk 等）
 - Provider Manager 負責動態路由和錯誤處理
+- **Provider 池化支援**：
+  - `provider_pool.py`: 實作動態 Provider 實例池
+  - 支援並發處理多個請求
+  - 自動擴縮容（min_size 到 max_size）
+  - 健康檢查和故障恢復機制
+  - 完整的監控指標和資源管理
 
 ### 7. **src/stream/** - 串流處理
 - 處理音訊串流的接收和分發
@@ -310,16 +317,27 @@ ASRHub/
    providers:
      default: "whisper"
      whisper:
+       enabled: true
        model_size: ${WHISPER_MODEL:base}
        language: "zh"
        device: ${WHISPER_DEVICE:cpu}
        compute_type: "float32"
+       # Provider 池化配置（可選）
+       pool:
+         enabled: true
+         min_size: 2
+         max_size: 5
+         acquire_timeout: 30.0
+         idle_timeout: 300.0
+         health_check_interval: 60.0
      funasr:
        enabled: false
        model: "paraformer"
+       # 池化配置可按需添加
      vosk:
        enabled: false
        model_path: "./models/vosk"
+       # 池化配置可按需添加
        
    # 喚醒詞設定
    wakeword:

@@ -31,6 +31,13 @@ class Session:
         self.pipeline_config = {}
         self.provider_config = {}
         
+        # 喚醒詞相關欄位
+        self.wake_timeout = 30.0  # 喚醒超時（秒）
+        self.wake_source = None   # 喚醒源（wake_word, ui, visual）
+        self.wake_time = None     # 喚醒時間
+        self.wake_history = []    # 喚醒歷史記錄
+        self.priority = 0         # Session 優先級（0=最低）
+        
     def update_activity(self):
         """更新最後活動時間"""
         self.last_activity = datetime.now()
@@ -47,6 +54,46 @@ class Session:
         """
         return datetime.now() - self.last_activity > timedelta(seconds=timeout_seconds)
     
+    def wake(self, source: str = "wake_word", wake_timeout: Optional[float] = None):
+        """
+        喚醒 Session
+        
+        Args:
+            source: 喚醒源（wake_word, ui, visual）
+            wake_timeout: 喚醒超時時間，如果不提供則使用預設值
+        """
+        self.wake_source = source
+        self.wake_time = datetime.now()
+        if wake_timeout is not None:
+            self.wake_timeout = wake_timeout
+        
+        # 記錄喚醒歷史
+        self.wake_history.append({
+            "source": source,
+            "time": self.wake_time.isoformat(),
+            "timeout": self.wake_timeout
+        })
+        
+        # 更新活動時間
+        self.update_activity()
+    
+    def is_wake_expired(self) -> bool:
+        """
+        檢查喚醒是否已超時
+        
+        Returns:
+            是否超時
+        """
+        if not self.wake_time:
+            return False
+        
+        return datetime.now() - self.wake_time > timedelta(seconds=self.wake_timeout)
+    
+    def clear_wake(self):
+        """清除喚醒狀態"""
+        self.wake_source = None
+        self.wake_time = None
+    
     def to_dict(self) -> Dict:
         """轉換為字典格式"""
         return {
@@ -56,7 +103,14 @@ class Session:
             "last_activity": self.last_activity.isoformat(),
             "metadata": self.metadata,
             "pipeline_config": self.pipeline_config,
-            "provider_config": self.provider_config
+            "provider_config": self.provider_config,
+            # 喚醒詞相關欄位
+            "wake_timeout": self.wake_timeout,
+            "wake_source": self.wake_source,
+            "wake_time": self.wake_time.isoformat() if self.wake_time else None,
+            "wake_history": self.wake_history,
+            "priority": self.priority,
+            "is_wake_expired": self.is_wake_expired()
         }
 
 
@@ -114,6 +168,14 @@ class SessionManager:
             session.pipeline_config = kwargs["pipeline_config"]
         if "provider_config" in kwargs:
             session.provider_config = kwargs["provider_config"]
+        
+        # 喚醒詞相關參數
+        if "wake_timeout" in kwargs:
+            session.wake_timeout = kwargs["wake_timeout"]
+        if "wake_source" in kwargs:
+            session.wake_source = kwargs["wake_source"]
+        if "priority" in kwargs:
+            session.priority = kwargs["priority"]
         
         # 儲存 session
         self.sessions[session.id] = session
@@ -210,3 +272,102 @@ class SessionManager:
         count = len(self.sessions)
         self.sessions.clear()
         self.logger.warning(f"清除了所有 {count} 個 sessions")
+    
+    # 喚醒詞相關方法
+    def wake_session(self, session_id: str, source: str = "wake_word", wake_timeout: Optional[float] = None) -> bool:
+        """
+        喚醒指定 Session
+        
+        Args:
+            session_id: Session ID
+            source: 喚醒源
+            wake_timeout: 喚醒超時時間
+            
+        Returns:
+            是否成功喚醒
+        """
+        session = self.get_session(session_id)
+        if not session:
+            self.logger.warning(f"嘗試喚醒不存在的 session: {session_id}")
+            return False
+        
+        session.wake(source=source, wake_timeout=wake_timeout)
+        self.logger.info(f"喚醒 session {session_id}，來源: {source}")
+        return True
+    
+    def get_sessions_by_wake_source(self, source: str) -> List[Session]:
+        """
+        根據喚醒源獲取 Sessions
+        
+        Args:
+            source: 喚醒源（wake_word, ui, visual）
+            
+        Returns:
+            符合條件的 Session 列表
+        """
+        return [
+            session for session in self.sessions.values()
+            if session.wake_source == source and not session.is_expired(self.session_timeout)
+        ]
+    
+    def get_active_wake_sessions(self) -> List[Session]:
+        """
+        獲取所有處於喚醒狀態且未超時的 Sessions
+        
+        Returns:
+            活躍的喚醒 Session 列表
+        """
+        return [
+            session for session in self.sessions.values()
+            if session.wake_time and not session.is_wake_expired() and not session.is_expired(self.session_timeout)
+        ]
+    
+    def get_sessions_by_priority(self, min_priority: int = 0) -> List[Session]:
+        """
+        根據優先級獲取 Sessions（降序排列）
+        
+        Args:
+            min_priority: 最小優先級
+            
+        Returns:
+            按優先級排序的 Session 列表
+        """
+        filtered_sessions = [
+            session for session in self.sessions.values()
+            if session.priority >= min_priority and not session.is_expired(self.session_timeout)
+        ]
+        
+        return sorted(filtered_sessions, key=lambda s: s.priority, reverse=True)
+    
+    def cleanup_wake_expired_sessions(self):
+        """清理喚醒超時的 sessions"""
+        expired_count = 0
+        
+        for session in list(self.sessions.values()):
+            if session.is_wake_expired():
+                session.clear_wake()
+                expired_count += 1
+        
+        if expired_count > 0:
+            self.logger.debug(f"清理了 {expired_count} 個喚醒超時的 sessions")
+    
+    def get_wake_stats(self) -> Dict[str, int]:
+        """
+        獲取喚醒統計資訊
+        
+        Returns:
+            統計資訊字典
+        """
+        all_sessions = list(self.sessions.values())
+        
+        stats = {
+            "total_sessions": len(all_sessions),
+            "active_wake_sessions": len(self.get_active_wake_sessions()),
+            "wake_word_sessions": len(self.get_sessions_by_wake_source("wake_word")),
+            "ui_wake_sessions": len(self.get_sessions_by_wake_source("ui")),
+            "visual_wake_sessions": len(self.get_sessions_by_wake_source("visual")),
+            "expired_sessions": len([s for s in all_sessions if s.is_expired(self.session_timeout)]),
+            "wake_expired_sessions": len([s for s in all_sessions if s.is_wake_expired()])
+        }
+        
+        return stats

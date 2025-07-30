@@ -24,6 +24,13 @@ class Event(Enum):
     BUSY_END = "BUSY_END"    # 結束忙碌狀態
     ERROR = "ERROR"          # 發生錯誤
     TIMEOUT = "TIMEOUT"      # 超時
+    
+    # 喚醒詞相關事件
+    WAKE_WORD_DETECTED = "WAKE_WORD_DETECTED"  # 偵測到喚醒詞
+    WAKE_TIMEOUT = "WAKE_TIMEOUT"              # 喚醒超時
+    UI_WAKE = "UI_WAKE"                        # UI 喚醒
+    VISUAL_WAKE = "VISUAL_WAKE"                # 視覺喚醒
+    SLEEP = "SLEEP"                            # 手動休眠
 
 
 class StateMachine:
@@ -48,17 +55,26 @@ class StateMachine:
             State.IDLE: {
                 Event.START: State.LISTENING,
                 Event.BUSY_START: State.BUSY,
+                # 喚醒詞相關轉換
+                Event.WAKE_WORD_DETECTED: State.LISTENING,
+                Event.UI_WAKE: State.LISTENING,
+                Event.VISUAL_WAKE: State.LISTENING,
             },
             State.LISTENING: {
                 Event.STOP: State.IDLE,
                 Event.BUSY_START: State.BUSY,
                 Event.ERROR: State.IDLE,
                 Event.TIMEOUT: State.IDLE,
+                # 喚醒詞相關轉換
+                Event.WAKE_TIMEOUT: State.IDLE,
+                Event.SLEEP: State.IDLE,
             },
             State.BUSY: {
                 Event.BUSY_END: State.LISTENING,
                 Event.STOP: State.IDLE,
                 Event.ERROR: State.IDLE,
+                # 處理完成後可以回到 IDLE 或 LISTENING
+                Event.SLEEP: State.IDLE,
             }
         }
         
@@ -212,3 +228,47 @@ class StateMachine:
             "previous_state": self.previous_state.value if self.previous_state else None,
             "available_events": [e.value for e in self.get_available_events()]
         }
+    
+    def is_idle(self) -> bool:
+        """檢查是否處於 IDLE 狀態"""
+        return self.current_state == State.IDLE
+    
+    def is_listening(self) -> bool:
+        """檢查是否處於 LISTENING 狀態"""
+        return self.current_state == State.LISTENING
+    
+    def is_busy(self) -> bool:
+        """檢查是否處於 BUSY 狀態"""
+        return self.current_state == State.BUSY
+    
+    def can_wake(self) -> bool:
+        """檢查是否可以接受喚醒"""
+        return self.current_state == State.IDLE
+    
+    def wake(self, wake_source: str = "wake_word") -> State:
+        """
+        喚醒系統
+        
+        Args:
+            wake_source: 喚醒源（wake_word, ui, visual）
+            
+        Returns:
+            轉換後的狀態
+        """
+        if wake_source == "wake_word":
+            return self.trigger(Event.WAKE_WORD_DETECTED)
+        elif wake_source == "ui":
+            return self.trigger(Event.UI_WAKE)
+        elif wake_source == "visual":
+            return self.trigger(Event.VISUAL_WAKE)
+        else:
+            raise ValueError(f"未知的喚醒源：{wake_source}")
+    
+    def sleep(self) -> State:
+        """
+        休眠系統
+        
+        Returns:
+            轉換後的狀態
+        """
+        return self.trigger(Event.SLEEP)

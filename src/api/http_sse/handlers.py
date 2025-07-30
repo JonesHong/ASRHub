@@ -133,6 +133,48 @@ class SSEEventHandler:
             event["message"] = message
             
         return event
+    
+    def format_wake_event(self,
+                         wake_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        格式化喚醒詞事件
+        
+        Args:
+            wake_data: 喚醒詞資料
+            
+        Returns:
+            格式化的事件資料
+        """
+        return {
+            "type": "wake_word",
+            "source": wake_data.get("source", "wake_word"),
+            "model": wake_data.get("detection", {}).get("model"),
+            "score": wake_data.get("detection", {}).get("score"),
+            "timestamp": wake_data.get("timestamp", datetime.now().isoformat())
+        }
+    
+    def format_state_change_event(self,
+                                 old_state: str,
+                                 new_state: str,
+                                 event_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        格式化狀態變更事件
+        
+        Args:
+            old_state: 舊狀態
+            new_state: 新狀態
+            event_type: 觸發的事件類型
+            
+        Returns:
+            格式化的事件資料
+        """
+        return {
+            "type": "state_change",
+            "old_state": old_state,
+            "new_state": new_state,
+            "event": event_type,
+            "timestamp": datetime.now().isoformat()
+        }
 
 
 class AudioRequestHandler:
@@ -296,7 +338,9 @@ class SessionRequestHandler:
                 # 驗證每個 operator
                 valid_operators = [
                     "vad", "denoise", "sample_rate_adjustment",
-                    "voice_separation", "format_conversion", "recording"
+                    "voice_separation", "format_conversion", "recording",
+                    # 新增喚醒詞相關 operators
+                    "openwakeword", "wakeword"
                 ]
                 
                 for op in data["pipeline_config"]["operators"]:
@@ -323,6 +367,23 @@ class SessionRequestHandler:
                     )
             
             validated["provider_config"] = data["provider_config"]
+        
+        # 驗證喚醒詞相關參數
+        if "wake_timeout" in data:
+            try:
+                wake_timeout = float(data["wake_timeout"])
+                if wake_timeout <= 0:
+                    raise ValidationError("wake_timeout 必須大於 0")
+                validated["wake_timeout"] = wake_timeout
+            except (ValueError, TypeError):
+                raise ValidationError("wake_timeout 必須是數字")
+        
+        if "priority" in data:
+            try:
+                priority = int(data["priority"])
+                validated["priority"] = priority
+            except (ValueError, TypeError):
+                raise ValidationError("priority 必須是整數")
         
         return validated
     
@@ -465,3 +526,165 @@ class TranscriptResponseHandler:
             words=all_words if all_words else None,
             is_final=True
         )
+
+
+class WakeWordRequestHandler:
+    """喚醒詞請求處理器"""
+    
+    def __init__(self):
+        self.logger = get_logger("sse.wakeword_handler")
+    
+    def validate_wake_command(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        驗證喚醒指令
+        
+        Args:
+            data: 請求資料
+            
+        Returns:
+            驗證後的資料
+            
+        Raises:
+            ValidationError: 如果驗證失敗
+        """
+        validated = {}
+        
+        # 驗證會話 ID
+        if "session_id" in data:
+            if not isinstance(data["session_id"], str):
+                raise ValidationError("session_id 必須是字串")
+            validated["session_id"] = data["session_id"]
+        
+        # 驗證喚醒源
+        if "source" in data:
+            valid_sources = ["wake_word", "ui", "visual"]
+            if data["source"] not in valid_sources:
+                raise ValidationError(f"無效的喚醒源：{data['source']}")
+            validated["source"] = data["source"]
+        else:
+            validated["source"] = "ui"  # 預設為 UI 喚醒
+        
+        # 驗證喚醒超時
+        if "wake_timeout" in data:
+            try:
+                wake_timeout = float(data["wake_timeout"])
+                if wake_timeout <= 0:
+                    raise ValidationError("wake_timeout 必須大於 0")
+                validated["wake_timeout"] = wake_timeout
+            except (ValueError, TypeError):
+                raise ValidationError("wake_timeout 必須是數字")
+        
+        return validated
+    
+    def validate_sleep_command(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        驗證休眠指令
+        
+        Args:
+            data: 請求資料
+            
+        Returns:
+            驗證後的資料
+            
+        Raises:
+            ValidationError: 如果驗證失敗
+        """
+        validated = {}
+        
+        # 驗證會話 ID
+        if "session_id" in data:
+            if not isinstance(data["session_id"], str):
+                raise ValidationError("session_id 必須是字串")
+            validated["session_id"] = data["session_id"]
+        
+        return validated
+    
+    def validate_set_wake_timeout_command(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        驗證設定喚醒超時指令
+        
+        Args:
+            data: 請求資料
+            
+        Returns:
+            驗證後的資料
+            
+        Raises:
+            ValidationError: 如果驗證失敗
+        """
+        validated = {}
+        
+        # 驗證會話 ID
+        if "session_id" in data:
+            if not isinstance(data["session_id"], str):
+                raise ValidationError("session_id 必須是字串")
+            validated["session_id"] = data["session_id"]
+        
+        # 驗證超時值（必須）
+        if "timeout" not in data:
+            raise ValidationError("缺少 timeout 參數")
+        
+        try:
+            timeout = float(data["timeout"])
+            if timeout <= 0:
+                raise ValidationError("timeout 必須大於 0")
+            validated["timeout"] = timeout
+        except (ValueError, TypeError):
+            raise ValidationError("timeout 必須是數字")
+        
+        return validated
+    
+    def format_wake_status_response(self, system_state: str, 
+                                   sessions: List[Any]) -> Dict[str, Any]:
+        """
+        格式化喚醒狀態回應
+        
+        Args:
+            system_state: 系統狀態
+            sessions: 會話列表
+            
+        Returns:
+            格式化的回應
+        """
+        active_wake_sessions = [
+            {
+                "id": s.id,
+                "wake_source": s.wake_source,
+                "wake_time": s.wake_time.isoformat() if s.wake_time else None,
+                "wake_timeout": s.wake_timeout,
+                "is_wake_expired": s.is_wake_expired()
+            }
+            for s in sessions if s.wake_time and not s.is_wake_expired()
+        ]
+        
+        return {
+            "system_state": system_state,
+            "active_wake_sessions": active_wake_sessions,
+            "total_wake_sessions": len(active_wake_sessions),
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    def format_wake_response(self, success: bool, 
+                           message: str,
+                           session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        格式化喚醒回應
+        
+        Args:
+            success: 是否成功
+            message: 回應訊息
+            session_id: 會話 ID
+            
+        Returns:
+            格式化的回應
+        """
+        response = {
+            "success": success,
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if session_id:
+            response["session_id"] = session_id
+        
+        return response

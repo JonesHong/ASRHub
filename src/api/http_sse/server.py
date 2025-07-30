@@ -730,6 +730,92 @@ class SSEServer(APIBase):
                     "message": "Exited busy mode"
                 })
                 return self.create_success_response({"state": "LISTENING"}, session_id)
+            
+            # 喚醒詞相關指令
+            elif command == "wake":
+                source = params.get("source", "ui") if params else "ui"
+                wake_timeout = params.get("wake_timeout") if params else None
+                
+                success = self.session_manager.wake_session(
+                    session_id, 
+                    source=source, 
+                    wake_timeout=wake_timeout
+                )
+                
+                if success:
+                    session = self.session_manager.get_session(session_id)
+                    await self._send_sse_event(session_id, "wake_word", {
+                        "source": source,
+                        "wake_time": session.wake_time.isoformat() if session.wake_time else None,
+                        "wake_timeout": session.wake_timeout
+                    })
+                    return self.create_success_response({
+                        "message": f"Session awakened from {source}",
+                        "wake_timeout": session.wake_timeout
+                    }, session_id)
+                else:
+                    return self.create_error_response("Failed to wake session", session_id)
+            
+            elif command == "sleep":
+                session = self.session_manager.get_session(session_id)
+                if session:
+                    session.clear_wake()
+                    await self._send_sse_event(session_id, "state_change", {
+                        "old_state": session.state,
+                        "new_state": "IDLE",
+                        "event": "sleep"
+                    })
+                    return self.create_success_response({
+                        "message": "Session set to sleep"
+                    }, session_id)
+                else:
+                    return self.create_error_response("Session not found", session_id)
+            
+            elif command == "set_wake_timeout":
+                if not params or "timeout" not in params:
+                    return self.create_error_response("Missing timeout parameter", session_id)
+                
+                try:
+                    timeout = float(params["timeout"])
+                    if timeout <= 0:
+                        return self.create_error_response("Timeout must be positive", session_id)
+                    
+                    session = self.session_manager.get_session(session_id)
+                    if session:
+                        session.wake_timeout = timeout
+                        return self.create_success_response({
+                            "message": f"Wake timeout set to {timeout} seconds",
+                            "wake_timeout": timeout
+                        }, session_id)
+                    else:
+                        return self.create_error_response("Session not found", session_id)
+                        
+                except (ValueError, TypeError):
+                    return self.create_error_response("Invalid timeout value", session_id)
+            
+            elif command == "get_wake_status":
+                # 獲取系統狀態（這裡需要 SystemListener 的支援）
+                system_state = "IDLE"  # 暫時硬編碼，之後應該從 SystemListener 獲取
+                
+                # 獲取活躍的喚醒 sessions
+                active_wake_sessions = self.session_manager.get_active_wake_sessions()
+                
+                wake_stats = self.session_manager.get_wake_stats()
+                
+                return self.create_success_response({
+                    "system_state": system_state,
+                    "active_wake_sessions": [
+                        {
+                            "id": s.id,
+                            "wake_source": s.wake_source,
+                            "wake_time": s.wake_time.isoformat() if s.wake_time else None,
+                            "wake_timeout": s.wake_timeout,
+                            "is_wake_expired": s.is_wake_expired()
+                        }
+                        for s in active_wake_sessions
+                    ],
+                    "stats": wake_stats
+                }, session_id)
                 
             else:
                 return self.create_error_response(f"Unknown command: {command}", session_id)
