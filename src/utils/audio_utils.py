@@ -17,6 +17,102 @@ from src.utils.logger import get_logger
 logger = get_logger("utils.audio")
 
 
+def convert_audio_file_to_pcm(
+    audio_data: bytes,
+    output_sample_rate: int = 16000,
+    output_channels: int = 1,
+    input_format: Optional[str] = None
+) -> bytes:
+    """
+    將各種音訊格式檔案轉換為 PCM 格式
+    
+    Args:
+        audio_data: 音訊檔案的二進位資料
+        output_sample_rate: 輸出取樣率
+        output_channels: 輸出聲道數
+        input_format: 輸入格式（如果不指定會自動偵測）
+        
+    Returns:
+        PCM 格式的音訊資料（16-bit signed little-endian）
+        
+    Raises:
+        AudioFormatError: 如果轉換失敗
+    """
+    try:
+        # 使用 ffmpeg 進行轉換
+        with tempfile.NamedTemporaryFile(suffix=f'.{input_format}' if input_format else '', delete=False) as temp_input:
+            temp_input.write(audio_data)
+            temp_input.flush()
+            
+            # 設定 ffmpeg 命令
+            cmd = [
+                'ffmpeg',
+                '-i', temp_input.name,
+                '-f', 's16le',  # 16-bit signed little-endian PCM
+                '-acodec', 'pcm_s16le',
+                '-ar', str(output_sample_rate),
+                '-ac', str(output_channels),
+                '-'  # 輸出到 stdout
+            ]
+            
+            # 執行轉換
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            pcm_data, error = process.communicate()
+            
+            # 清理臨時檔案
+            os.unlink(temp_input.name)
+            
+            if process.returncode != 0:
+                error_msg = error.decode('utf-8', errors='ignore')
+                raise AudioFormatError(f"FFmpeg 轉換失敗: {error_msg}")
+            
+            # 確保音訊資料長度是偶數（16-bit PCM 需要）
+            if len(pcm_data) % 2 != 0:
+                logger.warning("音訊資料長度為奇數，添加填充位元組")
+                pcm_data += b'\x00'
+            
+            logger.info(f"音訊轉換成功: {len(audio_data)} bytes -> {len(pcm_data)} bytes PCM")
+            return pcm_data
+            
+    except FileNotFoundError:
+        # 如果沒有 ffmpeg，嘗試使用 Python 套件
+        logger.warning("FFmpeg 未安裝，嘗試使用 Python 音訊庫")
+        try:
+            import pydub
+            from pydub import AudioSegment
+            
+            # 將 bytes 轉換為 AudioSegment
+            audio = AudioSegment.from_file(io.BytesIO(audio_data))
+            
+            # 轉換參數
+            audio = audio.set_frame_rate(output_sample_rate)
+            audio = audio.set_channels(output_channels)
+            audio = audio.set_sample_width(2)  # 16-bit
+            
+            # 導出為 PCM
+            pcm_data = audio.raw_data
+            
+            # 確保音訊資料長度是偶數
+            if len(pcm_data) % 2 != 0:
+                logger.warning("音訊資料長度為奇數，添加填充位元組")
+                pcm_data += b'\x00'
+            
+            logger.info(f"使用 pydub 成功轉換: {len(audio_data)} bytes -> {len(pcm_data)} bytes PCM")
+            return pcm_data
+            
+        except ImportError:
+            raise AudioFormatError("需要安裝 ffmpeg 或 pydub 來轉換音訊格式")
+        except Exception as e:
+            raise AudioFormatError(f"音訊轉換失敗: {str(e)}")
+    except Exception as e:
+        raise AudioFormatError(f"音訊檔案轉換失敗: {str(e)}")
+
+
 def calculate_audio_duration(
     audio_data: bytes,
     sample_rate: int,

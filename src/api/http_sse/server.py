@@ -303,7 +303,53 @@ class SSEServer(APIBase):
                     
                     # 讀取音訊檔案
                     with open(audio_path, 'rb') as f:
-                        audio_data = f.read()
+                        audio_file_data = f.read()
+                    
+                    # 轉換音訊格式為 PCM
+                    from src.utils.audio_utils import convert_audio_file_to_pcm
+                    try:
+                        # 從檔案副檔名推測格式
+                        file_ext = os.path.splitext(audio_path)[1].lower().lstrip('.')
+                        if file_ext == 'wav':
+                            # WAV 檔案需要提取 PCM 資料
+                            import wave
+                            import io
+                            try:
+                                with wave.open(io.BytesIO(audio_file_data), 'rb') as wav_file:
+                                    # 確認是 16kHz 單聲道
+                                    if wav_file.getframerate() == 16000 and wav_file.getnchannels() == 1 and wav_file.getsampwidth() == 2:
+                                        # 跳過 WAV 頭部，直接讀取 PCM 資料
+                                        audio_data = wav_file.readframes(wav_file.getnframes())
+                                    else:
+                                        # 需要轉換
+                                        audio_data = convert_audio_file_to_pcm(
+                                            audio_file_data,
+                                            output_sample_rate=16000,
+                                            output_channels=1,
+                                            input_format='wav'
+                                        )
+                            except Exception:
+                                # 如果 wave 模組無法處理，使用通用轉換
+                                audio_data = convert_audio_file_to_pcm(
+                                    audio_file_data,
+                                    output_sample_rate=16000,
+                                    output_channels=1,
+                                    input_format='wav'
+                                )
+                        elif file_ext == 'pcm':
+                            # 純 PCM 格式，直接使用
+                            audio_data = audio_file_data
+                        else:
+                            # 轉換為 PCM 格式
+                            audio_data = convert_audio_file_to_pcm(
+                                audio_file_data,
+                                output_sample_rate=16000,
+                                output_channels=1,
+                                input_format=file_ext
+                            )
+                    except Exception as e:
+                        self.logger.error(f"音訊格式轉換失敗：{e}")
+                        raise HTTPException(status_code=400, detail=f"音訊格式轉換失敗：{str(e)}")
                     
                     # 使用 ProviderManager 的 transcribe 方法（支援池化）
                     result = await provider_manager.transcribe(

@@ -22,7 +22,7 @@ class DefaultPipeline(PipelineBase):
         # 傳遞必要的配置給父類以通過驗證
         pipeline_config = self.config_manager.pipeline
         config_dict = {
-            "sample_rate": pipeline_config.sample_rate,
+            "sample_rate": pipeline_config.default_sample_rate,
             "channels": pipeline_config.channels,
             "encoding": pipeline_config.encoding,
             "buffer_size": pipeline_config.buffer_size

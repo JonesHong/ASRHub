@@ -93,7 +93,7 @@ class ASRHub:
             f"Vosk：{'啟用' if self.providers_config.vosk.enabled else '停用'}",
             "",
             "===== 其他功能 =====",
-            f"喚醒詞：{'啟用' if self.config.wakeword.enabled else '停用'}",
+            f"喚醒詞：{'啟用' if hasattr(self.config, 'wake_word_detection') and self.config.wake_word_detection.enabled else '停用'}",
             f"VAD：{'啟用' if self.pipeline_config.operators.vad.enabled else '停用'}",
             f"降噪：{'啟用' if self.pipeline_config.operators.denoise.enabled else '停用'}",
         ]
