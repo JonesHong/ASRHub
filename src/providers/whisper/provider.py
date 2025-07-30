@@ -59,7 +59,7 @@ class WhisperProvider(ProviderBase):
             "pt", "it", "tr", "pl", "nl", "sv", "id", "th", "vi", "ms"
         ]
         
-        self._processing_lock = asyncio.Lock()
+        # 移除 _processing_lock - Provider Pool 會管理並發
     
     async def _load_model(self):
         """載入 Whisper 模型"""
@@ -161,39 +161,39 @@ class WhisperProvider(ProviderBase):
         if not self.validate_audio_format(audio_data):
             raise AudioFormatError("無效的音訊格式")
         
-        async with self._processing_lock:
-            start_time = time.time()
+        # 移除鎖以支援並發處理 - Provider Pool 會管理並發
+        start_time = time.time()
+        
+        try:
+            # 將音訊轉換為 numpy 陣列
+            audio_array = self._bytes_to_float32(audio_data)
             
-            try:
-                # 將音訊轉換為 numpy 陣列
-                audio_array = self._bytes_to_float32(audio_data)
-                
-                # 執行轉譯
-                if self.use_faster_whisper:
-                    result = await self._transcribe_faster_whisper(
-                        audio_array, **kwargs
-                    )
-                else:
-                    result = await self._transcribe_openai_whisper(
-                        audio_array, **kwargs
-                    )
-                
-                # 記錄處理時間
-                result.processing_time = time.time() - start_time
-                result.audio_duration = len(audio_array) / self.sample_rate
-                
-                self.logger.info(
-                    f"轉譯完成 - "
-                    f"文字長度：{len(result.text)}，"
-                    f"處理時間：{result.processing_time:.2f}秒，"
-                    f"即時因子：{result.processing_time / result.audio_duration:.2f}x"
+            # 執行轉譯
+            if self.use_faster_whisper:
+                result = await self._transcribe_faster_whisper(
+                    audio_array, **kwargs
                 )
-                
-                return result
-                
-            except Exception as e:
-                self.logger.error(f"轉譯失敗：{e}")
-                raise ProviderError(f"Whisper 轉譯失敗：{str(e)}")
+            else:
+                result = await self._transcribe_openai_whisper(
+                    audio_array, **kwargs
+                )
+            
+            # 記錄處理時間
+            result.processing_time = time.time() - start_time
+            result.audio_duration = len(audio_array) / self.sample_rate
+            
+            self.logger.info(
+                f"轉譯完成 - "
+                f"文字長度：{len(result.text)}，"
+                f"處理時間：{result.processing_time:.2f}秒，"
+                f"即時因子：{result.processing_time / result.audio_duration:.2f}x"
+            )
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"轉譯失敗：{e}")
+            raise ProviderError(f"Whisper 轉譯失敗：{str(e)}")
     
     async def _transcribe_faster_whisper(self,
                                        audio_array: np.ndarray,
@@ -354,6 +354,11 @@ class WhisperProvider(ProviderBase):
         Returns:
             正規化的 float32 陣列
         """
+        # 確保音訊資料長度是偶數（16-bit PCM 需要）
+        if len(audio_bytes) % 2 != 0:
+            self.logger.warning("音訊資料長度為奇數，添加填充位元組")
+            audio_bytes = audio_bytes + b'\x00'
+        
         # 假設輸入是 16-bit PCM
         audio_int16 = np.frombuffer(audio_bytes, dtype=np.int16)
         
@@ -413,35 +418,34 @@ class WhisperProvider(ProviderBase):
             if language:
                 kwargs['language'] = language
             
-            # 執行轉譯
-            async with self._processing_lock:
-                start_time = time.time()
-                
-                if self.use_faster_whisper:
-                    # 對於 faster-whisper，直接傳遞檔案路徑
-                    result = await self._transcribe_faster_whisper_file(
-                        file_path, **kwargs
-                    )
-                else:
-                    result = await self._transcribe_openai_whisper(
-                        audio_array, **kwargs
-                    )
-                
-                # 記錄處理時間
-                result.processing_time = time.time() - start_time
-                # 使用 result 中的 audio_duration 如果有的話
-                if not hasattr(result, 'audio_duration'):
-                    result.audio_duration = 0  # 將在轉譯函數中設定
-                
-                self.logger.info(
-                    f"檔案轉譯完成 - "
-                    f"檔案：{os.path.basename(file_path)}，"
-                    f"文字長度：{len(result.text)}，"
-                    f"處理時間：{result.processing_time:.2f}秒，"
-                    f"即時因子：{result.processing_time / result.audio_duration:.2f}x"
+            # 執行轉譯 - 移除鎖以支援並發處理
+            start_time = time.time()
+            
+            if self.use_faster_whisper:
+                # 對於 faster-whisper，直接傳遞檔案路徑
+                result = await self._transcribe_faster_whisper_file(
+                    file_path, **kwargs
                 )
-                
-                return result
+            else:
+                result = await self._transcribe_openai_whisper(
+                    audio_array, **kwargs
+                )
+            
+            # 記錄處理時間
+            result.processing_time = time.time() - start_time
+            # 使用 result 中的 audio_duration 如果有的話
+            if not hasattr(result, 'audio_duration'):
+                result.audio_duration = 0  # 將在轉譯函數中設定
+            
+            self.logger.info(
+                f"檔案轉譯完成 - "
+                f"檔案：{os.path.basename(file_path)}，"
+                f"文字長度：{len(result.text)}，"
+                f"處理時間：{result.processing_time:.2f}秒，"
+                f"即時因子：{result.processing_time / result.audio_duration:.2f}x"
+            )
+            
+            return result
             
         except Exception as e:
             self.logger.error(f"檔案轉譯失敗：{e}")

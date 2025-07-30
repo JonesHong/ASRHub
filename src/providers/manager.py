@@ -353,10 +353,20 @@ class ProviderManager:
                 raise ProviderError(f"Provider Pool '{provider_name}' 不存在")
             
             # 使用池化模式
+            self.logger.debug(
+                f"使用池化模式 - Provider: {provider_name}, "
+                f"池狀態: {pool.stats.in_use_count}/{pool.stats.current_size} 使用中"
+            )
             async with pool.acquire() as provider:
-                return await provider.transcribe(audio_data, **kwargs)
+                result = await provider.transcribe(audio_data, **kwargs)
+                self.logger.debug(
+                    f"池化轉譯完成 - Provider: {provider_name}, "
+                    f"釋放後狀態: {pool.stats.in_use_count}/{pool.stats.current_size} 使用中"
+                )
+                return result
         else:
             # 使用單例模式
+            self.logger.warning(f"使用單例模式 - Provider: {provider_name} (池化未啟用)")
             provider = self.providers.get(provider_name)
             if not provider:
                 raise ProviderError(f"Provider '{provider_name}' 不存在")

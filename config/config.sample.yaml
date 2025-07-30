@@ -25,7 +25,7 @@ api:
     port: ${API_PORT:8080}
     cors_enabled: true
     max_connections: 100
-    timeout: 300  # 秒
+    request_timeout: 300  # 秒
     
   # WebSocket 配置
   websocket:
@@ -61,6 +61,8 @@ api:
 # ===== Pipeline 設定 =====
 pipeline:
   default_sample_rate: 16000
+  channels: 1  # 單聲道
+  encoding: "int16"  # 音訊編碼格式
   buffer_size: 4096
   max_pipeline_length: 10  # 最大 operator 數量
   
@@ -133,12 +135,15 @@ providers:
     beam_size: 5
     best_of: 5
     temperature: 0.0
+    use_faster_whisper: true  # 使用 faster-whisper 引擎
+    initial_prompt: null  # 初始提示詞，可選
+    vad_filter: false  # 是否使用 VAD 過濾
     # 模型下載路徑
     model_path: "./models/whisper"
     
     # 池化配置 (可選，預設為關閉)
     pool:
-      enabled: false  # 啟用池化以支援並發處理
+      enabled: true   # 啟用池化以支援並發處理 ⭐️ 改為 true
       min_size: 2     # 最小池大小
       max_size: 5     # 最大池大小（根據記憶體和 GPU 資源調整）
       idle_timeout: 300.0  # 空閒實例超時時間（秒）
@@ -211,7 +216,7 @@ wake_word_detection:
     # OpenWakeWord 模型
     - type: openWakeWord
       enabled: true
-      model_path: "models/hi_kmu_0721.onnx"  # ONNX 模型檔案路徑
+      model_path: "models/wakeword/hi_kmu_0721.onnx"  # ONNX 模型檔案路徑
       threshold: 0.5  # 偵測閾值 (0.0 - 1.0)
       language: "zh-TW"  # 語言代碼
       # HuggingFace 模型下載設定（當 model_path 不存在時使用）
@@ -255,6 +260,8 @@ stream:
   # 靜音偵測設定
   silence_timeout: 3.0  # 秒，靜音超過此時間後自動停止
   initial_silence_timeout: 10.0  # 初始靜音超時
+  max_segment_duration: 30.0  # 最大片段持續時間（秒）
+  enable_vad: true  # 是否啟用語音活動偵測
   
   # 手動終止
   manual_termination: true
