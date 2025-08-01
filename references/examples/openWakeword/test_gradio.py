@@ -60,6 +60,28 @@ def process_audio(audio, state=None):
                     
                 # Add prediction
                 state[key].append(prediction[key])
+                
+                # 檢測喚醒詞是否成功（閾值設為 0.5）
+                if prediction[key] > 0.5:
+                    print("\n" + "="*50)
+                    print(f"🎯 喚醒詞偵測成功！")
+                    print(f"模型名稱: {key}")
+                    print(f"置信度分數: {prediction[key]:.4f}")
+                    print(f"\n音訊格式資訊:")
+                    print(f"  - 原始採樣率: {audio[0]} Hz")
+                    print(f"  - 重採樣後採樣率: 16000 Hz")
+                    print(f"  - 音訊數據類型: {data.dtype}")
+                    print(f"  - 音訊形狀: {data.shape}")
+                    print(f"  - 音訊長度: {data.shape[0]/16000:.2f} 秒")
+                    print(f"  - 音訊通道數: {1 if len(data.shape) == 1 else data.shape[-1]}")
+                    print(f"  - 音訊振幅範圍: [{np.min(data):.4f}, {np.max(data):.4f}]")
+                    print(f"  - 音訊平均值: {np.mean(data):.4f}")
+                    print(f"  - 音訊標準差: {np.std(data):.4f}")
+                    print(f"\n處理資訊:")
+                    print(f"  - 當前處理幀位置: {i}")
+                    print(f"  - 處理塊大小: {chunk.shape[0]}")
+                    print(f"  - 時間戳: {i/16000:.2f} 秒")
+                    print("="*50 + "\n")
     
     # Make line plot
     dfs = []
