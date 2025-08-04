@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from src.pipeline.operators.wakeword import OpenWakeWordOperator
 from src.core.system_listener import SystemListener
 from src.core.session_manager import SessionManager
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 
 
 class WakeWordMonitor:
@@ -32,8 +32,7 @@ class WakeWordMonitor:
             show_scores: 是否顯示實時分數
             threshold: 偵測閾值
         """
-        self.logger = get_logger("wakeword_monitor")
-        self.show_scores = show_scores
+        self.        self.show_scores = show_scores
         self.threshold = threshold
         
         # 組件

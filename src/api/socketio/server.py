@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 
 from src.api.base import APIBase, APIResponse
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.session_manager import SessionManager
 from src.core.exceptions import APIError
 from src.api.socketio.stream_manager import SocketIOStreamManager
@@ -54,7 +54,7 @@ class SocketIOServer(APIBase):
         self.port = sio_config.port
         
         # 初始化 logger
-        self.logger = get_logger("api.socketio")
+        self.logger = logger
         
         # 建立 Socket.io 服務器
         self.sio = socketio.AsyncServer(
@@ -615,7 +615,7 @@ class SocketIOServer(APIBase):
                 # 先將 WebM 轉換為 PCM
                 self.logger.info("開始轉換 WebM 音訊到 PCM 格式")
                 try:
-                    from src.utils.audio_utils import convert_webm_to_pcm
+                    from src.utils.audio_converter import convert_webm_to_pcm
                     pcm_data = convert_webm_to_pcm(audio_data)
                     self.logger.info(f"音訊轉換成功: {len(audio_data)} bytes WebM -> {len(pcm_data)} bytes PCM")
                 except Exception as e:
@@ -649,9 +649,9 @@ class SocketIOServer(APIBase):
                     pipeline = self.pipeline_manager.get_pipeline("default")
                     if pipeline:
                         # 處理音訊
-                        processed_audio = await pipeline.process(audio)
-                        if processed_audio:
-                            processed_audio_data = processed_audio.data
+                        processed_result = await pipeline.process(audio.data)
+                        if processed_result:
+                            processed_audio_data = processed_result
                 
                 # 使用 ProviderManager 的 transcribe 方法（支援池化）
                 provider_name = self.provider_manager.default_provider

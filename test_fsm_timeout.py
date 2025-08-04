@@ -14,15 +14,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from src.core.fsm import StateMachine, State, Event
 from src.config.manager import ConfigManager
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 
 
 class FSMTimeoutTester:
     """FSM 超時測試器"""
     
     def __init__(self):
-        self.logger = get_logger("fsm_timeout_tester")
-        self.config_manager = ConfigManager()
+        self.        self.config_manager = ConfigManager()
         
         # 初始化 FSM
         self.fsm = StateMachine(initial_state=State.IDLE)

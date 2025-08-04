@@ -11,9 +11,8 @@ import signal
 from pathlib import Path
 from typing import List, Set
 from src.config.manager import ConfigManager
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 
-logger = get_logger("stop_main")
 
 
 def extract_ports_from_config() -> Set[int]:

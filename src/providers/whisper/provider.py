@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, List, AsyncGenerator
 import numpy as np
 from datetime import datetime
 from src.providers.base import ProviderBase, TranscriptionResult, StreamingResult
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.exceptions import ProviderError, ModelError, AudioFormatError
 from src.models.transcript import TranscriptSegment, Word
 from src.config.manager import ConfigManager
@@ -35,7 +35,7 @@ class WhisperProvider(ProviderBase):
         config_dict = whisper_config.to_dict()
         super().__init__(config_dict)
         
-        self.logger = get_logger("provider.whisper")
+        self.logger = logger
         
         # 模型配置
         self.model_size = whisper_config.model_size
@@ -182,12 +182,21 @@ class WhisperProvider(ProviderBase):
             result.processing_time = time.time() - start_time
             result.audio_duration = len(audio_array) / self.sample_rate
             
-            self.logger.info(
-                f"轉譯完成 - "
-                f"文字長度：{len(result.text)}，"
-                f"處理時間：{result.processing_time:.2f}秒，"
-                f"即時因子：{result.processing_time / result.audio_duration:.2f}x"
-            )
+            # 檢查是否為健康檢查（靜音數據）
+            is_silence = np.max(np.abs(audio_array)) < 0.001
+            
+            # 如果是健康檢查且結果為空，使用 TRACE 級別
+            if is_silence and len(result.text) == 0:
+                self.logger.trace(
+                    f"健康檢查完成 - 處理時間：{result.processing_time:.2f}秒"
+                )
+            else:
+                self.logger.info(
+                    f"轉譯完成 - "
+                    f"文字長度：{len(result.text)}，"
+                    f"處理時間：{result.processing_time:.2f}秒，"
+                    f"即時因子：{result.processing_time / result.audio_duration:.2f}x"
+                )
             
             return result
             

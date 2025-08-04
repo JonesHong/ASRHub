@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from src.api.base import APIBase, APIResponse
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.session_manager import SessionManager
 from src.core.exceptions import APIError, SessionError
 from src.config.manager import ConfigManager
@@ -43,13 +43,14 @@ class SSEServer(APIBase):
         super().__init__(config_dict, session_manager)
         
         self.app = FastAPI(title="ASR Hub SSE API", version="0.1.0")
-        self.logger = get_logger("api.sse")
+        self.logger = logger
         self.provider_manager = provider_manager
         self.pipeline_manager = pipeline_manager
         
         # SSE 連線管理
         self.sse_connections: Dict[str, asyncio.Queue] = {}
         self.audio_buffers: Dict[str, bytearray] = {}
+        self.audio_params: Dict[str, Dict[str, Any]] = {}  # 保存音頻參數
         self.processed_sessions: Set[str] = set()  # 追蹤已處理的 session
         
         # 設定路由
@@ -161,6 +162,29 @@ class SSEServer(APIBase):
                 audio_data = await request.body()
                 if not audio_data:
                     raise HTTPException(status_code=400, detail="Empty audio data")
+                
+                # 解析音頻參數
+                audio_params = {
+                    'sample_rate': 16000,
+                    'format': 'webm'
+                }
+                
+                # 從 headers 獲取音頻參數
+                if request.headers.get('X-Audio-Sample-Rate'):
+                    try:
+                        audio_params['sample_rate'] = int(request.headers['X-Audio-Sample-Rate'])
+                        self.logger.info(f"音頻採樣率: {audio_params['sample_rate']} Hz")
+                    except ValueError:
+                        self.logger.warning(f"無效的採樣率: {request.headers['X-Audio-Sample-Rate']}")
+                
+                if request.headers.get('X-Audio-Format'):
+                    audio_params['format'] = request.headers['X-Audio-Format']
+                    self.logger.info(f"音頻格式: {audio_params['format']}")
+                
+                # 保存音頻參數到 session
+                if session_id not in self.audio_params:
+                    self.audio_params = {}
+                self.audio_params[session_id] = audio_params
                 
                 # 添加到緩衝區
                 if session_id not in self.audio_buffers:
@@ -306,7 +330,7 @@ class SSEServer(APIBase):
                         audio_file_data = f.read()
                     
                     # 轉換音訊格式為 PCM
-                    from src.utils.audio_utils import convert_audio_file_to_pcm
+                    from src.utils.audio_converter import convert_audio_file_to_pcm
                     try:
                         # 從檔案副檔名推測格式
                         file_ext = os.path.splitext(audio_path)[1].lower().lstrip('.')
@@ -324,17 +348,17 @@ class SSEServer(APIBase):
                                         # 需要轉換
                                         audio_data = convert_audio_file_to_pcm(
                                             audio_file_data,
-                                            output_sample_rate=16000,
-                                            output_channels=1,
-                                            input_format='wav'
+                                            target_sample_rate=16000,
+                                            target_channels=1,
+                                            source_format='wav'
                                         )
                             except Exception:
                                 # 如果 wave 模組無法處理，使用通用轉換
                                 audio_data = convert_audio_file_to_pcm(
                                     audio_file_data,
-                                    output_sample_rate=16000,
-                                    output_channels=1,
-                                    input_format='wav'
+                                    target_sample_rate=16000,
+                                    target_channels=1,
+                                    source_format='wav'
                                 )
                         elif file_ext == 'pcm':
                             # 純 PCM 格式，直接使用
@@ -343,9 +367,9 @@ class SSEServer(APIBase):
                             # 轉換為 PCM 格式
                             audio_data = convert_audio_file_to_pcm(
                                 audio_file_data,
-                                output_sample_rate=16000,
-                                output_channels=1,
-                                input_format=file_ext
+                                target_sample_rate=16000,
+                                target_channels=1,
+                                source_format=file_ext
                             )
                     except Exception as e:
                         self.logger.error(f"音訊格式轉換失敗：{e}")
@@ -540,6 +564,12 @@ class SSEServer(APIBase):
             complete_audio = bytes(self.audio_buffers[session_id])
             self.logger.info(f"處理完整音訊，大小: {len(complete_audio)} bytes")
             
+            # 獲取音頻參數
+            audio_params = self.audio_params.get(session_id, {})
+            audio_format = audio_params.get('format', 'pcm')  # 預設 PCM
+            
+            self.logger.info(f"音頻參數: 格式={audio_format}")
+            
             # 發送進度事件
             await self._send_sse_event(session_id, "progress", {
                 "percentage": 50,
@@ -548,18 +578,42 @@ class SSEServer(APIBase):
             })
             
             # 檢查音訊格式並轉換
-            from src.utils.audio_utils import convert_webm_to_pcm
+            from src.utils.audio_converter import convert_webm_to_pcm
             from src.models.audio import AudioChunk, AudioFormat
             
-            try:
-                # 嘗試轉換音訊格式
-                self.logger.info(f"轉換音訊格式，原始大小: {len(complete_audio)} bytes")
-                pcm_data = convert_webm_to_pcm(complete_audio)
-                self.logger.info(f"轉換成功，PCM 大小: {len(pcm_data)} bytes")
-            except Exception as e:
-                self.logger.error(f"音訊轉換失敗: {e}")
-                # 假設已經是 PCM 格式
-                pcm_data = complete_audio
+            # 根據音頻格式決定是否需要轉換
+            pcm_data = complete_audio
+            
+            if audio_format in ['webm', 'mp3', 'mp4', 'ogg', 'wav']:
+                try:
+                    # 需要轉換為 PCM
+                    self.logger.info(f"轉換 {audio_format} 格式，原始大小: {len(complete_audio)} bytes")
+                    
+                    if audio_format == 'webm':
+                        # WebM 特別處理
+                        pcm_data = convert_webm_to_pcm(complete_audio, sample_rate=16000, channels=1)
+                    else:
+                        # 其他格式使用通用轉換
+                        from src.utils.audio_converter import convert_audio_file_to_pcm
+                        pcm_data = convert_audio_file_to_pcm(
+                            complete_audio,
+                            target_sample_rate=16000,
+                            target_channels=1,
+                            source_format=audio_format
+                        )
+                    
+                    self.logger.info(f"轉換成功，PCM 大小: {len(pcm_data)} bytes")
+                except Exception as e:
+                    self.logger.error(f"音訊格式轉換失敗: {e}")
+                    # 發送錯誤並返回
+                    await self._send_sse_event(session_id, "error", {
+                        "message": f"音訊格式轉換失敗: {str(e)}",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    return
+            else:
+                # 已經是 PCM 格式，直接使用
+                self.logger.info(f"音頻已是 PCM 格式，大小: {len(pcm_data)} bytes")
             
             # 建立 AudioChunk
             audio_chunk = AudioChunk(
@@ -576,11 +630,11 @@ class SSEServer(APIBase):
             provider_name = session.provider_config.get("provider", "whisper")
             
             # 透過 pipeline 處理（如果有）
-            processed_audio = audio_chunk
+            processed_audio = audio_chunk.data
             if self.pipeline_manager:
                 pipeline = self.pipeline_manager.get_pipeline("default")
                 if pipeline:
-                    processed_audio = await pipeline.process(audio_chunk)
+                    processed_audio = await pipeline.process(audio_chunk.data)
             
             # 執行轉譯
             self.logger.info(f"使用 {provider_name} 進行轉譯")
@@ -595,7 +649,7 @@ class SSEServer(APIBase):
             
             # 使用 ProviderManager 的 transcribe 方法（支援池化）
             result = await self.provider_manager.transcribe(
-                audio_data=processed_audio.data if processed_audio else pcm_data,
+                audio_data=processed_audio if processed_audio else pcm_data,
                 provider_name=provider_name,
                 language=session.provider_config.get("language", "zh")
             )
@@ -654,6 +708,10 @@ class SSEServer(APIBase):
         # 清理音訊緩衝
         if session_id in self.audio_buffers:
             del self.audio_buffers[session_id]
+        
+        # 清除音頻參數
+        if session_id in self.audio_params:
+            del self.audio_params[session_id]
         
         # 清理已處理標記
         if session_id in self.processed_sessions:

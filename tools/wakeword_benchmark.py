@@ -19,7 +19,7 @@ import statistics
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from src.pipeline.operators.wakeword import OpenWakeWordOperator
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 
 
 class WakeWordBenchmark:
@@ -27,8 +27,7 @@ class WakeWordBenchmark:
     
     def __init__(self):
         """初始化基準測試器"""
-        self.logger = get_logger("wakeword_benchmark")
-        
+        self.        
         # 測試配置
         self.test_configs = [
             {"threshold": 0.3, "name": "低閾值 (0.3)"},

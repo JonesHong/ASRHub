@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
 
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.providers.base import ProviderBase
 from src.core.exceptions import ProviderError, ResourceError
 from rich.table import Table
@@ -45,6 +45,13 @@ class PoolStatistics:
         if self.current_size == 0:
             return 0.0
         return self.in_use_count / self.current_size
+    
+    @property
+    def success_rate(self) -> float:
+        """計算成功率"""
+        if self.total_requests == 0:
+            return 0.0
+        return self.successful_requests / self.total_requests
     
     def to_dict(self) -> Dict[str, Any]:
         """轉換為字典格式"""
@@ -138,7 +145,7 @@ class ProviderPool:
         self.health_check_interval = health_check_interval
         
         # 日誌
-        self.logger = get_logger(f"provider.pool.{provider_type}")
+        self.logger = logger
         
         # 池管理
         self._available: asyncio.Queue[ProviderWrapper] = asyncio.Queue()
@@ -430,7 +437,7 @@ class ProviderPool:
         table.add_row("Utilization", f"{self.stats.utilization_rate:.2%}", "✓" if self.stats.utilization_rate < 0.9 else "⚠")
         table.add_row("Total Requests", str(self.stats.total_requests), "✓")
         table.add_row("Success Rate", f"{self.stats.success_rate:.2%}", "✓" if self.stats.success_rate > 0.95 else "⚠")
-        table.add_row("Avg Wait Time", f"{self.stats.avg_wait_time:.3f}s", "✓" if self.stats.avg_wait_time < 1.0 else "⚠")
+        table.add_row("Avg Wait Time", f"{self.stats.average_wait_time:.3f}s", "✓" if self.stats.average_wait_time < 1.0 else "⚠")
         
         return table
     

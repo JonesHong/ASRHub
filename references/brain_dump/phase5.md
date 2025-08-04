@@ -1,1 +1,3 @@
-/design --architecture --persona-architect  --plan "繁體中文對話。被喚醒以後有兩種結果，一種是預設 asr是支援 streaming的 asr 喚醒以後就會打開 asr轉譯文字，如果是不支援 streaming的 asr 被喚醒以後開始錄音，兩個都是  VAD判斷沒有聲音以後是為結束此輪對話， streaming的因為過程就會一直回傳轉譯結果所以就只是停止asr non-streaming的則是結束錄音，接著把剛錄好的聲音丟到  asr轉譯，然後再一次性回傳結果，這樣你認為如何？"
+/design --architecture --persona-architect  --plan "繁體中文對話。請參考 
+@references/spec/ , @references/todo_phase/ , @src/api/  我現在要制定第五階段的 todo 請幫我撰寫 
+md，我需要對這份md評估後再真的執行，我希望第五階段在當前基礎上新增 VAD與錄音的 Operator，個別測試的小元件 可另外參考 @test_wakeword_integration.py"

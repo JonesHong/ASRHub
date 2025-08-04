@@ -140,6 +140,8 @@ config/config.prod.yaml
 logs/*.log
 recordings/*.wav
 recordings/*.mp3
+test_recordings/*.wav
+test_recordings/*.mp3
 models/
 # models/wakeword/*.pt
 # models/vad/*.pt

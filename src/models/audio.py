@@ -96,6 +96,10 @@ class AudioChunk:
         """檢查是否為空資料"""
         return len(self.data) == 0
     
+    def __len__(self) -> int:
+        """返回音訊資料的長度（位元組）"""
+        return len(self.data)
+    
     def to_dict(self) -> Dict[str, Any]:
         """轉換為字典格式"""
         return {

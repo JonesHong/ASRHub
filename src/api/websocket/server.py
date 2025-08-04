@@ -12,14 +12,14 @@ import uuid
 from datetime import datetime
 
 from src.api.base import APIBase, APIResponse
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.session_manager import SessionManager
 from src.core.exceptions import APIError
 from src.api.websocket.stream_manager import WebSocketStreamManager
 from src.pipeline.manager import PipelineManager
 from src.providers.manager import ProviderManager
 from src.models.audio import AudioChunk, AudioFormat
-from src.utils.audio_utils import convert_webm_to_pcm
+from src.utils.audio_converter import convert_webm_to_pcm
 from src.config.manager import ConfigManager
 
 
@@ -53,7 +53,7 @@ class WebSocketServer(APIBase):
         self.port = ws_config.port
         self.server = None
         self.connections: Dict[str, WebSocketConnection] = {}
-        self.logger = get_logger("api.websocket")
+        self.logger = logger
         self.stream_manager = WebSocketStreamManager()
         self.pipeline_manager = pipeline_manager
         self.provider_manager = provider_manager
@@ -598,8 +598,7 @@ class WebSocketServer(APIBase):
                     pipeline = self.pipeline_manager.get_pipeline("default")
                     if pipeline:
                         # 處理音訊
-                        processed_audio = await pipeline.process(audio)
-                        processed_audio_data = processed_audio.data
+                        processed_audio_data = await pipeline.process(audio.data)
                 
                 # 使用 ProviderManager 的 transcribe 方法（支援池化）
                 provider_name = self.provider_manager.default_provider
