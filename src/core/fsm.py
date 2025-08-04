@@ -5,7 +5,7 @@ ASR Hub 有限狀態機實作
 
 from enum import Enum
 from typing import Dict, List, Callable, Optional, Any
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.exceptions import StateError
 
 
@@ -46,7 +46,7 @@ class StateMachine:
         Args:
             initial_state: 初始狀態
         """
-        self.logger = get_logger("fsm")
+        self.logger = logger
         self.current_state = initial_state
         self.previous_state = None
         

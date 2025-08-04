@@ -4,7 +4,7 @@ ASR Hub Provider Manager
 """
 
 from typing import Dict, Any, List, Optional, Type
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.exceptions import ProviderError, ConfigurationError
 from src.providers.base import ProviderBase
 from src.providers.whisper.provider import WhisperProvider
@@ -24,7 +24,7 @@ class ProviderManager:
         使用 ConfigManager 獲取配置
         """
         self.config_manager = ConfigManager()
-        self.logger = get_logger("provider.manager")
+        self.logger = logger
         
         # Provider 實例快取
         self.providers: Dict[str, ProviderBase] = {}
@@ -84,10 +84,11 @@ class ProviderManager:
         """初始化所有已啟用的 Providers"""
         # Whisper Provider
         if self.config_manager.providers.whisper.enabled:
-            # 檢查是否啟用池化（如果配置中有 pool 設定）
-            pool_config = getattr(self.config_manager.providers.whisper, 'pool', None)
-            if pool_config and getattr(pool_config, 'enabled', False):
-                await self._create_provider_pool("whisper", pool_config)
+            # 檢查是否啟用池化
+            # yaml2py 會處理 pool 的存在性，如果 YAML 中有定義 pool，就會有該屬性
+            if hasattr(self.config_manager.providers.whisper, 'pool') and \
+               self.config_manager.providers.whisper.pool.enabled:
+                await self._create_provider_pool("whisper", self.config_manager.providers.whisper.pool)
             else:
                 await self._create_provider("whisper")
         
@@ -134,12 +135,13 @@ class ProviderManager:
             return
         
         try:
-            # 獲取池化配置參數
-            min_size = getattr(pool_config, 'min_size', 1)
-            max_size = getattr(pool_config, 'max_size', 5)
-            acquire_timeout = getattr(pool_config, 'acquire_timeout', 30.0)
-            idle_timeout = getattr(pool_config, 'idle_timeout', 300.0)
-            health_check_interval = getattr(pool_config, 'health_check_interval', 60.0)
+            # 直接使用池化配置參數
+            # yaml2py 會從 YAML 中提供預設值
+            min_size = pool_config.min_size
+            max_size = pool_config.max_size
+            acquire_timeout = pool_config.acquire_timeout
+            idle_timeout = pool_config.idle_timeout
+            health_check_interval = pool_config.health_check_interval
             
             # 建立 Provider Pool
             provider_class = self.provider_registry[name]
@@ -465,8 +467,11 @@ class ProviderManager:
         # 添加每個 Provider 的狀態
         for provider_type in self.provider_registry.keys():
             # 檢查是否啟用
-            provider_config = getattr(self.config_manager.providers, provider_type, None)
-            if not provider_config or not provider_config.enabled:
+            # 使用 hasattr 檢查配置是否存在
+            if not hasattr(self.config_manager.providers, provider_type):
+                continue
+            provider_config = getattr(self.config_manager.providers, provider_type)
+            if not provider_config.enabled:
                 continue
             
             # 創建 Provider 節點

@@ -6,7 +6,7 @@ ASR Hub Stream Controller
 import asyncio
 from typing import Dict, Any, Optional, AsyncGenerator, List
 from datetime import datetime
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.exceptions import StreamError, SessionError
 from src.core.session_manager import SessionManager
 from src.pipeline.manager import PipelineManager
@@ -40,7 +40,7 @@ class StreamController:
         self.pipeline_manager = pipeline_manager
         self.provider_manager = provider_manager
         
-        self.logger = get_logger("stream.controller")
+        self.logger = logger
         
         # 串流配置
         stream_config = self.config_manager.stream

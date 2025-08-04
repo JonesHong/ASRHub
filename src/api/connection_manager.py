@@ -10,7 +10,7 @@ from datetime import datetime
 from enum import Enum
 import uuid
 
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.exceptions import ConnectionError
 
 
@@ -74,7 +74,7 @@ class ConnectionManager:
         Args:
             config: 配置
         """
-        self.logger = get_logger("api.connection_manager")
+        self.logger = logger
         self.config = config or {}
         
         # 連線儲存

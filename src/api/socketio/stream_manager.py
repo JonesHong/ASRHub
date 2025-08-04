@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, AsyncGenerator
 import time
 from dataclasses import dataclass
 
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.models.audio import AudioChunk
 from src.core.exceptions import StreamError
 
@@ -55,7 +55,7 @@ class SocketIOStreamManager:
         Args:
             max_buffer_size: 最大緩衝區大小（字節）
         """
-        self.logger = get_logger("socketio.stream_manager")
+        self.logger = logger
         self.max_buffer_size = max_buffer_size
         self.stream_buffers: Dict[str, SocketIOAudioBuffer] = {}
         self.stream_queues: Dict[str, asyncio.Queue] = {}

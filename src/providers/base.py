@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List, AsyncGenerator
 from dataclasses import dataclass
 from datetime import datetime
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.exceptions import ProviderError, ModelError
 
 
@@ -67,7 +67,7 @@ class ProviderBase(ABC):
             config: Provider 配置
         """
         self.config = config
-        self.logger = get_logger(f"provider.{self.__class__.__name__.lower()}")
+        self.logger = logger
         self.name = self.__class__.__name__
         self._initialized = False
         

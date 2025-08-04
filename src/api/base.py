@@ -5,7 +5,7 @@ ASR Hub API 基礎類別
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, AsyncGenerator
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.session_manager import SessionManager
 from src.core.exceptions import APIError
 
@@ -60,7 +60,7 @@ class APIBase(ABC):
         """
         self.config = config
         self.session_manager = session_manager
-        self.logger = get_logger(f"api.{self.__class__.__name__.lower()}")
+        self.logger = logger
         self._running = False
     
     @abstractmethod

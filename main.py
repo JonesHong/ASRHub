@@ -7,7 +7,7 @@ import asyncio
 import sys
 from pathlib import Path
 from src.core.asr_hub import ASRHub
-from src.utils.logger import get_logger, setup_global_exception_handler
+from src.utils.logger import logger, setup_global_exception_handler
 
 # 設定專案根目錄
 PROJECT_ROOT = Path(__file__).parent
@@ -18,7 +18,7 @@ async def main():
     """主程式入口"""
     # 設定全域異常處理器
     setup_global_exception_handler()
-    logger = get_logger("main")
+    # logger 已經在頂部導入
     
     try:
         logger.info("=" * 50)

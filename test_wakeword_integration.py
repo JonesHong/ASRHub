@@ -10,8 +10,6 @@ import sys
 import numpy as np
 import pyaudio
 from datetime import datetime
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
 import queue
 import threading
 from typing import Dict, Any, Optional
@@ -23,12 +21,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from src.pipeline.operators.wakeword import OpenWakeWordOperator
 from src.core.system_listener import SystemListener
 from src.core.session_manager import SessionManager
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.config.manager import ConfigManager
 
-# 設定中文字體
-plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "PingFang SC", "SimHei", "DejaVu Sans"]
-plt.rcParams["axes.unicode_minus"] = False
+# 使用統一的視覺化工具
+from src.utils.visualization import WakeWordVisualization
 
 
 class WakeWordIntegrationTester:
@@ -36,13 +33,17 @@ class WakeWordIntegrationTester:
     
     def __init__(self):
         """初始化測試器"""
-        self.logger = get_logger("wakeword_tester")
+        self.logger = logger
         
         # 音訊參數
         self.chunk_size = 1280
         self.sample_rate = 16000
         self.channels = 1
         self.format = pyaudio.paInt16
+        
+        # 喚醒詞設定
+        self.wake_word = "hi_kmu"  # 預設喚醒詞
+        self.score_threshold = 0.5  # 檢測閾值
         
         # 測試組件
         self.wakeword_operator = None
@@ -55,9 +56,11 @@ class WakeWordIntegrationTester:
         self.is_running = False
         
         # 資料儲存
-        self.audio_queue = queue.Queue()
         self.detection_events = []
         self.score_history = []
+        
+        # 視覺化
+        self.visualization = WakeWordVisualization()
         self.timestamps = []
         
         # 統計資訊
@@ -101,22 +104,49 @@ class WakeWordIntegrationTester:
         self.logger.info("清理測試環境...")
         
         try:
+            # 停止音訊處理
+            self.is_running = False
+            
+            # 清理 SystemListener
             if self.system_listener:
-                await self.system_listener.stop()
+                try:
+                    await self.system_listener.stop()
+                except Exception as e:
+                    self.logger.error(f"停止 SystemListener 時發生錯誤: {e}")
             
+            # 清理 WakeWord Operator
             if self.wakeword_operator:
-                await self.wakeword_operator.stop()
+                try:
+                    await self.wakeword_operator.stop()
+                except Exception as e:
+                    self.logger.error(f"停止 WakeWordOperator 時發生錯誤: {e}")
             
+            # 清理音訊流
             if self.stream:
-                self.stream.stop_stream()
-                self.stream.close()
+                try:
+                    self.stream.stop_stream()
+                    self.stream.close()
+                except Exception as e:
+                    self.logger.error(f"關閉音訊流時發生錯誤: {e}")
             
-            self.p.terminate()
+            # 清理 PyAudio
+            if hasattr(self, 'p') and self.p:
+                try:
+                    self.p.terminate()
+                except Exception as e:
+                    self.logger.error(f"終止 PyAudio 時發生錯誤: {e}")
+            
+            # 清理視覺化
+            if hasattr(self, 'visualization'):
+                try:
+                    self.visualization.is_running = False
+                except Exception as e:
+                    self.logger.error(f"清理視覺化時發生錯誤: {e}")
             
             self.logger.info("✓ 測試環境清理完成")
             
         except Exception as e:
-            self.logger.error(f"清理錯誤: {e}")
+            self.logger.error(f"清理過程中發生未預期的錯誤: {e}")
     
     def start_audio_capture(self):
         """開始音訊捕獲"""
@@ -163,54 +193,85 @@ class WakeWordIntegrationTester:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        while self.is_running:
-            try:
-                # 讀取音訊資料
-                audio_data = self.stream.read(self.chunk_size, exception_on_overflow=False)
-                
-                # 轉換為 numpy array
-                audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
-                
-                # 同步處理音訊（喚醒詞偵測）
-                # 在線程中運行 async 函數
-                result = loop.run_until_complete(
-                    self.wakeword_operator.process(
-                        audio_data,
-                        sample_rate=self.sample_rate,
-                        session_id="test_session"
-                    )
-                )
-                
-                # 獲取最新分數
-                latest_score = self.wakeword_operator.get_latest_score()
-                if latest_score is not None:
-                    current_time = time.time()
-                    self.score_history.append(latest_score)
-                    self.timestamps.append(current_time)
+        try:
+            while self.is_running:
+                try:
+                    # 檢查流是否還有效
+                    if not self.stream or not hasattr(self.stream, 'read'):
+                        self.logger.warning("音訊流無效，退出處理迴圈")
+                        break
                     
-                    # 更新統計
-                    if latest_score > self.stats["max_score"]:
-                        self.stats["max_score"] = latest_score
-                    if latest_score < self.stats["min_score"]:
-                        self.stats["min_score"] = latest_score
+                    # 讀取音訊資料
+                    audio_data = self.stream.read(self.chunk_size, exception_on_overflow=False)
                     
-                    # 計算平均分數
-                    if self.score_history:
-                        self.stats["avg_score"] = sum(self.score_history) / len(self.score_history)
+                    if not audio_data:
+                        time.sleep(0.01)
+                        continue
                     
-                    # 將資料放入佇列供視覺化使用
-                    self.audio_queue.put({
-                        "audio": audio_np,
-                        "score": latest_score,
-                        "timestamp": current_time
-                    })
-                
-            except Exception as e:
-                self.logger.error(f"音訊處理錯誤: {e}")
-                time.sleep(0.01)  # 短暫休眠避免 CPU 100%
+                    # 轉換為 numpy array
+                    audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+                    
+                    # 檢查 wakeword_operator 是否有效
+                    if not self.wakeword_operator:
+                        continue
+                    
+                    # 在線程中運行 async 函數
+                    try:
+                        result = loop.run_until_complete(
+                            self.wakeword_operator.process(
+                                audio_data,
+                                sample_rate=self.sample_rate,
+                                session_id="test_session"
+                            )
+                        )
+                    except Exception as e:
+                        self.logger.error(f"喚醒詞處理錯誤: {e}")
+                        continue
+                    
+                    # 獲取最新分數
+                    try:
+                        latest_score = self.wakeword_operator.get_latest_score()
+                        if latest_score is not None:
+                            current_time = time.time()
+                            self.score_history.append(latest_score)
+                            self.timestamps.append(current_time)
+                            
+                            # 更新統計
+                            if latest_score > self.stats["max_score"]:
+                                self.stats["max_score"] = latest_score
+                            if latest_score < self.stats["min_score"]:
+                                self.stats["min_score"] = latest_score
+                            
+                            # 計算平均分數
+                            if self.score_history:
+                                self.stats["avg_score"] = sum(self.score_history) / len(self.score_history)
+                            
+                            # 將資料放入視覺化佇列
+                            if hasattr(self, 'visualization') and self.visualization:
+                                self.visualization.add_data({
+                                    "audio": audio_np,
+                                    "score": latest_score,
+                                    "timestamp": current_time,
+                                    "wake_word": self.wake_word,
+                                    "threshold": self.score_threshold
+                                })
+                    except Exception as e:
+                        self.logger.error(f"分數處理錯誤: {e}")
+                    
+                except Exception as e:
+                    self.logger.error(f"音訊處理錯誤: {e}")
+                    time.sleep(0.01)  # 短暫休眠避免 CPU 100%
         
-        # 關閉循環
-        loop.close()
+        except Exception as e:
+            self.logger.error(f"音訊處理迴圈發生嚴重錯誤: {e}")
+        finally:
+            # 關閉循環
+            try:
+                loop.close()
+            except Exception as e:
+                self.logger.error(f"關閉事件循環時發生錯誤: {e}")
+            
+            self.logger.info("音訊處理迴圈已結束")
     
     async def _on_detection(self, detection: Dict[str, Any]):
         """喚醒詞偵測回呼"""
@@ -227,7 +288,7 @@ class WakeWordIntegrationTester:
             f"分數: {detection.get('score', 0):.3f}"
         )
     
-    def _on_system_wake(self, wake_data: Dict[str, Any]):
+    async def _on_system_wake(self, wake_data: Dict[str, Any]):
         """系統喚醒事件回呼"""
         self.detection_events.append({
             "timestamp": datetime.now(),
@@ -240,7 +301,7 @@ class WakeWordIntegrationTester:
             f"來源: {wake_data.get('source')}"
         )
     
-    def _on_state_change(self, state_data: Dict[str, Any]):
+    async def _on_state_change(self, state_data: Dict[str, Any]):
         """狀態變更事件回呼"""
         self.logger.info(
             f"🔄 系統狀態變更: "
@@ -252,91 +313,113 @@ class WakeWordIntegrationTester:
         self.logger.info("啟動視覺化監控...")
         
         # 設定圖表
-        plt.style.use("dark_background")
-        self.fig, (self.ax1, self.ax2, self.ax3) = plt.subplots(3, 1, figsize=(12, 10))
-        
-        # 分數圖
-        self.ax1.set_xlabel("時間 (秒)")
-        self.ax1.set_ylabel("偵測分數")
-        self.ax1.set_title("喚醒詞偵測分數")
-        self.ax1.grid(True, alpha=0.3)
-        self.score_line, = self.ax1.plot([], [], "g-", linewidth=2, label="分數")
-        self.ax1.axhline(y=0.5, color="r", linestyle="--", label="閾值")
-        self.ax1.legend()
-        self.ax1.set_ylim(0, 1.0)
-        
-        # 音訊波形圖
-        self.ax2.set_xlabel("樣本")
-        self.ax2.set_ylabel("振幅")
-        self.ax2.set_title("音訊波形 (最近 1 秒)")
-        self.ax2.grid(True, alpha=0.3)
-        self.audio_line, = self.ax2.plot([], [], "b-", alpha=0.7)
-        self.ax2.set_ylim(-1000, 1000)
-        
-        # 統計圖表
-        self.ax3.set_title("偵測統計")
-        self.ax3.axis('off')
-        
-        plt.tight_layout()
+        self.visualization.setup_plot()
+        self.visualization.wake_word = self.wake_word  # 設定喚醒詞名稱
         
         # 啟動動畫
-        ani = FuncAnimation(self.fig, self._update_plot, interval=100, blit=False)
-        
-        try:
-            plt.show()
-        except KeyboardInterrupt:
-            self.logger.info("視覺化被用戶中斷")
-        finally:
-            self.is_running = False
+        self.visualization.start_animation(self._update_plot, interval=100)
     
     def _update_plot(self, frame):
         """更新圖表"""
-        current_time = time.time()
-        
-        # 處理音訊佇列
-        latest_audio = None
-        while not self.audio_queue.empty():
-            try:
-                latest_audio = self.audio_queue.get_nowait()
-            except queue.Empty:
-                break
-        
-        # 更新分數圖
-        if self.timestamps and self.score_history:
-            # 只顯示最近 30 秒的資料
-            cutoff_time = current_time - 30
-            recent_indices = [i for i, t in enumerate(self.timestamps) if t >= cutoff_time]
+        try:
+            # 獲取最新數據
+            latest_data = self.visualization.get_latest_data()
             
-            if recent_indices:
-                recent_times = [self.timestamps[i] - self.timestamps[recent_indices[0]] for i in recent_indices]
-                recent_scores = [self.score_history[i] for i in recent_indices]
+            if latest_data:
+                # 更新音訊波形
+                audio_data = latest_data['audio']
+                if hasattr(self.visualization, 'update_audio_plot'):
+                    self.visualization.update_audio_plot(audio_data)
                 
-                self.score_line.set_data(recent_times, recent_scores)
-                self.ax1.set_xlim(0, max(30, recent_times[-1]) if recent_times else 30)
+                # 更新分數歷史
+                current_score = latest_data['score']
+                current_time = latest_data['timestamp']
+                threshold = latest_data.get('threshold', 0.5)
+                
+                # 如果還沒有歷史記錄，初始化起始時間
+                if not hasattr(self, '_start_time'):
+                    self._start_time = current_time
+                
+                # 計算相對時間
+                relative_time = current_time - self._start_time
+                
+                # 添加到歷史記錄
+                self.score_history.append(current_score)
+                self.timestamps.append(current_time)
+                
+                # 保持歷史記錄在合理長度
+                if len(self.score_history) > 300:
+                    self.score_history.pop(0)
+                    self.timestamps.pop(0)
+                
+                # 更新喚醒詞圖表
+                self.visualization.detection_history.append(current_score)
+                self.visualization.time_history.append(current_time)
+                
+                # 保持視覺化歷史記錄長度
+                if len(self.visualization.detection_history) > self.visualization.max_history_points:
+                    self.visualization.detection_history.pop(0)
+                    self.visualization.time_history.pop(0)
+                
+                # 更新喚醒詞線條
+                if (self.visualization.time_history and 
+                    hasattr(self.visualization, 'lines') and 
+                    'wakeword' in self.visualization.lines):
+                    
+                    start_time = self.visualization.time_history[0]
+                    relative_times = [t - start_time for t in self.visualization.time_history]
+                    self.visualization.lines['wakeword'].set_data(relative_times, self.visualization.detection_history)
+                    
+                    # 調整 x 軸範圍
+                    if relative_times and hasattr(self.visualization, 'axes') and len(self.visualization.axes) > 1:
+                        self.visualization.axes[1].set_xlim(max(0, relative_times[-1] - 10), relative_times[-1] + 0.5)
+                    
+                    # 更新閾值線
+                    if 'wake_threshold' in self.visualization.lines:
+                        self.visualization.lines['wake_threshold'].set_ydata([threshold, threshold])
+                
+                # 更新統計資訊
+                runtime = (datetime.now() - self.stats["start_time"]).total_seconds() if self.stats["start_time"] else 0
+                total_detections = len(self.detection_events)
+                avg_score = sum(self.score_history) / len(self.score_history) if self.score_history else 0
+                max_score = max(self.score_history) if self.score_history else 0
+                
+                # 計算最近的檢測
+                recent_detection = "無"
+                if self.detection_events:
+                    last_detection = self.detection_events[-1]
+                    last_detection_timestamp = last_detection["timestamp"]
+                    # 轉換 datetime 為時間戳
+                    if isinstance(last_detection_timestamp, datetime):
+                        last_detection_time = last_detection_timestamp.timestamp()
+                    else:
+                        last_detection_time = last_detection_timestamp
+                    time_diff = current_time - last_detection_time
+                    recent_detection = f"{time_diff:.1f} 秒前"
+                
+                # 計算當前音量資訊
+                current_rms = 0
+                current_max = 0
+                if len(audio_data) > 0:
+                    current_rms = np.sqrt(np.mean(audio_data.astype(np.float64) ** 2))
+                    current_max = np.max(np.abs(audio_data))
+                
+                # 使用簡潔的兩行格式
+                stats_text = (
+                    f"[{self.wake_word}] 運行: {self.visualization.format_time(runtime)} | "
+                    f"檢測: {total_detections} 次 | 平均: {avg_score:.3f} | 最高: {max_score:.3f}\n"
+                    f"當前: {current_score:.3f} | 閾值: {threshold:.3f} | "
+                    f"最近: {recent_detection} | 音量: {current_rms:.0f}/{current_max}"
+                )
+                
+                if (hasattr(self.visualization, 'texts') and 
+                    'stats' in self.visualization.texts):
+                    self.visualization.texts['stats'].set_text(stats_text)
         
-        # 更新音訊波形圖
-        if latest_audio:
-            audio_data = latest_audio["audio"]
-            self.audio_line.set_data(range(len(audio_data)), audio_data)
-            self.ax2.set_xlim(0, len(audio_data))
+        except Exception as e:
+            self.logger.error(f"更新圖表時發生錯誤: {e}")
         
-        # 更新統計資訊
-        runtime = (datetime.now() - self.stats["start_time"]).total_seconds() if self.stats["start_time"] else 0
-        
-        stats_text = f"""
-        運行時間: {runtime:.1f} 秒
-        總偵測次數: {self.stats['total_detections']}
-        平均分數: {self.stats['avg_score']:.3f}
-        最高分數: {self.stats['max_score']:.3f}
-        最低分數: {self.stats['min_score']:.3f}
-        偵測事件: {len(self.detection_events)}
-        """
-        
-        self.ax3.clear()
-        self.ax3.text(0.1, 0.5, stats_text, fontsize=12, verticalalignment='center')
-        self.ax3.axis('off')
-        
-        return self.score_line, self.audio_line
+        return []
     
     def print_test_results(self):
         """打印測試結果"""

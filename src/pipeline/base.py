@@ -5,7 +5,7 @@ ASR Hub Pipeline 基礎類別
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, AsyncGenerator
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.exceptions import PipelineError
 from src.pipeline.operators.base import OperatorBase
 
@@ -24,7 +24,7 @@ class PipelineBase(ABC):
             config: Pipeline 配置
         """
         self.config = config
-        self.logger = get_logger(f"pipeline.{self.__class__.__name__.lower()}")
+        self.logger = logger
         self.operators: List[OperatorBase] = []
         self._running = False
         

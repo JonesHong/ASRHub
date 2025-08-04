@@ -6,7 +6,7 @@ ASR Hub HTTP SSE 處理器
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.models.audio import AudioChunk, AudioFormat
 from src.models.transcript import TranscriptSegment, TranscriptResult
 from src.core.exceptions import APIError, ValidationError
@@ -16,7 +16,7 @@ class SSEEventHandler:
     """SSE 事件處理器"""
     
     def __init__(self):
-        self.logger = get_logger("sse.handler")
+        self.logger = logger
         
     def format_control_event(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -181,7 +181,7 @@ class AudioRequestHandler:
     """音訊請求處理器"""
     
     def __init__(self):
-        self.logger = get_logger("sse.audio_handler")
+        self.logger = logger
         
     def validate_audio_upload(self, 
                             content_type: str,
@@ -298,7 +298,7 @@ class SessionRequestHandler:
     """Session 請求處理器"""
     
     def __init__(self):
-        self.logger = get_logger("sse.session_handler")
+        self.logger = logger
     
     def validate_session_create(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -412,7 +412,7 @@ class TranscriptResponseHandler:
     """轉譯回應處理器"""
     
     def __init__(self):
-        self.logger = get_logger("sse.transcript_handler")
+        self.logger = logger
         
     def format_streaming_response(self,
                                 segments: List[TranscriptSegment],
@@ -532,7 +532,7 @@ class WakeWordRequestHandler:
     """喚醒詞請求處理器"""
     
     def __init__(self):
-        self.logger = get_logger("sse.wakeword_handler")
+        self.logger = logger
     
     def validate_wake_command(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """

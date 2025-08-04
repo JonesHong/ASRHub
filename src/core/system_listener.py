@@ -11,7 +11,7 @@ import numpy as np
 from src.pipeline.operators.wakeword import OpenWakeWordOperator
 from src.stream.audio_stream import AudioStreamProcessor
 from src.core.fsm import StateMachine, State, Event
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.config.manager import ConfigManager
 
 
@@ -29,7 +29,7 @@ class SystemListener:
     
     def __init__(self):
         """初始化系統監聽器"""
-        self.logger = get_logger("system_listener")
+        self.logger = logger
         self.config_manager = ConfigManager()
         
         # 狀態管理
@@ -180,10 +180,10 @@ class SystemListener:
         """音訊處理主迴圈"""
         try:
             while self.is_running:
-                # 只在 IDLE 或 LISTENING 狀態下處理音訊
+                # 只在 IDLE 狀態且啟用時處理音訊
                 if self.fsm.is_idle() and self.is_enabled:
                     # 讀取音訊資料
-                    audio_data = await self.audio_stream.read()
+                    audio_data = await self.audio_stream.read(1280)
                     
                     if audio_data:
                         # 處理音訊（偵測喚醒詞）
@@ -192,8 +192,11 @@ class SystemListener:
                             sample_rate=16000,
                             session_id="system"
                         )
+                    else:
+                        # 沒有音訊資料時短暫休眠
+                        await asyncio.sleep(0.01)
                 else:
-                    # 非監聽狀態，短暫休眠以節省資源
+                    # 非監聽狀態，休眠以節省資源
                     await asyncio.sleep(0.1)
                 
         except asyncio.CancelledError:

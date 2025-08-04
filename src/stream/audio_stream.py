@@ -7,7 +7,7 @@ import asyncio
 from typing import Optional, Callable, Dict, Any
 import numpy as np
 from collections import deque
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 
 
 class AudioStreamProcessor:
@@ -35,7 +35,7 @@ class AudioStreamProcessor:
             channels: 聲道數
             dtype: 音訊資料類型
         """
-        self.logger = get_logger("stream.audioprocessor")
+        self.logger = logger
         
         # 音訊參數
         self.buffer_size = buffer_size
@@ -240,6 +240,23 @@ class AudioStreamProcessor:
             "silence_threshold": self.silence_threshold,
             "silence_duration": self.silence_duration
         }
+    
+    async def read(self, chunk_size: Optional[int] = None) -> Optional[bytes]:
+        """
+        讀取音訊資料
+        
+        Args:
+            chunk_size: 要讀取的資料大小，如果不指定則使用預設值
+            
+        Returns:
+            音訊資料，如果沒有資料則返回 None
+        """
+        if not self.is_active:
+            return None
+        
+        # 這是一個模擬實現，實際應用中應該從音訊設備讀取
+        # 這裡返回空資料，測試時會需要實際的音訊輸入
+        return b'\x00' * (chunk_size or 1280)  # 返回靜音資料用於測試
     
     def update_config(self, config: Dict[str, Any]):
         """更新配置"""

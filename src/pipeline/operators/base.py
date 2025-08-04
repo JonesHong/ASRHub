@@ -5,32 +5,31 @@ ASR Hub Operator 基礎類別
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.exceptions import PipelineError
+from src.models.audio_format import AudioMetadata
 
 
 class OperatorBase(ABC):
     """
     Operator 基礎抽象類別
     所有音訊處理運算子都需要繼承此類別
+    
+    子類別如需要配置，請直接 import ConfigManager 並從中取得所需配置
     """
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self):
         """
         初始化 Operator
         
-        Args:
-            config: Operator 配置
+        子類別應該在自己的 __init__ 中：
+        1. 呼叫 super().__init__()
+        2. 從 ConfigManager 取得自己的配置
+        3. 設定自己需要的屬性
         """
-        self.config = config or {}
-        self.logger = get_logger(f"operator.{self.__class__.__name__.lower()}")
-        self.enabled = self.config.get("enabled", True)
+        self.logger = logger
+        self.enabled = True
         self._initialized = False
-        
-        # 音訊參數
-        self.sample_rate = self.config.get("sample_rate", 16000)
-        self.channels = self.config.get("channels", 1)
-        self.dtype = self.config.get("dtype", "int16")
     
     async def start(self):
         """
@@ -95,18 +94,12 @@ class OperatorBase(ABC):
         """
         更新 Operator 配置
         
+        子類別應該覆寫此方法來處理自己的配置更新
+        
         Args:
             config: 新的配置
         """
-        self.config.update(config)
-        
-        # 更新常用參數
-        self.enabled = self.config.get("enabled", self.enabled)
-        self.sample_rate = self.config.get("sample_rate", self.sample_rate)
-        self.channels = self.config.get("channels", self.channels)
-        self.dtype = self.config.get("dtype", self.dtype)
-        
-        self.logger.debug(f"{self.__class__.__name__} 配置已更新")
+        self.logger.debug(f"{self.__class__.__name__} 收到配置更新請求")
     
     def is_enabled(self) -> bool:
         """檢查 Operator 是否啟用"""
@@ -132,9 +125,26 @@ class OperatorBase(ABC):
         return {
             "type": self.__class__.__name__,
             "enabled": self.enabled,
-            "initialized": self._initialized,
-            "config": self.config
+            "initialized": self._initialized
         }
+    
+    def get_required_audio_format(self) -> Optional[AudioMetadata]:
+        """
+        獲取此 Operator 需要的輸入音頻格式
+        
+        Returns:
+            需要的音頻格式，如果返回 None 表示可接受任何格式
+        """
+        return None
+    
+    def get_output_audio_format(self) -> Optional[AudioMetadata]:
+        """
+        獲取此 Operator 輸出的音頻格式
+        
+        Returns:
+            輸出的音頻格式，如果返回 None 表示輸出格式與輸入相同
+        """
+        return None
     
     async def flush(self):
         """
@@ -193,9 +203,15 @@ class BufferingOperator(OperatorBase):
     提供音訊資料緩衝功能的基礎實作
     """
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        super().__init__(config)
-        self.buffer_size = self.config.get("buffer_size", 8192)
+    def __init__(self, buffer_size: int = 8192):
+        """
+        初始化緩衝 Operator
+        
+        Args:
+            buffer_size: 緩衝區大小，預設 8192 bytes
+        """
+        super().__init__()
+        self.buffer_size = buffer_size
         self.buffer = bytearray()
     
     async def _initialize(self):

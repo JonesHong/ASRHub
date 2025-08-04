@@ -6,7 +6,7 @@ ASR Hub Session 管理器
 import uuid
 from typing import Dict, Optional, List
 from datetime import datetime, timedelta
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.core.exceptions import SessionError
 
 
@@ -128,7 +128,7 @@ class SessionManager:
             max_sessions: 最大 session 數量
             session_timeout: Session 超時時間（秒）
         """
-        self.logger = get_logger("session_manager")
+        self.logger = logger
         self.sessions: Dict[str, Session] = {}
         self.max_sessions = max_sessions
         self.session_timeout = session_timeout

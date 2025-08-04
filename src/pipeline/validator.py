@@ -4,9 +4,10 @@ ASR Hub Pipeline Validator
 """
 
 from typing import Dict, Any, List, Optional
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.pipeline.base import PipelineBase
 from src.pipeline.operators.base import OperatorBase
+from src.models.audio_format import AudioMetadata, AudioFormat
 
 
 class PipelineValidator:
@@ -17,7 +18,7 @@ class PipelineValidator:
     
     def __init__(self):
         """初始化 Pipeline Validator"""
-        self.logger = get_logger("pipeline.validator")
+        self.logger = logger
         
         # 驗證規則
         self.validation_rules = {
@@ -142,11 +143,17 @@ class PipelineValidator:
             return
         
         # 特定 Operator 的驗證
-        if operator_name == "SampleRateOperator":
-            if hasattr(operator, 'target_rate'):
-                if operator.target_rate not in [8000, 16000, 22050, 44100, 48000]:
+        if operator_name == "AudioFormatOperator":
+            # 檢查音頻格式設定
+            if hasattr(operator, 'target_metadata'):
+                target_metadata = operator.target_metadata
+                if target_metadata.sample_rate not in [8000, 16000, 22050, 44100, 48000]:
                     result["warnings"].append(
-                        f"SampleRateOperator 使用非標準目標取樣率：{operator.target_rate} Hz"
+                        f"AudioFormatOperator 使用非標準取樣率：{target_metadata.sample_rate} Hz"
+                    )
+                if target_metadata.channels > 2:
+                    result["warnings"].append(
+                        f"AudioFormatOperator 目標聲道數過多：{target_metadata.channels}"
                     )
         
         # 檢查緩衝區大小（如果適用）
@@ -170,14 +177,19 @@ class PipelineValidator:
         operator_types = [op.__class__.__name__ for op in pipeline.operators]
         
         # 檢查建議的順序
-        # 例如：SampleRateOperator 應該在 VAD 之前
-        if "VADOperator" in operator_types and "SampleRateOperator" in operator_types:
-            vad_index = operator_types.index("VADOperator")
-            sr_index = operator_types.index("SampleRateOperator")
-            if sr_index > vad_index:
-                result["warnings"].append(
-                    "建議將 SampleRateOperator 放在 VADOperator 之前以獲得更好的效能"
-                )
+        # 音頻格式轉換應該在 VAD/WakeWord 之前
+        if "AudioFormatOperator" in operator_types:
+            format_index = operator_types.index("AudioFormatOperator")
+            processing_operators = ["VADOperator", "SileroVADOperator", "OpenWakeWordOperator"]
+            
+            for proc_op in processing_operators:
+                if proc_op in operator_types:
+                    proc_index = operator_types.index(proc_op)
+                    if format_index > proc_index:
+                        result["warnings"].append(
+                            f"建議將 AudioFormatOperator 放在 {proc_op} 之前，"
+                            f"確保音頻格式正確"
+                        )
         
         # 檢查降噪應該在其他處理之前
         if "DenoiseOperator" in operator_types:
@@ -299,12 +311,30 @@ class PipelineValidator:
                     "建議添加降噪處理以提高辨識準確率"
                 )
             
-            # 取樣率轉換建議
-            if "SampleRateOperator" not in operator_types:
-                if hasattr(pipeline, 'config') and pipeline.config.get("sample_rate") != 16000:
-                    suggestions.append(
-                        "建議添加取樣率轉換到 16kHz 以獲得最佳 ASR 效果"
-                    )
+            # 音頻格式轉換建議
+            if "AudioFormatOperator" not in operator_types:
+                if hasattr(pipeline, 'config'):
+                    sample_rate = pipeline.config.get("sample_rate", 0)
+                    channels = pipeline.config.get("channels", 1)
+                    
+                    # 檢查是否需要格式轉換
+                    needs_conversion = False
+                    conversion_reasons = []
+                    
+                    if sample_rate != 16000:
+                        needs_conversion = True
+                        conversion_reasons.append(f"採樣率 {sample_rate}Hz → 16000Hz")
+                    
+                    if channels > 1:
+                        needs_conversion = True
+                        conversion_reasons.append(f"{channels} 聲道 → 單聲道")
+                    
+                    if needs_conversion:
+                        suggestions.append(
+                            f"建議添加 AudioFormatOperator 進行格式轉換：" + 
+                            "、".join(conversion_reasons) + 
+                            " 以獲得最佳處理效果"
+                        )
         
         # 緩衝區大小建議
         if hasattr(pipeline, 'config'):

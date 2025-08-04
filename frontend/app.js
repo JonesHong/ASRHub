@@ -10,6 +10,8 @@ class ASRClient {
         this.audioBlob = null;
         this.audioFile = null; // 用於存儲上傳的檔案
         this.isFileUpload = false; // 標記是否為檔案上傳模式
+        this.audioContext = null; // 用於控制音頻採樣率
+        this.mediaStreamSource = null;
         
         // WebSocket config
         this.wsUrl = 'ws://localhost:8765';
@@ -60,7 +62,15 @@ class ASRClient {
     
     async startRecording() {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // 指定音頻參數，確保採樣率正確
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    sampleRate: 16000,  // 明確指定 16kHz 採樣率
+                    channelCount: 1     // 單聲道
+                }
+            });
             
             // 清除檔案相關狀態
             this.audioFile = null;
@@ -70,17 +80,52 @@ class ASRClient {
             this.elements.audioFileInput.value = '';
             
             this.audioChunks = [];
-            this.mediaRecorder = new MediaRecorder(stream);
+            
+            // 創建 AudioContext 來確保正確的採樣率
+            try {
+                // 創建 16kHz 的 AudioContext
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                this.audioContext = new AudioContextClass({ sampleRate: 16000 });
+                
+                // 如果瀏覽器不支援指定採樣率，則使用預設值並記錄
+                if (this.audioContext.sampleRate !== 16000) {
+                    this.log(`注意：瀏覽器使用 ${this.audioContext.sampleRate} Hz 採樣率，將在後端轉換`, 'warning');
+                }
+                
+                // 創建音頻源
+                this.mediaStreamSource = this.audioContext.createMediaStreamSource(stream);
+                
+            } catch (e) {
+                this.log('無法創建 AudioContext，使用預設錄音設定', 'warning');
+            }
+            
+            // 檢查瀏覽器支援的音頻格式
+            const mimeType = this.getSupportedMimeType();
+            const options = mimeType ? { mimeType } : {};
+            
+            // 如果支援，加入音頻比特率設定
+            if (mimeType && mimeType.includes('webm')) {
+                options.audioBitsPerSecond = 128000; // 128 kbps
+            }
+            
+            this.mediaRecorder = new MediaRecorder(stream, options);
             
             this.mediaRecorder.addEventListener('dataavailable', (event) => {
                 this.audioChunks.push(event.data);
             });
             
             this.mediaRecorder.addEventListener('stop', () => {
-                this.audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+                this.audioBlob = new Blob(this.audioChunks, { type: mimeType || 'audio/webm' });
                 this.isFileUpload = false; // 標記為錄音模式
                 this.audioFile = null; // 清除檔案
                 this.displayAudioInfo();
+                
+                // 清理 AudioContext
+                if (this.audioContext) {
+                    this.audioContext.close();
+                    this.audioContext = null;
+                    this.mediaStreamSource = null;
+                }
             });
             
             this.mediaRecorder.start();
@@ -110,7 +155,12 @@ class ASRClient {
             this.elements.stopRecordBtn.classList.remove('recording');
             this.elements.startRecognitionBtn.disabled = false;
             
-            this.log('錄音結束', 'success');
+            // 記錄實際採樣率資訊
+            if (this.audioContext) {
+                this.log(`錄音結束 (採樣率: ${this.audioContext.sampleRate} Hz)`, 'success');
+            } else {
+                this.log('錄音結束', 'success');
+            }
         }
     }
     
@@ -568,14 +618,31 @@ class ASRClient {
             else if (this.audioFile.name.endsWith('.ogg')) format = 'ogg';
         }
         
+        // 根據錄音或檔案來源設定正確的採樣率
+        let sampleRate = '16000';  // 預設值
+        let actualFormat = format;
+        
+        // 如果是錄音，檢查實際的採樣率
+        if (!this.isFileUpload) {
+            if (this.audioContext && this.audioContext.sampleRate) {
+                // 使用 AudioContext 的實際採樣率
+                const actualRate = this.audioContext.sampleRate;
+                sampleRate = String(actualRate);
+                this.log(`錄音採樣率: ${actualRate} Hz`, 'info');
+            } else {
+                // 預設 16kHz
+                sampleRate = '16000';
+            }
+        }
+        
         const uploadResponse = await fetch(`${this.httpSSEUrl}/audio/${this.sessionId}`, {
             method: 'POST',
             body: arrayBuffer,
             headers: {
                 'Content-Type': contentType,
-                'X-Audio-Sample-Rate': '16000',
+                'X-Audio-Sample-Rate': sampleRate,
                 'X-Audio-Channels': '1',
-                'X-Audio-Format': format
+                'X-Audio-Format': actualFormat
             }
         });
         
@@ -735,6 +802,27 @@ class ASRClient {
     
     sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    
+    getSupportedMimeType() {
+        // 檢查瀏覽器支援的音頻格式，優先使用 PCM 格式
+        const types = [
+            'audio/wav',
+            'audio/webm;codecs=opus',
+            'audio/webm',
+            'audio/ogg;codecs=opus',
+            'audio/mp4'
+        ];
+        
+        for (const type of types) {
+            if (MediaRecorder.isTypeSupported(type)) {
+                this.log(`使用音頻格式: ${type}`, 'info');
+                return type;
+            }
+        }
+        
+        this.log('使用預設音頻格式', 'warning');
+        return null;
     }
 }
 

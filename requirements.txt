@@ -1,44 +1,51 @@
 # ASR Hub 依賴套件
 
 # 核心依賴
-yaml2py==0.2.0
-pretty-loguru==1.1.3
-pydantic>=2.11.7
-python-dotenv>=1.1.1
+yaml2py
+pretty-loguru
+pydantic
+python-dotenv
 
 # 非同步框架
-fastapi>=0.111.0
-uvicorn[standard]>=0.35.0
-aiofiles>=24.1.0
-httpx>=0.28.1
-sse-starlette>=2.4.1
-python-multipart>=0.0.20
+fastapi
+uvicorn[standard]
+aiofiles
+httpx
+sse-starlette
+python-multipart
 
 # WebSocket 和 Socket.io
-websockets==15.0.1
-python-socketio==5.13.0
-aiohttp==3.12.14
+websockets
+python-socketio
+aiohttp
 
 # 音訊處理
-numpy==2.2.6  # librosa 安裝時降級為此版本
-scipy>=1.16.0
-soundfile>=0.13.1
-librosa==0.11.0  # 成功安裝，使用 numba 0.61.2 (支援 Python 3.12)
-pydub==0.25.1  # 音訊格式轉換（WebM to PCM）
+numpy
+scipy
+soundfile
+librosa
+pydub
+pyaudio
+
+# 視覺化和系統監控
+matplotlib
+psutil
+
+# VAD 和機器學習
+onnxruntime
 
 # ASR Providers
 # Whisper
-openai-whisper==20250625  # 成功安裝
-faster-whisper>=1.1.1
-
+openai-whisper
+faster-whisper
 
 # 測試工具（選用）
-pytest>=8.4.1
-pytest-asyncio>=1.1.0
-pytest-cov>=6.2.1
+pytest
+pytest-asyncio
+pytest-cov
 
 # 開發工具（選用）
-black>=25.1.0
-flake8>=7.3.0
-mypy>=1.17.0
-pre-commit>=4.2.0
+black
+flake8
+mypy
+pre-commit

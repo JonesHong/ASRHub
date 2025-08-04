@@ -7,7 +7,8 @@ import sys
 import asyncio
 from typing import Optional, Dict, Any
 from src.config.manager import ConfigManager
-from src.utils.logger import get_logger, setup_global_exception_handler
+from src.utils.logger import logger
+from src.utils.logger import setup_global_exception_handler
 from src.core.session_manager import SessionManager
 from src.core.fsm import StateMachine, State
 from src.pipeline.manager import PipelineManager
@@ -35,7 +36,7 @@ class ASRHub:
         self.config = ConfigManager(config_path)
         
         # 建立 logger
-        self.logger = get_logger("core")
+        self.logger = logger
         
         # 設置全域異常處理
         setup_global_exception_handler()

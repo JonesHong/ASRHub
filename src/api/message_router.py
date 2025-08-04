@@ -10,7 +10,7 @@ from datetime import datetime
 from enum import Enum
 import json
 
-from src.utils.logger import get_logger
+from src.utils.logger import logger
 from src.api.connection_manager import ConnectionType
 from src.core.exceptions import RoutingError
 
@@ -79,7 +79,7 @@ class MessageRouter:
     
     def __init__(self):
         """初始化訊息路由器"""
-        self.logger = get_logger("api.message_router")
+        self.logger = logger
         
         # 訊息轉換器註冊表
         self.converters: Dict[tuple, Callable] = {}
