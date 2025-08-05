@@ -27,6 +27,7 @@ from typing import List, Tuple, Optional, Dict, Any
 import queue
 import time
 import platform
+from scipy import signal
 
 # 設定中文字體
 if platform.system() == "Windows":
@@ -76,6 +77,55 @@ class BaseVisualization:
         'threshold': '#ffa500',  # 橙色 - 閾值線
         'grid': '#333333',       # 深灰色 - 網格
     }
+    
+    # 聲譜圖顏色配置（從 visualization_colormap.py 整合）
+    SPECTROGRAM_COLORMAPS = {
+        'viridis': {
+            'cmap': 'viridis',
+            'vmin': -60,
+            'vmax': -10,
+            'description': '綠到黃，對比度高，色盲友好'
+        },
+        'plasma': {
+            'cmap': 'plasma',
+            'vmin': -60,
+            'vmax': -10,
+            'description': '紫到黃，視覺效果好'
+        },
+        'inferno': {
+            'cmap': 'inferno',
+            'vmin': -60,
+            'vmax': -10,
+            'description': '黑到黃，類似火焰'
+        },
+        'magma': {
+            'cmap': 'magma',
+            'vmin': -60,
+            'vmax': -10,
+            'description': '黑到白，經典選擇'
+        },
+        'jet': {
+            'cmap': 'jet',
+            'vmin': -70,
+            'vmax': 0,
+            'description': '藍到紅，傳統聲譜圖配色'
+        },
+        'cool': {
+            'cmap': 'cool',
+            'vmin': -60,
+            'vmax': -10,
+            'description': '藍到粉紅，柔和'
+        },
+        'turbo': {
+            'cmap': 'turbo',
+            'vmin': -60,
+            'vmax': -10,
+            'description': '改進版 jet，更好的感知均勻性'
+        }
+    }
+    
+    # 預設聲譜圖配色
+    DEFAULT_COLORMAP = 'turbo'  # 目前使用的配色
     
     def __init__(self, title: str):
         self.title = title
@@ -365,36 +415,114 @@ class RecordingVisualization(BaseVisualization):
     
     def __init__(self):
         super().__init__("錄音狀態監控")
-        self.level_history = []
-        self.time_history = []
-        self.max_history_points = 200
+        # 聲譜圖用
+        self.spectrogram_data = []
+        self.max_spec_frames = 100  # 最多顯示100幀（約3秒）
+        self.sample_rate = 16000
+        self.spec_image = None
         
     def setup_plot(self) -> Tuple[plt.Figure, List[plt.Axes]]:
-        """設定錄音特定的圖表"""
-        fig, axes = super().setup_plot(3)
+        """設定錄音特定的圖表（兩個子圖版本）"""
+        # 只創建兩個子圖
+        fig, axes = super().setup_plot(2)
         
-        # 第二個子圖 - 音量級別
-        ax_level = axes[1]
-        ax_level.set_title("音量級別監控", fontsize=14)
-        ax_level.set_xlabel("時間 (秒)", fontsize=12)
-        ax_level.set_ylabel("音量 (dB)", fontsize=12)
-        ax_level.set_ylim(-60, 0)
-        ax_level.grid(True, alpha=0.3, color=self.COLORS['grid'])
+        # 調整圖形大小
+        fig.set_size_inches(12, 8)
         
-        self.lines['level'], = ax_level.plot([], [], 
-                                            color=self.COLORS['recording'], 
-                                            linewidth=2, 
-                                            label="音量級別")
-        ax_level.legend(loc='upper right')
+        # 第二個子圖 - 聲譜圖
+        ax_spec = axes[1]
+        ax_spec.set_title("即時聲譜圖 (Spectrogram)", fontsize=14)
+        ax_spec.set_xlabel("時間 (秒)", fontsize=12)
+        ax_spec.set_ylabel("頻率 (Hz)", fontsize=12)
         
-        # 第三個子圖 - 錄音狀態
-        ax_stats = axes[2]
-        ax_stats.set_title("錄音狀態", fontsize=14)
-        ax_stats.axis('off')
-        self.texts['stats'] = self.add_status_text(2, 0.05, 0.5)
+        # 初始化空的聲譜圖
+        dummy_data = np.zeros((257, 10))  # 257 是 FFT bins, 10 是時間幀
         
-        plt.tight_layout()
+        # 使用更適合語音的配色方案
+        # 可選: 'viridis', 'plasma', 'inferno', 'magma', 'turbo', 'jet'
+        self.spec_image = ax_spec.imshow(
+            dummy_data,
+            aspect='auto',
+            origin='lower',
+            cmap='turbo',  # turbo 配色提供更好的對比度
+            extent=[0, 3, 0, 8000],  # 時間0-3秒，頻率0-8000Hz
+            interpolation='bilinear'
+        )
+        
+        # 添加顏色條
+        cbar = plt.colorbar(self.spec_image, ax=ax_spec)
+        cbar.set_label('功率 (dB)', fontsize=10)
+        
+        ax_spec.set_ylim(0, 8000)  # 只顯示到8kHz
+        
+        # 在主標題下方添加統計資訊文字
+        self.texts['stats'] = fig.text(0.5, 0.94, "[等待錄音]", 
+                                       ha='center', 
+                                       fontsize=11, 
+                                       color='white',
+                                       bbox=dict(boxstyle="round,pad=0.5", 
+                                                facecolor='black', 
+                                                alpha=0.7))
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.93])  # 留出頂部空間給統計文字
         return fig, axes
+    
+    def update_spectrogram(self, audio_data: np.ndarray):
+        """更新聲譜圖"""
+        if audio_data is None or len(audio_data) < 512:
+            return
+            
+        try:
+            # 計算短時傅立葉變換 (STFT)
+            # 使用較小的窗口以獲得更好的時間解析度
+            nperseg = 512  # 窗口大小
+            noverlap = 384  # 重疊
+            
+            frequencies, times, Sxx = signal.spectrogram(
+                audio_data, 
+                fs=self.sample_rate,
+                window='hann',
+                nperseg=nperseg,
+                noverlap=noverlap,
+                mode='magnitude'
+            )
+            
+            # 轉換為 dB
+            Sxx_db = 10 * np.log10(Sxx + 1e-10)
+            
+            # 限制頻率範圍到 8kHz
+            freq_mask = frequencies <= 8000
+            frequencies = frequencies[freq_mask]
+            Sxx_db = Sxx_db[freq_mask, :]
+            
+            # 添加到歷史數據
+            self.spectrogram_data.append(Sxx_db)
+            
+            # 保持固定長度
+            if len(self.spectrogram_data) > self.max_spec_frames:
+                self.spectrogram_data.pop(0)
+            
+            # 合併所有幀
+            if self.spectrogram_data:
+                combined_spec = np.hstack(self.spectrogram_data)
+                
+                # 更新圖像數據
+                if self.spec_image:
+                    self.spec_image.set_data(combined_spec)
+                    self.spec_image.set_clim(vmin=-60, vmax=-10)  # 調整動態範圍以提高對比度
+                    
+                    # 更新時間軸
+                    total_frames = combined_spec.shape[1]
+                    time_per_frame = len(audio_data) / self.sample_rate / Sxx_db.shape[1]
+                    total_time = total_frames * time_per_frame
+                    self.spec_image.set_extent([0, total_time, 0, 8000])
+                    
+                    # 更新 x 軸範圍
+                    if hasattr(self, 'axes') and len(self.axes) > 1:
+                        self.axes[1].set_xlim(0, total_time)
+                        
+        except Exception as e:
+            print(f"聲譜圖更新錯誤: {e}")
 
 
 class PipelineVisualization(BaseVisualization):

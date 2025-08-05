@@ -4,7 +4,7 @@ ASR Hub Stream Controller
 """
 
 import asyncio
-from typing import Dict, Any, Optional, AsyncGenerator, List
+from typing import Dict, Any, Optional, AsyncGenerator, List, Union
 from datetime import datetime
 from src.utils.logger import logger
 from src.core.exceptions import StreamError, SessionError
@@ -157,13 +157,13 @@ class StreamController:
     
     async def process_audio_chunk(self,
                                  session_id: str,
-                                 audio_chunk: bytes) -> Optional[Dict[str, Any]]:
+                                 audio_chunk: Union[bytes, 'AudioChunk']) -> Optional[Dict[str, Any]]:
         """
         處理音訊片段
         
         Args:
             session_id: Session ID
-            audio_chunk: 音訊資料片段
+            audio_chunk: 音訊資料片段（bytes 或 AudioChunk）
             
         Returns:
             處理結果（如果有）
@@ -180,12 +180,35 @@ class StreamController:
             # 更新 Session 狀態為 BUSY
             self.session_manager.update_session_state(session_id, SessionState.BUSY)
             
+            # 如果是原始 bytes，必須有完整的配置資訊
+            if isinstance(audio_chunk, bytes):
+                # 檢查是否有完整的音訊配置
+                required_config = ["sample_rate", "channels", "format", "encoding", "bits_per_sample"]
+                missing_config = [c for c in required_config if c not in stream_info["config"]]
+                
+                if missing_config:
+                    raise StreamError(f"串流配置缺少必要的音訊參數：{', '.join(missing_config)}")
+                
+                from src.models.audio import AudioChunk as AC
+                audio_chunk = AC(
+                    data=audio_chunk,
+                    sample_rate=stream_info["config"]["sample_rate"],
+                    channels=stream_info["config"]["channels"],
+                    format=stream_info["config"]["format"],
+                    encoding=stream_info["config"]["encoding"],
+                    bits_per_sample=stream_info["config"]["bits_per_sample"]
+                )
+            
+            # 記錄音訊格式資訊
+            self.logger.debug(
+                f"處理音訊片段 - Session: {session_id}, "
+                f"格式: {audio_chunk.sample_rate}Hz, {audio_chunk.channels}ch, "
+                f"{audio_chunk.bits_per_sample}bit, {audio_chunk.format.value}"
+            )
+            
             # 通過 Pipeline 處理音訊
             pipeline = stream_info["pipeline"]
-            processed_audio = await pipeline.process(
-                audio_chunk,
-                **stream_info["config"]
-            )
+            processed_audio = await pipeline.process(audio_chunk)
             
             if processed_audio:
                 # 添加到緩衝

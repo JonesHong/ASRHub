@@ -6,6 +6,12 @@ ASR Hub 主要入口類別
 import sys
 import asyncio
 from typing import Optional, Dict, Any
+import warnings
+
+# 忽略 ctranslate2 的 pkg_resources 棄用警告
+warnings.filterwarnings('ignore', 
+                       message='.*pkg_resources is deprecated as an API.*',
+                       category=DeprecationWarning)
 from src.config.manager import ConfigManager
 from src.utils.logger import logger
 from src.utils.logger import setup_global_exception_handler

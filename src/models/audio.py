@@ -34,16 +34,18 @@ class AudioChunk:
     """
     音訊資料塊
     表示一段音訊資料及其相關資訊
+    所有音訊參數都是必要的，不提供預設值
     """
     
     # 音訊資料（原始位元組）
     data: bytes
     
-    # 音訊參數
-    sample_rate: int = 16000
-    channels: int = 1
-    format: AudioFormat = AudioFormat.PCM
-    encoding: AudioEncoding = AudioEncoding.LINEAR16
+    # 音訊參數（全部必要）
+    sample_rate: int  # Hz
+    channels: int  # 1=單聲道, 2=立體聲
+    format: AudioFormat
+    encoding: AudioEncoding
+    bits_per_sample: int  # 8, 16, 24, 32
     
     # 時間資訊
     timestamp: float = field(default_factory=lambda: datetime.now().timestamp())
@@ -55,6 +57,7 @@ class AudioChunk:
     
     # 元資料
     metadata: Dict[str, Any] = field(default_factory=dict)
+    source_info: Optional[Dict[str, Any]] = None  # 來源資訊
     
     def __post_init__(self):
         """初始化後處理"""
@@ -73,12 +76,8 @@ class AudioChunk:
             # 非 PCM 格式無法直接計算
             return 0.0
         
-        # 計算每個樣本的位元組數
-        bytes_per_sample = 2  # 預設 16-bit
-        if self.encoding == AudioEncoding.LINEAR32:
-            bytes_per_sample = 4
-        elif self.encoding == AudioEncoding.FLOAT32:
-            bytes_per_sample = 4
+        # 根據位元深度計算每個樣本的位元組數
+        bytes_per_sample = self.bits_per_sample // 8
         
         # 計算總樣本數
         total_bytes = len(self.data)
@@ -102,11 +101,12 @@ class AudioChunk:
     
     def to_dict(self) -> Dict[str, Any]:
         """轉換為字典格式"""
-        return {
+        result = {
             "sample_rate": self.sample_rate,
             "channels": self.channels,
             "format": self.format.value,
             "encoding": self.encoding.value,
+            "bits_per_sample": self.bits_per_sample,
             "timestamp": self.timestamp,
             "duration": self.duration,
             "sequence_number": self.sequence_number,
@@ -114,6 +114,9 @@ class AudioChunk:
             "size": self.get_size(),
             "metadata": self.metadata
         }
+        if self.source_info:
+            result["source_info"] = self.source_info
+        return result
     
     def clone(self) -> 'AudioChunk':
         """
@@ -128,22 +131,24 @@ class AudioChunk:
             channels=self.channels,
             format=self.format,
             encoding=self.encoding,
+            bits_per_sample=self.bits_per_sample,
             timestamp=self.timestamp,
             duration=self.duration,
             sequence_number=self.sequence_number,
             is_final=self.is_final,
-            metadata=self.metadata.copy()
+            metadata=self.metadata.copy(),
+            source_info=self.source_info.copy() if self.source_info else None
         )
 
 
 @dataclass
 class AudioConfig:
-    """音訊配置"""
-    sample_rate: int = 16000
-    channels: int = 1
-    format: AudioFormat = AudioFormat.PCM
-    encoding: AudioEncoding = AudioEncoding.LINEAR16
-    bits_per_sample: int = 16
+    """音訊配置 - 所有參數都是必要的"""
+    sample_rate: int
+    channels: int
+    format: AudioFormat
+    encoding: AudioEncoding
+    bits_per_sample: int
     
     def validate(self) -> bool:
         """
@@ -187,11 +192,21 @@ class AudioConfig:
             
         Returns:
             AudioConfig 實例
+            
+        Raises:
+            KeyError: 如果缺少必要參數
+            ValueError: 如果參數值無效
         """
+        required_keys = ["sample_rate", "channels", "format", "encoding", "bits_per_sample"]
+        missing_keys = [k for k in required_keys if k not in data]
+        
+        if missing_keys:
+            raise KeyError(f"配置缺少必要參數：{', '.join(missing_keys)}")
+        
         return cls(
-            sample_rate=data.get("sample_rate", 16000),
-            channels=data.get("channels", 1),
-            format=AudioFormat(data.get("format", "pcm")),
-            encoding=AudioEncoding(data.get("encoding", "linear16")),
-            bits_per_sample=data.get("bits_per_sample", 16)
+            sample_rate=data["sample_rate"],
+            channels=data["channels"],
+            format=AudioFormat(data["format"]),
+            encoding=AudioEncoding(data["encoding"]),
+            bits_per_sample=data["bits_per_sample"]
         )

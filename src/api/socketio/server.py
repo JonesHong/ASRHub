@@ -254,6 +254,18 @@ class SocketIOServer(APIBase):
                 # 自動加入 session 房間
                 await self._join_session_room(sid, connection.session_id)
                 
+                # 處理音訊配置（如果有提供）
+                audio_config = params.get("audio_config")
+                if audio_config:
+                    try:
+                        validated_params = await self.validate_audio_params(audio_config)
+                        connection.audio_config = validated_params
+                        self.logger.info(f"Socket.io 音訊配置已儲存，sid: {sid}, session_id: {connection.session_id}")
+                    except APIError as e:
+                        self.logger.error(f"音訊配置驗證失敗: {e}")
+                        await self._emit_error(sid, f"音訊配置錯誤: {str(e)}")
+                        return
+                
             response = await self.handle_control_command(
                 command=command,
                 session_id=connection.session_id,
@@ -319,14 +331,50 @@ class SocketIOServer(APIBase):
                 
             # 建立串流（如果不存在）
             if connection.session_id not in self.stream_manager.stream_buffers:
-                audio_params = data.get("audio_params", {})
-                self.stream_manager.create_stream(connection.session_id, audio_params)
+                # 檢查連線是否有音訊配置
+                if not hasattr(connection, 'audio_config') or connection.audio_config is None:
+                    self.logger.error(f"Socket.io 連線 {sid} 沒有音訊配置")
+                    await self._emit_error(sid, "缺少音訊參數")
+                    return
+                    
+                # 使用連線的音訊配置
+                self.stream_manager.create_stream(connection.session_id, connection.audio_config)
                 
                 # 啟動處理任務
                 asyncio.create_task(self._process_audio_stream(connection))
                 
+            # 創建 AudioChunk（包含完整的音訊元數據）
+            from src.models.audio_metadata import AudioChunkFactory
+            
+            # 從 stream_manager 獲取已驗證的參數
+            stream_info = self.stream_manager.get_stream_info(connection.session_id)
+            if stream_info and stream_info.get('audio_params'):
+                params = stream_info['audio_params']
+                
+                # 使用工廠創建 AudioChunk
+                audio_chunk = AudioChunkFactory.create_from_websocket_message(
+                    message={
+                        "audio": audio_data if audio_format != "base64" else data.get("audio"),
+                        "metadata": {
+                            "sample_rate": params.get("sample_rate", 16000),
+                            "channels": params.get("channels", 1),
+                            "format": params.get("format", "pcm").value if hasattr(params.get("format"), "value") else params.get("format", "pcm"),
+                            "encoding": params.get("encoding", "linear16").value if hasattr(params.get("encoding"), "value") else params.get("encoding", "linear16"),
+                            "bits_per_sample": params.get("bits_per_sample", 16)
+                        },
+                        "timestamp": data.get("timestamp"),
+                        "sequence": data.get("chunk_id")
+                    }
+                )
+                
+                # 添加到串流（傳送 AudioChunk 而非 bytes）
+                add_success = self.stream_manager.add_audio_chunk(connection.session_id, audio_chunk)
+            else:
+                # 向後相容：如果沒有參數，使用原始 bytes
+                add_success = self.stream_manager.add_audio_chunk(connection.session_id, audio_bytes)
+                
             # 添加到串流
-            if self.stream_manager.add_audio_chunk(connection.session_id, audio_bytes):
+            if add_success:
                 # 發送確認
                 await self.sio.emit(
                     'audio_received',
@@ -821,3 +869,4 @@ class SocketIOConnection:
         self.connected_at = connected_at
         self.last_activity = connected_at
         self.rooms = rooms
+        self.audio_config = None  # 儲存音訊配置

@@ -185,36 +185,52 @@ class APIBase(ABC):
             驗證後的參數
             
         Raises:
-            APIError: 如果參數無效
+            APIError: 如果參數無效或缺少必要參數
         """
-        # 預設值
-        validated = {
-            "sample_rate": 16000,
-            "channels": 1,
-            "format": "pcm",
-            "encoding": "signed-integer",
-            "bits": 16
-        }
+        from src.models.audio import AudioFormat, AudioEncoding
         
-        # 更新提供的參數
-        if params:
-            # 驗證 sample_rate
-            if "sample_rate" in params:
-                if params["sample_rate"] not in [8000, 16000, 44100, 48000]:
-                    raise APIError(f"不支援的取樣率：{params['sample_rate']}")
-                validated["sample_rate"] = params["sample_rate"]
-            
-            # 驗證 channels
-            if "channels" in params:
-                if params["channels"] not in [1, 2]:
-                    raise APIError(f"不支援的聲道數：{params['channels']}")
-                validated["channels"] = params["channels"]
-            
-            # 驗證 format
-            if "format" in params:
-                if params["format"] not in ["pcm", "wav", "mp3", "flac"]:
-                    raise APIError(f"不支援的音訊格式：{params['format']}")
-                validated["format"] = params["format"]
+        if not params:
+            raise APIError("缺少音訊參數")
+        
+        # 必要參數檢查
+        required_params = ["sample_rate", "channels", "format", "encoding", "bits_per_sample"]
+        missing_params = [p for p in required_params if p not in params]
+        
+        if missing_params:
+            raise APIError(f"缺少必要的音訊參數：{', '.join(missing_params)}")
+        
+        validated = {}
+        
+        # 驗證 sample_rate
+        valid_rates = [8000, 16000, 22050, 24000, 32000, 44100, 48000]
+        if params["sample_rate"] not in valid_rates:
+            raise APIError(f"不支援的取樣率：{params['sample_rate']}，支援的取樣率：{valid_rates}")
+        validated["sample_rate"] = params["sample_rate"]
+        
+        # 驗證 channels
+        if params["channels"] not in [1, 2]:
+            raise APIError(f"不支援的聲道數：{params['channels']}，支援單聲道(1)或立體聲(2)")
+        validated["channels"] = params["channels"]
+        
+        # 驗證 format
+        try:
+            validated["format"] = AudioFormat(params["format"])
+        except ValueError:
+            valid_formats = [f.value for f in AudioFormat]
+            raise APIError(f"不支援的音訊格式：{params['format']}，支援的格式：{valid_formats}")
+        
+        # 驗證 encoding
+        try:
+            validated["encoding"] = AudioEncoding(params["encoding"])
+        except ValueError:
+            valid_encodings = [e.value for e in AudioEncoding]
+            raise APIError(f"不支援的編碼格式：{params['encoding']}，支援的編碼：{valid_encodings}")
+        
+        # 驗證 bits_per_sample
+        valid_bits = [8, 16, 24, 32]
+        if params["bits_per_sample"] not in valid_bits:
+            raise APIError(f"不支援的位元深度：{params['bits_per_sample']}，支援的位元深度：{valid_bits}")
+        validated["bits_per_sample"] = params["bits_per_sample"]
         
         return validated
     

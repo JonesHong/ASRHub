@@ -23,8 +23,8 @@ class SocketIOAudioBuffer:
     sample_rate: int = 16000
     channels: int = 1
     format: str = "pcm"
-    encoding: str = "signed-integer"
-    bits: int = 16
+    encoding: str = "linear16"
+    bits_per_sample: int = 16
     
     def add_chunk(self, data: bytes):
         """添加音訊 chunk"""
@@ -78,15 +78,24 @@ class SocketIOStreamManager:
                 self.logger.warning(f"Stream already exists for session {session_id}")
                 return False
                 
+            # 處理 format 和 encoding 可能是枚舉或字符串的情況
+            format_value = audio_params.get("format", "pcm")
+            if hasattr(format_value, 'value'):
+                format_value = format_value.value
+                
+            encoding_value = audio_params.get("encoding", "linear16")
+            if hasattr(encoding_value, 'value'):
+                encoding_value = encoding_value.value
+            
             # 建立緩衝區
             self.stream_buffers[session_id] = SocketIOAudioBuffer(
                 session_id=session_id,
                 buffer=bytearray(),
                 sample_rate=audio_params.get("sample_rate", 16000),
                 channels=audio_params.get("channels", 1),
-                format=audio_params.get("format", "pcm"),
-                encoding=audio_params.get("encoding", "signed-integer"),
-                bits=audio_params.get("bits", 16)
+                format=format_value,
+                encoding=encoding_value,
+                bits_per_sample=audio_params.get("bits_per_sample", 16)
             )
             
             # 建立串流佇列
@@ -144,6 +153,8 @@ class SocketIOStreamManager:
                 sample_rate=buffer.sample_rate,
                 channels=buffer.channels,
                 format=buffer.format,
+                encoding=buffer.encoding,
+                bits_per_sample=buffer.bits_per_sample,
                 timestamp=time.time()
             )
             
@@ -269,7 +280,7 @@ class SocketIOStreamManager:
                 "channels": buffer.channels,
                 "format": buffer.format,
                 "encoding": buffer.encoding,
-                "bits": buffer.bits
+                "bits_per_sample": buffer.bits_per_sample
             }
         }
         
@@ -308,3 +319,15 @@ class SocketIOStreamManager:
                 return True
                 
         return False
+        
+    def get_stream_info(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """
+        獲取串流資訊（兼容 server.py 的需求）
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            串流資訊字典
+        """
+        return self.get_stream_stats(session_id)

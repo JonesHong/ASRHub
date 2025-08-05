@@ -24,6 +24,8 @@ class AudioStreamBuffer:
     sample_rate: int = 16000
     channels: int = 1
     format: str = "pcm"
+    encoding: str = "linear16"
+    bits_per_sample: int = 16
     
     def add_chunk(self, data: bytes):
         """添加音訊 chunk"""
@@ -60,7 +62,7 @@ class WebSocketStreamManager:
         self.stream_queues: Dict[str, asyncio.Queue] = {}
         self.active_streams: Dict[str, bool] = {}
         
-    def create_stream(self, session_id: str, audio_params: Dict[str, Any]) -> bool:
+    def create_stream(self, session_id: str, audio_params: Optional[Dict[str, Any]] = None) -> bool:
         """
         建立新的音訊串流
         
@@ -75,14 +77,29 @@ class WebSocketStreamManager:
             if session_id in self.stream_buffers:
                 self.logger.warning(f"Stream already exists for session {session_id}")
                 return False
+            
+            # 檢查 audio_params 是否為 None
+            if audio_params is None:
+                raise ValueError("音訊參數不能為空")
                 
             # 建立緩衝區
+            # 處理 format 和 encoding 可能是枚舉或字符串的情況
+            format_value = audio_params.get("format", "pcm")
+            if hasattr(format_value, 'value'):
+                format_value = format_value.value
+                
+            encoding_value = audio_params.get("encoding", "linear16")
+            if hasattr(encoding_value, 'value'):
+                encoding_value = encoding_value.value
+                
             self.stream_buffers[session_id] = AudioStreamBuffer(
                 session_id=session_id,
                 buffer=bytearray(),
                 sample_rate=audio_params.get("sample_rate", 16000),
                 channels=audio_params.get("channels", 1),
-                format=audio_params.get("format", "pcm")
+                format=format_value,
+                encoding=encoding_value,
+                bits_per_sample=audio_params.get("bits_per_sample", 16)
             )
             
             # 建立串流佇列
@@ -122,11 +139,26 @@ class WebSocketStreamManager:
             buffer.add_chunk(audio_data)
             
             # 創建 AudioChunk 物件
+            from src.models.audio import AudioFormat, AudioEncoding
+            
+            # 轉換字符串為枚舉
+            try:
+                format_enum = AudioFormat(buffer.format)
+            except ValueError:
+                format_enum = AudioFormat.PCM
+                
+            try:
+                encoding_enum = AudioEncoding(buffer.encoding)
+            except ValueError:
+                encoding_enum = AudioEncoding.LINEAR16
+            
             audio_chunk = AudioChunk(
                 data=audio_data,
                 sample_rate=buffer.sample_rate,
                 channels=buffer.channels,
-                format=buffer.format,
+                format=format_enum,
+                encoding=encoding_enum,
+                bits_per_sample=buffer.bits_per_sample,
                 timestamp=time.time()
             )
             
@@ -245,7 +277,9 @@ class WebSocketStreamManager:
             "audio_params": {
                 "sample_rate": buffer.sample_rate,
                 "channels": buffer.channels,
-                "format": buffer.format
+                "format": buffer.format,
+                "encoding": buffer.encoding,
+                "bits_per_sample": buffer.bits_per_sample
             }
         }
         

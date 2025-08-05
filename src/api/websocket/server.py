@@ -160,7 +160,10 @@ class WebSocketServer(APIBase):
                 
             message_type = data.get("type")
             
-            if message_type == "control":
+            if message_type == "audio_config":
+                # 處理音訊配置訊息
+                await self._handle_audio_config(connection, data)
+            elif message_type == "control":
                 await self._handle_control_message(connection, data)
             elif message_type == "audio":
                 # 處理 JSON 格式的音訊資料
@@ -195,6 +198,7 @@ class WebSocketServer(APIBase):
         # 如果沒有 session_id，先建立新的 session
         if not connection.session_id and command == "start":
             connection.session_id = data.get("session_id") or str(uuid.uuid4())
+            self.logger.info(f"從 control start 命令設置 session_id: {connection.session_id}")
             
         response = await self.handle_control_command(
             command=command,
@@ -237,9 +241,15 @@ class WebSocketServer(APIBase):
                 
             # 檢查是否已建立串流
             if connection.session_id not in self.stream_manager.stream_buffers:
-                # 建立新串流
-                audio_params = await self.validate_audio_params({})
-                self.stream_manager.create_stream(connection.session_id, audio_params)
+                # 檢查連線是否有音訊配置
+                if not hasattr(connection, 'audio_config') or connection.audio_config is None:
+                    self.logger.error(f"連線 {connection.id} 沒有音訊配置, session_id: {connection.session_id}")
+                    self.logger.debug(f"連線屬性: {[attr for attr in dir(connection) if not attr.startswith('_')]}")
+                    await self._send_error(connection, "缺少音訊配置，請先發送 audio_config 訊息")
+                    return
+                    
+                # 使用連線的音訊配置建立串流
+                self.stream_manager.create_stream(connection.session_id, connection.audio_config)
                 
                 # 啟動串流處理任務
                 asyncio.create_task(self._process_audio_stream(connection))
@@ -275,8 +285,10 @@ class WebSocketServer(APIBase):
             data: 包含 base64 編碼音訊的 JSON 資料
         """
         # 更新 session_id
-        if "session_id" in data and not connection.session_id:
-            connection.session_id = data["session_id"]
+        if "session_id" in data:
+            if not connection.session_id:
+                connection.session_id = data["session_id"]
+                self.logger.info(f"從 audio 訊息設置 session_id: {connection.session_id}")
         
         if not connection.session_id:
             await self._send_error(connection, "No session_id provided")
@@ -415,6 +427,55 @@ class WebSocketServer(APIBase):
         except Exception as e:
             self.logger.error(f"Error sending message: {e}")
             
+    async def _handle_audio_config(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """
+        處理音訊配置訊息
+        
+        Args:
+            connection: WebSocket 連線
+            data: 音訊配置資料
+        """
+        config = data.get("config", {})
+        
+        # 更新 session_id（如果提供）
+        if "session_id" in data:
+            if not connection.session_id:
+                connection.session_id = data["session_id"]
+                self.logger.info(f"從 audio_config 訊息設置 session_id: {connection.session_id}")
+        
+        # 驗證音訊參數
+        try:
+            self.logger.debug(f"收到音訊配置: {config}")
+            validated_params = await self.validate_audio_params(config)
+            
+            # 儲存音訊配置到連線
+            connection.audio_config = validated_params
+            
+            self.logger.info(f"音訊配置已儲存到連線 {connection.id}, session_id: {connection.session_id}")
+            self.logger.debug(f"儲存的配置: {validated_params}")
+            
+            # 發送確認訊息
+            await self._send_message(connection, {
+                "type": "audio_config_ack",
+                "status": "success",
+                "config": {
+                    "sample_rate": validated_params["sample_rate"],
+                    "channels": validated_params["channels"],
+                    "format": validated_params["format"].value,
+                    "encoding": validated_params["encoding"].value,
+                    "bits_per_sample": validated_params["bits_per_sample"]
+                },
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            self.logger.info(f"音訊配置已更新: {validated_params}")
+            
+        except APIError as e:
+            await self._send_error(connection, f"音訊配置錯誤: {str(e)}")
+        except Exception as e:
+            self.logger.error(f"處理音訊配置時發生錯誤: {e}")
+            await self._send_error(connection, "處理音訊配置失敗")
+        
     async def _send_error(self, connection: 'WebSocketConnection', error_message: str):
         """
         發送錯誤訊息
@@ -583,12 +644,21 @@ class WebSocketServer(APIBase):
                         "在 macOS 上可以使用 'brew install ffmpeg' 安裝 FFmpeg。")
                     return
                 
+                # 從連線的音訊配置建立 AudioChunk
+                audio_config = getattr(connection, 'audio_config', None)
+                if not audio_config:
+                    # 如果沒有配置，使用嚴格錯誤
+                    await self._send_error(connection, "缺少音訊配置")
+                    return
+                
                 # 建立 AudioChunk 物件
                 audio = AudioChunk(
                     data=pcm_data,
-                    sample_rate=16000,  # 預設值，應該從前端參數獲取
-                    channels=1,
-                    format=AudioFormat.PCM  # 轉換後的格式
+                    sample_rate=audio_config["sample_rate"],
+                    channels=audio_config["channels"],
+                    format=AudioFormat.PCM,  # 轉換後的格式
+                    encoding=audio_config["encoding"],
+                    bits_per_sample=audio_config["bits_per_sample"]
                 )
                 
                 # 透過 Pipeline 處理音訊（如果有）
@@ -644,3 +714,4 @@ class WebSocketConnection:
         self.session_id = session_id
         self.connected_at = connected_at
         self.last_activity = connected_at
+        self.audio_config = None  # 儲存音訊配置

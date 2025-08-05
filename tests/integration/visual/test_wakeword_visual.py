@@ -16,15 +16,13 @@ from typing import Dict, Any, Optional
 import time
 
 # 添加 src 到路徑以便導入模組
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../..'))
 
 from src.pipeline.operators.wakeword import OpenWakeWordOperator
 from src.core.system_listener import SystemListener
 from src.core.session_manager import SessionManager
 from src.utils.logger import logger
 from src.config.manager import ConfigManager
-
-# 使用統一的視覺化工具
 from src.utils.visualization import WakeWordVisualization
 
 
@@ -135,13 +133,6 @@ class WakeWordIntegrationTester:
                     self.p.terminate()
                 except Exception as e:
                     self.logger.error(f"終止 PyAudio 時發生錯誤: {e}")
-            
-            # 清理視覺化
-            if hasattr(self, 'visualization'):
-                try:
-                    self.visualization.is_running = False
-                except Exception as e:
-                    self.logger.error(f"清理視覺化時發生錯誤: {e}")
             
             self.logger.info("✓ 測試環境清理完成")
             
@@ -260,7 +251,7 @@ class WakeWordIntegrationTester:
                     
                 except Exception as e:
                     self.logger.error(f"音訊處理錯誤: {e}")
-                    time.sleep(0.01)  # 短暫休眠避免 CPU 100%
+                    time.sleep(0.01)
         
         except Exception as e:
             self.logger.error(f"音訊處理迴圈發生嚴重錯誤: {e}")
@@ -314,7 +305,6 @@ class WakeWordIntegrationTester:
         
         # 設定圖表
         self.visualization.setup_plot()
-        self.visualization.wake_word = self.wake_word  # 設定喚醒詞名稱
         
         # 啟動動畫
         self.visualization.start_animation(self._update_plot, interval=100)
@@ -336,84 +326,19 @@ class WakeWordIntegrationTester:
                 current_time = latest_data['timestamp']
                 threshold = latest_data.get('threshold', 0.5)
                 
-                # 如果還沒有歷史記錄，初始化起始時間
-                if not hasattr(self, '_start_time'):
-                    self._start_time = current_time
-                
-                # 計算相對時間
-                relative_time = current_time - self._start_time
-                
-                # 添加到歷史記錄
-                self.score_history.append(current_score)
-                self.timestamps.append(current_time)
-                
-                # 保持歷史記錄在合理長度
-                if len(self.score_history) > 300:
-                    self.score_history.pop(0)
-                    self.timestamps.pop(0)
-                
-                # 更新喚醒詞圖表
-                self.visualization.detection_history.append(current_score)
-                self.visualization.time_history.append(current_time)
-                
-                # 保持視覺化歷史記錄長度
-                if len(self.visualization.detection_history) > self.visualization.max_history_points:
-                    self.visualization.detection_history.pop(0)
-                    self.visualization.time_history.pop(0)
-                
-                # 更新喚醒詞線條
-                if (self.visualization.time_history and 
-                    hasattr(self.visualization, 'lines') and 
-                    'wakeword' in self.visualization.lines):
+                # 更新統計文字
+                if hasattr(self.visualization, 'texts') and 'stats' in self.visualization.texts:
+                    runtime = (datetime.now() - self.stats["start_time"]).total_seconds() if self.stats["start_time"] else 0
+                    total_detections = len(self.detection_events)
+                    avg_score = sum(self.score_history) / len(self.score_history) if self.score_history else 0
+                    max_score = max(self.score_history) if self.score_history else 0
                     
-                    start_time = self.visualization.time_history[0]
-                    relative_times = [t - start_time for t in self.visualization.time_history]
-                    self.visualization.lines['wakeword'].set_data(relative_times, self.visualization.detection_history)
+                    stats_text = (
+                        f"[{self.wake_word}] 運行: {self.visualization.format_time(runtime)} | "
+                        f"檢測: {total_detections} 次 | 平均: {avg_score:.3f} | 最高: {max_score:.3f}\n"
+                        f"當前: {current_score:.3f} | 閾值: {threshold:.3f}"
+                    )
                     
-                    # 調整 x 軸範圍
-                    if relative_times and hasattr(self.visualization, 'axes') and len(self.visualization.axes) > 1:
-                        self.visualization.axes[1].set_xlim(max(0, relative_times[-1] - 10), relative_times[-1] + 0.5)
-                    
-                    # 更新閾值線
-                    if 'wake_threshold' in self.visualization.lines:
-                        self.visualization.lines['wake_threshold'].set_ydata([threshold, threshold])
-                
-                # 更新統計資訊
-                runtime = (datetime.now() - self.stats["start_time"]).total_seconds() if self.stats["start_time"] else 0
-                total_detections = len(self.detection_events)
-                avg_score = sum(self.score_history) / len(self.score_history) if self.score_history else 0
-                max_score = max(self.score_history) if self.score_history else 0
-                
-                # 計算最近的檢測
-                recent_detection = "無"
-                if self.detection_events:
-                    last_detection = self.detection_events[-1]
-                    last_detection_timestamp = last_detection["timestamp"]
-                    # 轉換 datetime 為時間戳
-                    if isinstance(last_detection_timestamp, datetime):
-                        last_detection_time = last_detection_timestamp.timestamp()
-                    else:
-                        last_detection_time = last_detection_timestamp
-                    time_diff = current_time - last_detection_time
-                    recent_detection = f"{time_diff:.1f} 秒前"
-                
-                # 計算當前音量資訊
-                current_rms = 0
-                current_max = 0
-                if len(audio_data) > 0:
-                    current_rms = np.sqrt(np.mean(audio_data.astype(np.float64) ** 2))
-                    current_max = np.max(np.abs(audio_data))
-                
-                # 使用簡潔的兩行格式
-                stats_text = (
-                    f"[{self.wake_word}] 運行: {self.visualization.format_time(runtime)} | "
-                    f"檢測: {total_detections} 次 | 平均: {avg_score:.3f} | 最高: {max_score:.3f}\n"
-                    f"當前: {current_score:.3f} | 閾值: {threshold:.3f} | "
-                    f"最近: {recent_detection} | 音量: {current_rms:.0f}/{current_max}"
-                )
-                
-                if (hasattr(self.visualization, 'texts') and 
-                    'stats' in self.visualization.texts):
                     self.visualization.texts['stats'].set_text(stats_text)
         
         except Exception as e:

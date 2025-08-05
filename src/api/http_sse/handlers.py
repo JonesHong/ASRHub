@@ -229,32 +229,39 @@ class AudioRequestHandler:
             
         Returns:
             音訊參數字典
+            
+        Raises:
+            ValidationError: 如果缺少必要參數
         """
-        params = {
-            "sample_rate": 16000,
-            "channels": 1,
-            "format": "pcm",
-            "encoding": "linear16"
+        params = {}
+        
+        # 必要參數對應的 header 名稱
+        header_mapping = {
+            "sample_rate": ["X-Audio-Sample-Rate", "X-Sample-Rate"],
+            "channels": ["X-Audio-Channels", "X-Channels"],
+            "format": ["X-Audio-Format", "X-Format"],
+            "encoding": ["X-Audio-Encoding", "X-Encoding"],
+            "bits_per_sample": ["X-Audio-Bits", "X-Audio-Bits-Per-Sample", "X-Bits-Per-Sample"]
         }
         
-        # 從自定義標頭解析參數
-        if "X-Audio-Sample-Rate" in headers:
-            try:
-                params["sample_rate"] = int(headers["X-Audio-Sample-Rate"])
-            except ValueError:
-                self.logger.warning(f"無效的取樣率：{headers['X-Audio-Sample-Rate']}")
-        
-        if "X-Audio-Channels" in headers:
-            try:
-                params["channels"] = int(headers["X-Audio-Channels"])
-            except ValueError:
-                self.logger.warning(f"無效的聲道數：{headers['X-Audio-Channels']}")
-        
-        if "X-Audio-Format" in headers:
-            params["format"] = headers["X-Audio-Format"].lower()
-        
-        if "X-Audio-Encoding" in headers:
-            params["encoding"] = headers["X-Audio-Encoding"].lower()
+        # 解析每個必要參數
+        for param_name, header_names in header_mapping.items():
+            value = None
+            for header_name in header_names:
+                if header_name in headers:
+                    if param_name in ["sample_rate", "channels", "bits_per_sample"]:
+                        try:
+                            value = int(headers[header_name])
+                        except ValueError:
+                            raise ValidationError(f"無效的 {param_name}：{headers[header_name]}")
+                    else:
+                        value = headers[header_name].lower()
+                    break
+            
+            if value is None:
+                raise ValidationError(f"缺少必要的音訊參數 header：{param_name}")
+            
+            params[param_name] = value
         
         return params
     

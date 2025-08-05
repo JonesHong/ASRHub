@@ -12,9 +12,10 @@ class ASRClient {
         this.isFileUpload = false; // 標記是否為檔案上傳模式
         this.audioContext = null; // 用於控制音頻採樣率
         this.mediaStreamSource = null;
+        this.audioConfigConfirmed = false; // 音訊配置確認標記
         
         // WebSocket config
-        this.wsUrl = 'ws://localhost:8765';
+        this.wsUrl = 'ws://localhost:8765';  // WebSocket 端口
         
         // Socket.io config
         this.socketioUrl = 'http://localhost:8766';
@@ -342,43 +343,76 @@ class ASRClient {
     }
     
     async sendWebSocketAudio() {
-        // 發送開始命令
-        const startCommand = {
-            type: 'control',
-            command: 'start',
-            session_id: this.sessionId
-        };
-        this.connection.send(JSON.stringify(startCommand));
-        this.log('發送開始命令', 'info');
-        
-        // 等待一下讓 session 初始化
-        await this.sleep(100);
+        try {
+            // 先發送音訊配置
+            const audioConfig = await this.getAudioConfig();
+            const configMessage = {
+                type: 'audio_config',
+                session_id: this.sessionId,
+                config: audioConfig
+            };
+            this.connection.send(JSON.stringify(configMessage));
+            this.log(`發送音訊配置: ${JSON.stringify(audioConfig)}`, 'info');
+            
+            // 等待音訊配置確認（重要！）
+            this.audioConfigConfirmed = false;
+            let waitTime = 0;
+            while (!this.audioConfigConfirmed && waitTime < 2000) {
+                await this.sleep(50);
+                waitTime += 50;
+            }
+            
+            if (!this.audioConfigConfirmed) {
+                throw new Error('音訊配置確認超時');
+            }
+            
+            // 發送開始命令
+            const startCommand = {
+                type: 'control',
+                command: 'start',
+                session_id: this.sessionId
+            };
+            this.connection.send(JSON.stringify(startCommand));
+            this.log('發送開始命令', 'info');
+            
+            // 等待 session 初始化完成
+            await this.sleep(200);
         
         // 將音訊轉換為 ArrayBuffer
         const audioSource = this.audioFile || this.audioBlob;
         const arrayBuffer = await audioSource.arrayBuffer();
         const uint8Array = new Uint8Array(arrayBuffer);
         
-        // 分塊發送音訊
-        const chunkSize = 4096;
-        for (let i = 0; i < uint8Array.length; i += chunkSize) {
-            const chunk = uint8Array.slice(i, i + chunkSize);
+            // 分塊發送音訊
+            const chunkSize = 4096;
+            let sentChunks = 0;
             
-            const audioMessage = {
-                type: 'audio',
-                session_id: this.sessionId,
-                audio: this.arrayBufferToBase64(chunk),
-                chunk_id: Math.floor(i / chunkSize)
-            };
+            for (let i = 0; i < uint8Array.length; i += chunkSize) {
+                const chunk = uint8Array.slice(i, i + chunkSize);
+                
+                const audioMessage = {
+                    type: 'audio',
+                    session_id: this.sessionId,
+                    audio: this.arrayBufferToBase64(chunk),
+                    chunk_id: Math.floor(i / chunkSize)
+                };
+                
+                this.connection.send(JSON.stringify(audioMessage));
+                sentChunks++;
+                
+                // 更新進度
+                const progress = Math.round((i + chunk.length) / uint8Array.length * 100);
+                this.updateStatus(`上傳中: ${progress}%`, 'uploading');
+                
+                await this.sleep(10); // 避免發送太快
+            }
             
-            this.connection.send(JSON.stringify(audioMessage));
-            await this.sleep(10); // 避免發送太快
-        }
-        
-        this.log(`音訊發送完成，共 ${uint8Array.length} bytes`, 'success');
-        
-        // 發送停止命令
-        setTimeout(() => {
+            this.log(`音訊發送完成，共 ${uint8Array.length} bytes，${sentChunks} 個分塊`, 'success');
+            
+            // 等待處理完成
+            await this.sleep(500);
+            
+            // 發送停止命令
             const stopCommand = {
                 type: 'control',
                 command: 'stop',
@@ -386,16 +420,25 @@ class ASRClient {
             };
             this.connection.send(JSON.stringify(stopCommand));
             this.log('發送停止命令', 'info');
-        }, 500);
+            
+        } catch (error) {
+            this.log(`發送音訊時發生錯誤: ${error.message}`, 'error');
+            this.updateStatus('發送失敗', 'error');
+        }
     }
     
     async sendSocketIOAudio() {
-        // 發送開始命令
+        // 獲取音訊配置
+        const audioConfig = await this.getAudioConfig();
+        
+        // 發送開始命令，包含音訊配置
         this.connection.emit('control', {
             command: 'start',
-            params: {}
+            params: {
+                audio_config: audioConfig
+            }
         });
-        this.log('發送開始命令', 'info');
+        this.log(`發送開始命令與音訊配置: ${JSON.stringify(audioConfig)}`, 'info');
         
         // 等待 control_response
         await this.sleep(100);
@@ -413,12 +456,7 @@ class ASRClient {
             this.connection.emit('audio_chunk', {
                 audio: this.arrayBufferToBase64(chunk),
                 format: 'base64',
-                chunk_id: Math.floor(i / chunkSize),
-                audio_params: {
-                    sample_rate: 16000,
-                    channels: 1,
-                    encoding: 'webm'
-                }
+                chunk_id: Math.floor(i / chunkSize)
             });
             
             await this.sleep(10); // 避免發送太快
@@ -461,6 +499,9 @@ class ASRClient {
         // 使用 v1/transcribe 端點進行一次性轉譯
         this.updateStatus('上傳音訊中...', 'uploading');
         
+        // 獲取音訊配置
+        const audioConfig = await this.getAudioConfig();
+        
         // 建立 FormData
         const formData = new FormData();
         
@@ -475,10 +516,17 @@ class ASRClient {
         formData.append('provider', 'whisper');
         formData.append('language', 'auto');
         
-        // 發送到 v1/transcribe 端點
+        // 發送到 v1/transcribe 端點，包含完整的音訊參數
         const response = await fetch(`${this.httpSSEUrl}/v1/transcribe`, {
             method: 'POST',
-            body: formData
+            body: formData,
+            headers: {
+                'X-Audio-Sample-Rate': String(audioConfig.sample_rate),
+                'X-Audio-Channels': String(audioConfig.channels),
+                'X-Audio-Format': audioConfig.format,
+                'X-Audio-Encoding': audioConfig.encoding,
+                'X-Audio-Bits': String(audioConfig.bits_per_sample)
+            }
         });
         
         if (!response.ok) {
@@ -604,35 +652,17 @@ class ASRClient {
         const audioSource = this.audioFile || this.audioBlob;
         const arrayBuffer = await audioSource.arrayBuffer();
         
-        // 根據來源設定 Content-Type
-        let contentType = 'audio/webm';
-        let format = 'webm';
+        // 獲取完整的音訊配置
+        const audioConfig = await this.getAudioConfig();
         
+        // 根據來源設定 Content-Type
+        let contentType = 'application/octet-stream';
         if (this.isFileUpload && this.audioFile) {
             contentType = this.audioFile.type || 'application/octet-stream';
-            // 從檔案類型推斷格式
-            if (this.audioFile.name.endsWith('.mp3')) format = 'mp3';
-            else if (this.audioFile.name.endsWith('.wav')) format = 'wav';
-            else if (this.audioFile.name.endsWith('.m4a')) format = 'm4a';
-            else if (this.audioFile.name.endsWith('.mp4')) format = 'mp4';
-            else if (this.audioFile.name.endsWith('.ogg')) format = 'ogg';
-        }
-        
-        // 根據錄音或檔案來源設定正確的採樣率
-        let sampleRate = '16000';  // 預設值
-        let actualFormat = format;
-        
-        // 如果是錄音，檢查實際的採樣率
-        if (!this.isFileUpload) {
-            if (this.audioContext && this.audioContext.sampleRate) {
-                // 使用 AudioContext 的實際採樣率
-                const actualRate = this.audioContext.sampleRate;
-                sampleRate = String(actualRate);
-                this.log(`錄音採樣率: ${actualRate} Hz`, 'info');
-            } else {
-                // 預設 16kHz
-                sampleRate = '16000';
-            }
+        } else {
+            // 錄音的 MIME type
+            const mimeType = this.getSupportedMimeType() || 'audio/webm';
+            contentType = mimeType;
         }
         
         const uploadResponse = await fetch(`${this.httpSSEUrl}/audio/${this.sessionId}`, {
@@ -640,9 +670,11 @@ class ASRClient {
             body: arrayBuffer,
             headers: {
                 'Content-Type': contentType,
-                'X-Audio-Sample-Rate': sampleRate,
-                'X-Audio-Channels': '1',
-                'X-Audio-Format': actualFormat
+                'X-Audio-Sample-Rate': String(audioConfig.sample_rate),
+                'X-Audio-Channels': String(audioConfig.channels),
+                'X-Audio-Format': audioConfig.format,
+                'X-Audio-Encoding': audioConfig.encoding,
+                'X-Audio-Bits': String(audioConfig.bits_per_sample)
             }
         });
         
@@ -700,6 +732,11 @@ class ASRClient {
                     break;
                 case 'control_response':
                     this.handleControlResponse(message);
+                    break;
+                case 'audio_config_ack':
+                    this.log(`音訊配置已確認: ${JSON.stringify(message.config)}`, 'success');
+                    // 設置標誌表示配置已確認
+                    this.audioConfigConfirmed = true;
                     break;
                 case 'error':
                     this.log(`錯誤: ${message.error}`, 'error');
@@ -823,6 +860,84 @@ class ASRClient {
         
         this.log('使用預設音頻格式', 'warning');
         return null;
+    }
+    
+    async getAudioConfig() {
+        // 根據音訊來源返回完整的音訊配置
+        let config = {
+            sample_rate: 16000,
+            channels: 1,
+            format: 'webm',
+            encoding: 'linear16',  // 修正: 使用有效的編碼值
+            bits_per_sample: 16
+        };
+        
+        if (this.isFileUpload && this.audioFile) {
+            // 檔案上傳模式 - 從檔案推斷格式
+            const fileName = this.audioFile.name.toLowerCase();
+            const mimeType = this.audioFile.type;
+            
+            // 根據副檔名決定格式
+            if (fileName.endsWith('.wav')) {
+                config.format = 'wav';
+                config.encoding = 'linear16';
+                config.bits_per_sample = 16;
+            } else if (fileName.endsWith('.mp3')) {
+                config.format = 'mp3';
+                config.encoding = 'linear16'; // MP3 通常解碼後是 linear16
+                config.bits_per_sample = 16;
+            } else if (fileName.endsWith('.flac')) {
+                config.format = 'flac';
+                config.encoding = 'linear16'; // FLAC 解碼後是 linear16
+                config.bits_per_sample = 16;
+            } else if (fileName.endsWith('.ogg')) {
+                config.format = 'ogg';
+                config.encoding = 'linear16'; // Opus 解碼後是 linear16
+                config.bits_per_sample = 16;
+            } else if (fileName.endsWith('.m4a')) {
+                config.format = 'm4a';
+                config.encoding = 'linear16'; // AAC 解碼後是 linear16
+                config.bits_per_sample = 16;
+            } else if (fileName.endsWith('.webm')) {
+                config.format = 'webm';
+                config.encoding = 'linear16'; // Opus 解碼後是 linear16
+                config.bits_per_sample = 16;
+            }
+            
+            // 對於檔案，我們無法確定取樣率，使用預設值
+            // 實際應用中應該使用音訊分析庫來獲取
+            config.sample_rate = 44100; // 一般音訊檔案的預設值
+            
+        } else {
+            // 錄音模式 - 使用實際的錄音參數
+            if (this.audioContext) {
+                config.sample_rate = this.audioContext.sampleRate;
+            }
+            
+            // 根據 MediaRecorder 的 MIME type 決定格式
+            const mimeType = this.getSupportedMimeType();
+            if (mimeType) {
+                if (mimeType.includes('wav')) {
+                    config.format = 'wav';
+                    config.encoding = 'linear16';
+                    config.bits_per_sample = 16;
+                } else if (mimeType.includes('webm')) {
+                    config.format = 'webm';
+                    config.encoding = 'linear16';  // 修正: 使用 linear16
+                    config.bits_per_sample = 16;
+                } else if (mimeType.includes('ogg')) {
+                    config.format = 'ogg';
+                    config.encoding = 'linear16';  // 修正: 使用 linear16
+                    config.bits_per_sample = 16;
+                } else if (mimeType.includes('mp4')) {
+                    config.format = 'mp4';
+                    config.encoding = 'aac';
+                    config.bits_per_sample = 16;
+                }
+            }
+        }
+        
+        return config;
     }
 }
 
