@@ -3,61 +3,110 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASR Hub 語音辨識測試</title>
-    <link rel="stylesheet" href="style.css">
+    <title>ASR Hub - 測試中心</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind CSS 配置 -->
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'fade-in': 'fadeIn 0.3s ease-in-out',
+                        'slide-in': 'slideIn 0.3s ease-out'
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <!-- Dark Mode Styles -->
+    <link rel="stylesheet" href="common/dark-mode-styles.css">
+    
+    <!-- Custom animations -->
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        @keyframes slideIn {
+            from { 
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to { 
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
 </head>
-<body>
-    <div class="container">
-        <h1>ASR Hub 語音辨識測試</h1>
-        
-        <div class="protocol-selector">
-            <label for="protocol">選擇通訊協議：</label>
-            <select id="protocol">
-                <option value="websocket">WebSocket</option>
-                <option value="socketio">Socket.io</option>
-                <option value="http_sse">HTTP API</option>
-            </select>
-        </div>
-
-        <div class="controls">
-            <button id="startRecord" class="btn btn-start">開始錄音</button>
-            <button id="stopRecord" class="btn btn-stop" disabled>結束錄音</button>
-            <button id="startRecognition" class="btn btn-recognize" disabled>開始辨識</button>
+<body class="bg-gray-50 dark:bg-gray-900 min-h-screen transition-colors duration-300">
+    <div class="container mx-auto px-4 py-8 max-w-7xl">
+        <!-- Hero Section -->
+        <div class="bg-gradient-to-r from-purple-600 to-indigo-600 dark:from-purple-800 dark:to-indigo-800 rounded-xl p-10 text-white text-center mb-10 shadow-xl">
+            <h1 class="text-4xl font-bold mb-3">ASR Hub 測試中心</h1>
+            <p class="text-xl opacity-90">選擇您要測試的功能模組</p>
         </div>
         
-        <div class="upload-section">
-            <div class="divider">或</div>
-            <label for="audioFile" class="file-upload-label">
-                <span>選擇音訊檔案</span>
-                <input type="file" id="audioFile" accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg,.mp4" />
-            </label>
-            <div id="fileInfo" class="file-info"></div>
+        <!-- Search Box -->
+        <div class="max-w-xl mx-auto mb-8">
+            <div class="relative">
+                <i class="fas fa-search absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+                <input 
+                    type="text" 
+                    id="searchInput"
+                    class="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-full text-lg focus:outline-none focus:border-blue-500 transition-colors"
+                    placeholder="搜尋測試功能..."
+                >
+            </div>
         </div>
-
-        <div class="status-panel">
-            <h3>狀態</h3>
-            <div id="status" class="status-text">準備就緒</div>
-            <div id="connectionStatus" class="connection-status">未連接</div>
+        
+        <!-- Filter Controls -->
+        <div class="text-center mb-10">
+            <div class="inline-flex bg-gray-100 rounded-full p-1">
+                <button class="filter-btn px-6 py-2 rounded-full font-semibold bg-blue-500 text-white transition-all" data-filter="all">
+                    全部
+                </button>
+                <button class="filter-btn px-6 py-2 rounded-full font-semibold text-gray-600 hover:text-gray-800 transition-all" data-filter="ready">
+                    <i class="fas fa-check-circle text-green-500 mr-1"></i> 可用
+                </button>
+                <button class="filter-btn px-6 py-2 rounded-full font-semibold text-gray-600 hover:text-gray-800 transition-all" data-filter="development">
+                    <i class="fas fa-code text-orange-500 mr-1"></i> 開發中
+                </button>
+                <button class="filter-btn px-6 py-2 rounded-full font-semibold text-gray-600 hover:text-gray-800 transition-all" data-filter="planned">
+                    <i class="fas fa-calendar text-gray-500 mr-1"></i> 計劃中
+                </button>
+            </div>
         </div>
-
-        <div class="audio-panel">
-            <h3>錄音預覽</h3>
-            <audio id="audioPlayer" controls style="display: none;"></audio>
-            <div id="audioInfo" class="audio-info"></div>
+        
+        <!-- Test Cards Grid -->
+        <div id="test-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-10">
+            <!-- Cards will be dynamically rendered here -->
         </div>
-
-        <div class="results-panel">
-            <h3>辨識結果</h3>
-            <div id="results" class="results-text"></div>
-        </div>
-
-        <div class="logs-panel">
-            <h3>連線日誌</h3>
-            <div id="logs" class="logs-text"></div>
+        
+        <!-- System Info Panel -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 system-info transition-colors duration-300">
+            <h3 class="text-2xl font-bold text-gray-800 dark:text-gray-200 mb-4">
+                <i class="fas fa-info-circle text-blue-500 mr-2"></i>系統資訊
+            </h3>
+            <p class="text-gray-600 dark:text-gray-400 mb-4">ASR Hub 是一個統一的語音辨識中介軟體系統，整合多個 ASR 服務提供者。</p>
+            <ul class="space-y-2 text-gray-600 dark:text-gray-400">
+                <li><i class="fas fa-network-wired text-blue-400 mr-2"></i>支援多種通訊協議：WebSocket、Socket.io、HTTP SSE、gRPC</li>
+                <li><i class="fas fa-microphone text-green-400 mr-2"></i>整合多個 ASR 引擎：Whisper、FunASR、Vosk 等</li>
+                <li><i class="fas fa-cube text-purple-400 mr-2"></i>模組化管道架構，支援即時音訊處理</li>
+                <li><i class="fas fa-shield-alt text-red-400 mr-2"></i>完整的狀態管理和錯誤處理機制</li>
+            </ul>
         </div>
     </div>
-
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <script src="common/theme.js"></script>
+    <script src="common/common.js"></script>
+    <script src="common/test-cards.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

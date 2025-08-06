@@ -1,0 +1,119 @@
+/* Protocol Test Specific Styles */
+
+/* Protocol selector panel */
+.protocol-selector {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.protocol-selector label {
+    font-weight: 600;
+}
+
+/* Controls layout */
+.controls {
+    display: flex;
+    gap: 15px;
+    justify-content: center;
+    margin-bottom: 30px;
+}
+
+/* Recording animation for stop button */
+.btn-stop.recording {
+    animation: pulse 1.5s infinite;
+}
+
+/* Upload section */
+.upload-section {
+    text-align: center;
+}
+
+.divider {
+    color: #95a5a6;
+    font-weight: 600;
+    margin-bottom: 15px;
+    position: relative;
+}
+
+.divider::before,
+.divider::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 45%;
+    height: 1px;
+    background-color: #e0e0e0;
+}
+
+.divider::before {
+    left: 0;
+}
+
+.divider::after {
+    right: 0;
+}
+
+.file-upload-label {
+    display: inline-block;
+    padding: 12px 30px;
+    background-color: #3498db;
+    color: white;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background-color 0.3s ease;
+}
+
+.file-upload-label:hover {
+    background-color: #2980b9;
+}
+
+.file-upload-label input[type="file"] {
+    display: none;
+}
+
+.file-info {
+    margin-top: 15px;
+    color: #7f8c8d;
+    font-size: 14px;
+}
+
+.file-info.has-file {
+    color: #27ae60;
+    font-weight: 500;
+}
+
+/* Audio specific */
+.audio-info {
+    color: #7f8c8d;
+    font-size: 14px;
+}
+
+#audioPlayer {
+    width: 100%;
+    margin-top: 10px;
+}
+
+/* Placeholder text for results */
+#results:empty::before {
+    content: "辨識結果將顯示在這裡...";
+}
+
+/* Responsive adjustments */
+@media (max-width: 600px) {
+    .controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .protocol-selector {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .protocol-selector select {
+        width: 100%;
+    }
+}

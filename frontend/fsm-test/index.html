@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FCM 狀態機測試</title>
+    <link rel="stylesheet" href="../common/styles.css">
+    <link rel="stylesheet" href="../common/dark-mode-styles.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="light-mode">
+    <div class="fsm-container">
+        <!-- 頂部標題列 -->
+        <header class="fsm-header">
+            <h1>🎯 FCM 狀態機測試</h1>
+            <div class="header-controls">
+                <button onclick="window.location.href='../'" class="back-btn" title="返回主頁">
+                    ← 返回
+                </button>
+                <select id="modeSelector" class="mode-selector">
+                    <option value="batch">批次處理</option>
+                    <option value="non-streaming">非串流實時</option>
+                    <option value="streaming">串流實時</option>
+                </select>
+                <button id="darkModeToggle" class="dark-mode-toggle">🌙</button>
+            </div>
+        </header>
+        
+        <!-- 主要內容區 -->
+        <main class="fsm-main">
+            <!-- 左側控制面板 -->
+            <aside class="left-panel">
+                <!-- 事件觸發器 -->
+                <section class="panel">
+                    <h2 class="panel-title">事件觸發</h2>
+                    <div class="event-grid">
+                        <button class="event-btn" data-event="START_LISTENING">開始監聽</button>
+                        <button class="event-btn" data-event="WAKE_WORD_TRIGGERED">喚醒詞</button>
+                        <button class="event-btn" data-event="START_RECORDING">開始錄音</button>
+                        <button class="event-btn" data-event="END_RECORDING">結束錄音</button>
+                        <button class="event-btn" data-event="START_STREAMING">開始串流</button>
+                        <button class="event-btn" data-event="END_STREAMING">結束串流</button>
+                        <button class="event-btn" data-event="UPLOAD_FILE">上傳檔案</button>
+                        <button class="event-btn" data-event="TRANSCRIPTION_DONE">轉譯完成</button>
+                        <button class="event-btn" data-event="RESET">重置</button>
+                        <button class="event-btn danger" data-event="ERROR">錯誤</button>
+                        <button class="event-btn" data-event="RECOVER">恢復</button>
+                        <button class="event-btn" data-event="TIMEOUT">超時</button>
+                    </div>
+                </section>
+                
+                <!-- 結束觸發原因 -->
+                <section class="panel">
+                    <h2 class="panel-title">結束觸發</h2>
+                    <div class="trigger-options">
+                        <label class="trigger-option">
+                            <input type="radio" name="endTrigger" value="VAD" checked>
+                            <span>VAD</span>
+                        </label>
+                        <label class="trigger-option">
+                            <input type="radio" name="endTrigger" value="BUTTON">
+                            <span>按鈕</span>
+                        </label>
+                        <label class="trigger-option">
+                            <input type="radio" name="endTrigger" value="VISION">
+                            <span>視覺</span>
+                        </label>
+                        <label class="trigger-option">
+                            <input type="radio" name="endTrigger" value="TIMEOUT">
+                            <span>超時</span>
+                        </label>
+                    </div>
+                </section>
+                
+                <!-- 測試場景 -->
+                <section class="panel">
+                    <h2 class="panel-title">測試場景</h2>
+                    <div class="scenario-grid">
+                        <button class="scenario-btn" data-scenario="batch-flow">批次處理流程</button>
+                        <button class="scenario-btn" data-scenario="wake-record-flow">喚醒→錄音流程</button>
+                        <button class="scenario-btn" data-scenario="streaming-flow">串流處理流程</button>
+                        <button class="scenario-btn" data-scenario="error-recovery">錯誤恢復流程</button>
+                        <button class="scenario-btn" data-scenario="vad-timeout">VAD超時流程</button>
+                    </div>
+                </section>
+            </aside>
+            
+            <!-- 中間狀態圖 -->
+            <section class="center-panel">
+                <div class="state-display">
+                    <div class="current-state" id="currentState">IDLE</div>
+                </div>
+                <div class="diagram-container" id="stateDiagram">
+                    <!-- SVG 狀態圖將在這裡動態生成 -->
+                </div>
+            </section>
+            
+            <!-- 右側信息面板 -->
+            <aside class="right-panel">
+                <!-- 狀態信息 -->
+                <section class="panel">
+                    <h2 class="panel-title">狀態信息</h2>
+                    <div class="state-info">
+                        <div class="info-item">
+                            <div class="info-label">持續時間</div>
+                            <div class="info-value"><span id="stateDuration">0</span>s</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">歷史數量</div>
+                            <div class="info-value" id="historyCount">0</div>
+                        </div>
+                    </div>
+                </section>
+                
+                <!-- 可用事件 -->
+                <section class="panel">
+                    <h2 class="panel-title">可用事件</h2>
+                    <div class="available-events" id="availableEvents">
+                        <!-- 動態生成 -->
+                    </div>
+                </section>
+                
+                <!-- 歷史記錄 -->
+                <section class="panel">
+                    <h2 class="panel-title">事件歷史</h2>
+                    <div class="history-controls">
+                        <button id="prevStep">◀</button>
+                        <button id="nextStep">▶</button>
+                        <button id="clearHistory">清除</button>
+                    </div>
+                    <div class="history-list" id="historyList">
+                        <!-- 動態生成 -->
+                    </div>
+                </section>
+                
+                <!-- Hook 日誌 -->
+                <section class="panel">
+                    <h2 class="panel-title">Hook 日誌</h2>
+                    <div class="hook-list" id="hookLogs">
+                        <!-- 動態生成 -->
+                    </div>
+                </section>
+            </aside>
+        </main>
+    </div>
+    
+    <!-- 進度提示 -->
+    <div class="progress-bar" id="scenarioProgress" style="display: none;">
+        <div class="progress-text">執行中...</div>
+        <div class="progress-track">
+            <div class="progress-fill"></div>
+        </div>
+    </div>
+    
+    <script src="fsm.js"></script>
+    <script src="diagram.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

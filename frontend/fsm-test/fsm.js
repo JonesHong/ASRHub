@@ -1,0 +1,283 @@
+// FCM 狀態定義
+const FCMState = {
+    IDLE: 'IDLE',
+    LISTENING: 'LISTENING',
+    WAKE_WORD_DETECTED: 'WAKE_WORD_DETECTED',
+    RECORDING: 'RECORDING',
+    STREAMING: 'STREAMING',
+    TRANSCRIBING: 'TRANSCRIBING',
+    PROCESSING: 'PROCESSING',
+    ERROR: 'ERROR',
+    RECOVERING: 'RECOVERING'
+};
+
+// FCM 事件定義
+const FCMEvent = {
+    START_LISTENING: 'START_LISTENING',
+    WAKE_WORD_TRIGGERED: 'WAKE_WORD_TRIGGERED',
+    START_RECORDING: 'START_RECORDING',
+    END_RECORDING: 'END_RECORDING',
+    BEGIN_TRANSCRIPTION: 'BEGIN_TRANSCRIPTION',
+    START_STREAMING: 'START_STREAMING',
+    END_STREAMING: 'END_STREAMING',
+    UPLOAD_FILE: 'UPLOAD_FILE',
+    TRANSCRIPTION_DONE: 'TRANSCRIPTION_DONE',
+    TIMEOUT: 'TIMEOUT',
+    RESET: 'RESET',
+    ERROR: 'ERROR',
+    RECOVER: 'RECOVER'
+};
+
+// 結束觸發原因
+const FCMEndTrigger = {
+    VAD: 'VAD',
+    BUTTON: 'BUTTON',
+    VISION: 'VISION',
+    TIMEOUT: 'TIMEOUT'
+};
+
+// 狀態描述
+const StateDescriptions = {
+    IDLE: '閒置等待 - 系統準備接收新的任務',
+    LISTENING: '等待喚醒詞 - 持續監聽音訊流中的喚醒詞',
+    WAKE_WORD_DETECTED: '喚醒後短暫過渡 - 準備開始錄音或串流',
+    RECORDING: '錄音中 - 收集音訊數據到緩衝區（非串流模式）',
+    STREAMING: '串流中 - 即時串流音訊到 ASR Provider（串流模式）',
+    TRANSCRIBING: '轉譯中 - 將錄音完成的音訊進行轉譯（非串流模式）',
+    PROCESSING: '批次處理中 - 處理上傳的音訊檔案',
+    ERROR: '錯誤狀態 - 系統發生錯誤',
+    RECOVERING: '恢復中 - 嘗試從錯誤中恢復'
+};
+
+// 策略模式基類
+class FCMStrategy {
+    transition(state, event, context = {}) {
+        // 通用錯誤處理
+        if (event === FCMEvent.ERROR && state !== FCMState.ERROR) {
+            return FCMState.ERROR;
+        }
+        if (state === FCMState.ERROR && event === FCMEvent.RECOVER) {
+            return FCMState.RECOVERING;
+        }
+        if (state === FCMState.RECOVERING && event === FCMEvent.RESET) {
+            return FCMState.IDLE;
+        }
+        if (event === FCMEvent.RESET) {
+            return FCMState.IDLE;
+        }
+        
+        return this.specificTransition(state, event, context);
+    }
+    
+    specificTransition(state, event, context) {
+        return state; // 預設不轉換
+    }
+    
+    getAvailableEvents(state) {
+        const common = [FCMEvent.RESET, FCMEvent.ERROR];
+        const specific = this.getSpecificEvents(state);
+        return [...new Set([...common, ...specific])];
+    }
+    
+    getSpecificEvents(state) {
+        return [];
+    }
+}
+
+// 批次模式策略
+class BatchModeStrategy extends FCMStrategy {
+    specificTransition(state, event, context) {
+        const transitions = {
+            [`${FCMState.IDLE}_${FCMEvent.UPLOAD_FILE}`]: FCMState.PROCESSING,
+            [`${FCMState.PROCESSING}_${FCMEvent.TRANSCRIPTION_DONE}`]: FCMState.IDLE,
+        };
+        
+        const key = `${state}_${event}`;
+        return transitions[key] || state;
+    }
+    
+    getSpecificEvents(state) {
+        switch(state) {
+            case FCMState.IDLE:
+                return [FCMEvent.UPLOAD_FILE];
+            case FCMState.PROCESSING:
+                return [FCMEvent.TRANSCRIPTION_DONE];
+            default:
+                return [];
+        }
+    }
+}
+
+// 非串流實時模式策略
+class NonStreamingStrategy extends FCMStrategy {
+    specificTransition(state, event, context) {
+        const transitions = {
+            [`${FCMState.IDLE}_${FCMEvent.START_LISTENING}`]: FCMState.LISTENING,
+            [`${FCMState.LISTENING}_${FCMEvent.WAKE_WORD_TRIGGERED}`]: FCMState.WAKE_WORD_DETECTED,
+            [`${FCMState.WAKE_WORD_DETECTED}_${FCMEvent.START_RECORDING}`]: FCMState.RECORDING,
+            [`${FCMState.RECORDING}_${FCMEvent.END_RECORDING}`]: FCMState.TRANSCRIBING,
+            [`${FCMState.TRANSCRIBING}_${FCMEvent.TRANSCRIPTION_DONE}`]: FCMState.IDLE,
+        };
+        
+        const key = `${state}_${event}`;
+        return transitions[key] || state;
+    }
+    
+    getSpecificEvents(state) {
+        switch(state) {
+            case FCMState.IDLE:
+                return [FCMEvent.START_LISTENING];
+            case FCMState.LISTENING:
+                return [FCMEvent.WAKE_WORD_TRIGGERED];
+            case FCMState.WAKE_WORD_DETECTED:
+                return [FCMEvent.START_RECORDING];
+            case FCMState.RECORDING:
+                return [FCMEvent.END_RECORDING];
+            case FCMState.TRANSCRIBING:
+                return [FCMEvent.TRANSCRIPTION_DONE];
+            default:
+                return [];
+        }
+    }
+}
+
+// 串流實時模式策略
+class StreamingStrategy extends FCMStrategy {
+    specificTransition(state, event, context) {
+        const transitions = {
+            [`${FCMState.IDLE}_${FCMEvent.START_LISTENING}`]: FCMState.LISTENING,
+            [`${FCMState.LISTENING}_${FCMEvent.WAKE_WORD_TRIGGERED}`]: FCMState.WAKE_WORD_DETECTED,
+            [`${FCMState.WAKE_WORD_DETECTED}_${FCMEvent.START_STREAMING}`]: FCMState.STREAMING,
+            [`${FCMState.STREAMING}_${FCMEvent.END_STREAMING}`]: FCMState.IDLE,
+        };
+        
+        const key = `${state}_${event}`;
+        return transitions[key] || state;
+    }
+    
+    getSpecificEvents(state) {
+        switch(state) {
+            case FCMState.IDLE:
+                return [FCMEvent.START_LISTENING];
+            case FCMState.LISTENING:
+                return [FCMEvent.WAKE_WORD_TRIGGERED];
+            case FCMState.WAKE_WORD_DETECTED:
+                return [FCMEvent.START_STREAMING];
+            case FCMState.STREAMING:
+                return [FCMEvent.END_STREAMING];
+            default:
+                return [];
+        }
+    }
+}
+
+// FCM 控制器
+class FCMController {
+    constructor(strategy) {
+        this.state = FCMState.IDLE;
+        this.strategy = strategy;
+        this.stateHooks = {
+            enter: {},
+            exit: {}
+        };
+        this.listeners = [];
+        this.stateStartTime = Date.now();
+    }
+    
+    addHook(state, hookType, callback) {
+        if (!this.stateHooks[hookType][state]) {
+            this.stateHooks[hookType][state] = [];
+        }
+        this.stateHooks[hookType][state].push(callback);
+    }
+    
+    addEventListener(callback) {
+        this.listeners.push(callback);
+    }
+    
+    removeEventListener(callback) {
+        const index = this.listeners.indexOf(callback);
+        if (index > -1) {
+            this.listeners.splice(index, 1);
+        }
+    }
+    
+    async handleEvent(event, context = {}) {
+        const oldState = this.state;
+        const newState = this.strategy.transition(oldState, event, context);
+        
+        if (newState !== oldState) {
+            // 執行退出 hooks
+            await this.runHooks(oldState, 'exit', { newState, event, context });
+            
+            // 更新狀態
+            this.state = newState;
+            this.stateStartTime = Date.now();
+            
+            // 執行進入 hooks
+            await this.runHooks(newState, 'enter', { oldState, event, context });
+            
+            // 通知監聽器
+            this.notifyListeners({
+                oldState,
+                newState,
+                event,
+                context,
+                timestamp: Date.now()
+            });
+        }
+        
+        return this.state;
+    }
+    
+    async runHooks(state, hookType, context) {
+        const hooks = this.stateHooks[hookType][state] || [];
+        for (const hook of hooks) {
+            try {
+                await hook(context);
+            } catch (error) {
+                console.error(`Hook error (${hookType} ${state}):`, error);
+            }
+        }
+    }
+    
+    notifyListeners(change) {
+        for (const listener of this.listeners) {
+            try {
+                listener(change);
+            } catch (error) {
+                console.error('Listener error:', error);
+            }
+        }
+    }
+    
+    getAvailableEvents() {
+        return this.strategy.getAvailableEvents(this.state);
+    }
+    
+    getStateDuration() {
+        return Date.now() - this.stateStartTime;
+    }
+    
+    setStrategy(strategy) {
+        this.strategy = strategy;
+    }
+    
+    reset() {
+        this.handleEvent(FCMEvent.RESET);
+    }
+}
+
+// 策略工廠
+function createStrategy(mode) {
+    switch(mode) {
+        case 'batch':
+            return new BatchModeStrategy();
+        case 'non-streaming':
+            return new NonStreamingStrategy();
+        case 'streaming':
+            return new StreamingStrategy();
+        default:
+            return new BatchModeStrategy();
+    }
+}

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASR Hub - 批次處理測試</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind CSS 配置 -->
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'fade-in': 'fadeIn 0.3s ease-in-out',
+                        'slide-in': 'slideIn 0.3s ease-out'
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <!-- Dark Mode Styles -->
+    <link rel="stylesheet" href="../common/dark-mode-styles.css">
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 min-h-screen transition-colors duration-300">
+    <div class="container mx-auto px-4 py-8 max-w-5xl">
+        <a href="../" class="inline-flex items-center text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-semibold mb-6 transition-colors">
+            <i class="fas fa-arrow-left mr-2"></i> 返回測試中心
+        </a>
+        
+        <h1 class="text-3xl font-bold text-gray-800 dark:text-gray-200 mb-8">批次處理測試</h1>
+        
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8">
+            <div class="flex items-center mb-6">
+                <div class="bg-gray-100 text-gray-800 px-4 py-2 rounded-full font-semibold">
+                    <i class="fas fa-calendar mr-2"></i>計劃中
+                </div>
+            </div>
+            
+            <p class="text-gray-600 dark:text-gray-400 mb-6">此功能正在規劃中。</p>
+            
+            <h3 class="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-4">批次處理測試將包含：</h3>
+            <ul class="space-y-3 text-gray-600 dark:text-gray-400 mb-8">
+                <li class="flex items-start">
+                    <i class="fas fa-folder-open text-blue-500 mt-1 mr-3"></i>
+                    <span>多檔案同時上傳</span>
+                </li>
+                <li class="flex items-start">
+                    <i class="fas fa-tasks text-green-500 mt-1 mr-3"></i>
+                    <span>並行處理能力</span>
+                </li>
+                <li class="flex items-start">
+                    <i class="fas fa-percentage text-purple-500 mt-1 mr-3"></i>
+                    <span>即時進度追蹤</span>
+                </li>
+                <li class="flex items-start">
+                    <i class="fas fa-file-export text-orange-500 mt-1 mr-3"></i>
+                    <span>批次結果匯出</span>
+                </li>
+                <li class="flex items-start">
+                    <i class="fas fa-redo text-red-500 mt-1 mr-3"></i>
+                    <span>錯誤重試機制</span>
+                </li>
+            </ul>
+            
+            <a href="../" class="inline-flex items-center px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white font-semibold rounded-lg transition-colors">
+                <i class="fas fa-home mr-2"></i> 返回測試中心
+            </a>
+        </div>
+    </div>
+    <script src="../common/theme.js"></script>
+</body>
+</html>
