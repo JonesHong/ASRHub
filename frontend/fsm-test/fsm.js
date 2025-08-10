@@ -5,6 +5,8 @@ const FCMState = {
     WAKE_WORD_DETECTED: 'WAKE_WORD_DETECTED',
     RECORDING: 'RECORDING',
     STREAMING: 'STREAMING',
+    UPLOADING: 'UPLOADING',
+    WAITING_TRANSCRIBE: 'WAITING_TRANSCRIBE',
     TRANSCRIBING: 'TRANSCRIBING',
     PROCESSING: 'PROCESSING',
     ERROR: 'ERROR',
@@ -17,10 +19,11 @@ const FCMEvent = {
     WAKE_WORD_TRIGGERED: 'WAKE_WORD_TRIGGERED',
     START_RECORDING: 'START_RECORDING',
     END_RECORDING: 'END_RECORDING',
-    BEGIN_TRANSCRIPTION: 'BEGIN_TRANSCRIPTION',
     START_STREAMING: 'START_STREAMING',
     END_STREAMING: 'END_STREAMING',
     UPLOAD_FILE: 'UPLOAD_FILE',
+    UPLOAD_DONE: 'UPLOAD_DONE',
+    BEGIN_TRANSCRIPTION: 'BEGIN_TRANSCRIPTION',
     TRANSCRIPTION_DONE: 'TRANSCRIPTION_DONE',
     TIMEOUT: 'TIMEOUT',
     RESET: 'RESET',
@@ -30,10 +33,9 @@ const FCMEvent = {
 
 // 結束觸發原因
 const FCMEndTrigger = {
-    VAD: 'VAD',
+    VAD_TIMEOUT: 'VAD_TIMEOUT',
     BUTTON: 'BUTTON',
-    VISION: 'VISION',
-    TIMEOUT: 'TIMEOUT'
+    VISION: 'VISION'
 };
 
 // 狀態描述
@@ -47,6 +49,38 @@ const StateDescriptions = {
     PROCESSING: '批次處理中 - 處理上傳的音訊檔案',
     ERROR: '錯誤狀態 - 系統發生錯誤',
     RECOVERING: '恢復中 - 嘗試從錯誤中恢復'
+};
+
+// 事件按鈕的顯示名稱
+const EventLabels = {
+    START_LISTENING: '開始監聽',
+    WAKE_WORD_TRIGGERED: '喚醒詞',
+    START_RECORDING: '開始錄音',
+    END_RECORDING: '結束錄音',
+    START_STREAMING: '開始串流',
+    END_STREAMING: '結束串流',
+    UPLOAD_FILE: '上傳檔案',
+    UPLOAD_DONE: '上傳完成',
+    BEGIN_TRANSCRIPTION: '開始轉譯',
+    TRANSCRIPTION_DONE: '轉譯完成',
+    TIMEOUT: '超時',
+    RESET: '重置',
+    ERROR: '錯誤',
+    RECOVER: '恢復'
+};
+
+// 觸發原因的顯示名稱
+const TriggerLabels = {
+    VAD_TIMEOUT: 'VAD超時',
+    BUTTON: '按鈕',
+    VISION: '視覺'
+};
+
+// 模式標籤
+const ModeLabels = {
+    'batch': '批次處理',
+    'non-streaming': '非串流實時',
+    'streaming': '串流實時'
 };
 
 // 策略模式基類
@@ -65,20 +99,20 @@ class FCMStrategy {
         if (event === FCMEvent.RESET) {
             return FCMState.IDLE;
         }
-        
+
         return this.specificTransition(state, event, context);
     }
-    
+
     specificTransition(state, event, context) {
         return state; // 預設不轉換
     }
-    
+
     getAvailableEvents(state) {
         const common = [FCMEvent.RESET, FCMEvent.ERROR];
         const specific = this.getSpecificEvents(state);
         return [...new Set([...common, ...specific])];
     }
-    
+
     getSpecificEvents(state) {
         return [];
     }
@@ -88,18 +122,24 @@ class FCMStrategy {
 class BatchModeStrategy extends FCMStrategy {
     specificTransition(state, event, context) {
         const transitions = {
-            [`${FCMState.IDLE}_${FCMEvent.UPLOAD_FILE}`]: FCMState.PROCESSING,
-            [`${FCMState.PROCESSING}_${FCMEvent.TRANSCRIPTION_DONE}`]: FCMState.IDLE,
+        [`${FCMState.IDLE}_${FCMEvent.UPLOAD_FILE}`]: FCMState.UPLOADING,
+        [`${FCMState.UPLOADING}_${FCMEvent.UPLOAD_DONE}`]: FCMState.WAITING_TRANSCRIBE,
+        [`${FCMState.WAITING_TRANSCRIBE}_${FCMEvent.BEGIN_TRANSCRIPTION}`]: FCMState.PROCESSING,
+        [`${FCMState.PROCESSING}_${FCMEvent.TRANSCRIPTION_DONE}`]: FCMState.IDLE,
         };
-        
+
         const key = `${state}_${event}`;
         return transitions[key] || state;
     }
-    
+
     getSpecificEvents(state) {
-        switch(state) {
+        switch (state) {
             case FCMState.IDLE:
                 return [FCMEvent.UPLOAD_FILE];
+            case FCMState.UPLOADING:
+                return [FCMEvent.UPLOAD_DONE];
+            case FCMState.WAITING_TRANSCRIBE:
+                return [FCMEvent.BEGIN_TRANSCRIPTION];
             case FCMState.PROCESSING:
                 return [FCMEvent.TRANSCRIPTION_DONE];
             default:
@@ -118,13 +158,13 @@ class NonStreamingStrategy extends FCMStrategy {
             [`${FCMState.RECORDING}_${FCMEvent.END_RECORDING}`]: FCMState.TRANSCRIBING,
             [`${FCMState.TRANSCRIBING}_${FCMEvent.TRANSCRIPTION_DONE}`]: FCMState.IDLE,
         };
-        
+
         const key = `${state}_${event}`;
         return transitions[key] || state;
     }
-    
+
     getSpecificEvents(state) {
-        switch(state) {
+        switch (state) {
             case FCMState.IDLE:
                 return [FCMEvent.START_LISTENING];
             case FCMState.LISTENING:
@@ -150,13 +190,13 @@ class StreamingStrategy extends FCMStrategy {
             [`${FCMState.WAKE_WORD_DETECTED}_${FCMEvent.START_STREAMING}`]: FCMState.STREAMING,
             [`${FCMState.STREAMING}_${FCMEvent.END_STREAMING}`]: FCMState.IDLE,
         };
-        
+
         const key = `${state}_${event}`;
         return transitions[key] || state;
     }
-    
+
     getSpecificEvents(state) {
-        switch(state) {
+        switch (state) {
             case FCMState.IDLE:
                 return [FCMEvent.START_LISTENING];
             case FCMState.LISTENING:
@@ -183,40 +223,40 @@ class FCMController {
         this.listeners = [];
         this.stateStartTime = Date.now();
     }
-    
+
     addHook(state, hookType, callback) {
         if (!this.stateHooks[hookType][state]) {
             this.stateHooks[hookType][state] = [];
         }
         this.stateHooks[hookType][state].push(callback);
     }
-    
+
     addEventListener(callback) {
         this.listeners.push(callback);
     }
-    
+
     removeEventListener(callback) {
         const index = this.listeners.indexOf(callback);
         if (index > -1) {
             this.listeners.splice(index, 1);
         }
     }
-    
+
     async handleEvent(event, context = {}) {
         const oldState = this.state;
         const newState = this.strategy.transition(oldState, event, context);
-        
+
         if (newState !== oldState) {
             // 執行退出 hooks
             await this.runHooks(oldState, 'exit', { newState, event, context });
-            
+
             // 更新狀態
             this.state = newState;
             this.stateStartTime = Date.now();
-            
+
             // 執行進入 hooks
             await this.runHooks(newState, 'enter', { oldState, event, context });
-            
+
             // 通知監聽器
             this.notifyListeners({
                 oldState,
@@ -226,10 +266,10 @@ class FCMController {
                 timestamp: Date.now()
             });
         }
-        
+
         return this.state;
     }
-    
+
     async runHooks(state, hookType, context) {
         const hooks = this.stateHooks[hookType][state] || [];
         for (const hook of hooks) {
@@ -240,7 +280,7 @@ class FCMController {
             }
         }
     }
-    
+
     notifyListeners(change) {
         for (const listener of this.listeners) {
             try {
@@ -250,19 +290,19 @@ class FCMController {
             }
         }
     }
-    
+
     getAvailableEvents() {
         return this.strategy.getAvailableEvents(this.state);
     }
-    
+
     getStateDuration() {
         return Date.now() - this.stateStartTime;
     }
-    
+
     setStrategy(strategy) {
         this.strategy = strategy;
     }
-    
+
     reset() {
         this.handleEvent(FCMEvent.RESET);
     }
@@ -270,7 +310,7 @@ class FCMController {
 
 // 策略工廠
 function createStrategy(mode) {
-    switch(mode) {
+    switch (mode) {
         case 'batch':
             return new BatchModeStrategy();
         case 'non-streaming':

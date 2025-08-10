@@ -217,6 +217,17 @@ body {
     color: white;
 }
 
+.event-btn.primary {
+    border-color: var(--primary);
+    color: var(--primary);
+    font-weight: 500;
+}
+
+.event-btn.primary:hover:not(:disabled) {
+    background: var(--primary);
+    color: white;
+}
+
 /* 觸發選項 */
 .trigger-options {
     display: grid;

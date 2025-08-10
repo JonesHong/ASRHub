@@ -33,42 +33,16 @@
                 <!-- 事件觸發器 -->
                 <section class="panel">
                     <h2 class="panel-title">事件觸發</h2>
-                    <div class="event-grid">
-                        <button class="event-btn" data-event="START_LISTENING">開始監聽</button>
-                        <button class="event-btn" data-event="WAKE_WORD_TRIGGERED">喚醒詞</button>
-                        <button class="event-btn" data-event="START_RECORDING">開始錄音</button>
-                        <button class="event-btn" data-event="END_RECORDING">結束錄音</button>
-                        <button class="event-btn" data-event="START_STREAMING">開始串流</button>
-                        <button class="event-btn" data-event="END_STREAMING">結束串流</button>
-                        <button class="event-btn" data-event="UPLOAD_FILE">上傳檔案</button>
-                        <button class="event-btn" data-event="TRANSCRIPTION_DONE">轉譯完成</button>
-                        <button class="event-btn" data-event="RESET">重置</button>
-                        <button class="event-btn danger" data-event="ERROR">錯誤</button>
-                        <button class="event-btn" data-event="RECOVER">恢復</button>
-                        <button class="event-btn" data-event="TIMEOUT">超時</button>
+                    <div class="event-grid" id="eventButtonsContainer">
+                        <!-- 動態生成的事件按鈕將在這裡 -->
                     </div>
                 </section>
                 
                 <!-- 結束觸發原因 -->
                 <section class="panel">
                     <h2 class="panel-title">結束觸發</h2>
-                    <div class="trigger-options">
-                        <label class="trigger-option">
-                            <input type="radio" name="endTrigger" value="VAD" checked>
-                            <span>VAD</span>
-                        </label>
-                        <label class="trigger-option">
-                            <input type="radio" name="endTrigger" value="BUTTON">
-                            <span>按鈕</span>
-                        </label>
-                        <label class="trigger-option">
-                            <input type="radio" name="endTrigger" value="VISION">
-                            <span>視覺</span>
-                        </label>
-                        <label class="trigger-option">
-                            <input type="radio" name="endTrigger" value="TIMEOUT">
-                            <span>超時</span>
-                        </label>
+                    <div class="trigger-options" id="endTriggerContainer">
+                        <!-- 動態生成的觸發選項將在這裡 -->
                     </div>
                 </section>
                 
@@ -80,7 +54,6 @@
                         <button class="scenario-btn" data-scenario="wake-record-flow">喚醒→錄音流程</button>
                         <button class="scenario-btn" data-scenario="streaming-flow">串流處理流程</button>
                         <button class="scenario-btn" data-scenario="error-recovery">錯誤恢復流程</button>
-                        <button class="scenario-btn" data-scenario="vad-timeout">VAD超時流程</button>
                     </div>
                 </section>
             </aside>
