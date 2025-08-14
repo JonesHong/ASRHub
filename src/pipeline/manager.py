@@ -26,15 +26,12 @@ class DefaultPipeline(PipelineBase):
     
     def __init__(self):
         """初始化 DefaultPipeline，使用 ConfigManager 獲取配置"""
+        # 先初始化基本屬性，但不調用 _initialize_operators
         self.config_manager = ConfigManager()
-        # 傳遞必要的配置給父類以通過驗證
-        pipeline_config = self.config_manager.pipeline
-        config_dict = {
-            "sample_rate": pipeline_config.default_sample_rate,
-            "channels": pipeline_config.channels,
-            "encoding": pipeline_config.encoding,
-            "buffer_size": pipeline_config.buffer_size
-        }
+        self.config = self.config_manager.pipeline
+        self.logger = logger
+        self.operators: List[OperatorBase] = []
+        self._running = False
         
         # 手動設置 encoding 格式對應
         encoding_map = {
@@ -44,17 +41,22 @@ class DefaultPipeline(PipelineBase):
             'int32': AudioFormat.INT32,
             'float32': AudioFormat.FLOAT32,
         }
+        
+        # 從配置管理器獲取 pipeline 配置
+        pipeline_config = self.config_manager.pipeline
         audio_format = encoding_map.get(pipeline_config.encoding, AudioFormat.INT16)
         
-        # 先設置 input_format
+        # 設置 input_format
         self.input_format = AudioMetadata(
             sample_rate=pipeline_config.default_sample_rate,
             channels=pipeline_config.channels,
             format=audio_format
         )
         
-        super().__init__(config_dict)
         self.name = "default"  # 設置 Pipeline 名稱
+        
+        # 現在初始化 operators
+        self._initialize_operators()
     
     def _get_audio_format_from_encoding(self, encoding: str) -> AudioFormat:
         """從編碼字符串獲取 AudioFormat"""
@@ -80,13 +82,21 @@ class DefaultPipeline(PipelineBase):
         
         # VAD
         if hasattr(operators_config, 'vad') and operators_config.vad.enabled:
-            from src.pipeline.operators.vad.silero_vad import SileroVADOperator
-            planned_operators.append(('vad', SileroVADOperator()))
+            try:
+                from src.pipeline.operators.vad.silero_vad import SileroVADOperator
+                planned_operators.append(('vad', SileroVADOperator()))
+            except ImportError as e:
+                self.logger.warning(f"無法載入 VAD operator：{e}")
+                self.logger.info("跳過 VAD operator")
         
         # Wake Word
         if hasattr(operators_config, 'wakeword') and operators_config.wakeword.enabled:
-            from src.pipeline.operators.wakeword.openwakeword import OpenWakeWordOperator
-            planned_operators.append(('wakeword', OpenWakeWordOperator()))
+            try:
+                from src.pipeline.operators.wakeword.openwakeword import OpenWakeWordOperator
+                planned_operators.append(('wakeword', OpenWakeWordOperator()))
+            except ImportError as e:
+                self.logger.warning(f"無法載入 wakeword operator：{e}")
+                self.logger.info("跳過 wakeword operator")
         
         # Recording
         if hasattr(operators_config, 'recording') and operators_config.recording.enabled:

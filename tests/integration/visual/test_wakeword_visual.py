@@ -326,6 +326,10 @@ class WakeWordIntegrationTester:
                 current_time = latest_data['timestamp']
                 threshold = latest_data.get('threshold', 0.5)
                 
+                # 更新喚醒詞檢測圖表
+                if hasattr(self.visualization, 'update_wakeword_plot'):
+                    self.visualization.update_wakeword_plot(current_score, current_time, threshold)
+                
                 # 更新統計文字
                 if hasattr(self.visualization, 'texts') and 'stats' in self.visualization.texts:
                     runtime = (datetime.now() - self.stats["start_time"]).total_seconds() if self.stats["start_time"] else 0

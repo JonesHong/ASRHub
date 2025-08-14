@@ -461,8 +461,8 @@ class ProviderManager:
         """
         使用 pretty-loguru 記錄所有池的指標
         """
-        # 創建樹狀結構顯示所有 Provider
-        tree = Tree("🔧 ASR Provider Manager Status")
+        # 使用 logger.tree 顯示 Provider 樹狀結構
+        tree_data = {}
         
         # 添加每個 Provider 的狀態
         for provider_type in self.provider_registry.keys():
@@ -474,66 +474,68 @@ class ProviderManager:
             if not provider_config.enabled:
                 continue
             
-            # 創建 Provider 節點
+            # 創建 Provider 節點數據
             if self.pool_enabled.get(provider_type, False):
                 pool = self.provider_pools.get(provider_type)
                 if pool:
                     status_emoji = "🟢" if pool.stats.utilization_rate < 0.8 else "🟡" if pool.stats.utilization_rate < 0.9 else "🔴"
-                    provider_node = tree.add(f"{status_emoji} {provider_type.upper()} (Pooled)")
-                    provider_node.add(f"Pool Size: {pool.stats.current_size}/{pool.max_size}")
-                    provider_node.add(f"In Use: {pool.stats.in_use_count}")
-                    provider_node.add(f"Available: {pool.stats.idle_count}")
-                    provider_node.add(f"Utilization: {pool.stats.utilization_rate:.2%}")
-                    provider_node.add(f"Success Rate: {pool.stats.success_rate:.2%}")
+                    tree_data[f"{status_emoji} {provider_type.upper()} (Pooled)"] = {
+                        "Pool Size": f"{pool.stats.current_size}/{pool.max_size}",
+                        "In Use": pool.stats.in_use_count,
+                        "Available": pool.stats.idle_count,
+                        "Utilization": f"{pool.stats.utilization_rate:.2%}",
+                        "Success Rate": f"{pool.stats.success_rate:.2%}"
+                    }
             else:
-                provider_node = tree.add(f"🔵 {provider_type.upper()} (Singleton)")
-                provider_node.add("Using single instance mode")
+                tree_data[f"🔵 {provider_type.upper()} (Singleton)"] = {
+                    "Mode": "Single instance mode",
+                    "Status": "Active"
+                }
         
-        # 顯示樹狀結構 - 使用 info 輸出
-        from rich.console import Console
-        from io import StringIO
+        # 使用 logger.tree 顯示樹狀結構
+        if tree_data:
+            self.logger.tree("ASR Provider Manager Status", tree_data)
         
-        console = Console(file=StringIO(), force_terminal=True)
-        console.print(tree)
-        tree_output = console.file.getvalue()
+        # 準備表格數據
+        table_data = []
+        headers = ["Provider", "Mode", "Size", "Utilization", "Requests", "Success Rate"]
         
-        self.logger.info(f"Provider Status:\n{tree_output}")
-        
-        # 創建總覽表格
-        table = Table(title="Provider Pool Summary")
-        table.add_column("Provider", style="cyan")
-        table.add_column("Mode", style="yellow")
-        table.add_column("Size", style="green")
-        table.add_column("Utilization", style="magenta")
-        table.add_column("Requests", style="blue")
-        table.add_column("Success Rate", style="green")
-        
-        for provider_type, pool in self.provider_pools.items():
+        for provider_type in self.provider_registry.keys():
+            if not hasattr(self.config_manager.providers, provider_type):
+                continue
+            provider_config = getattr(self.config_manager.providers, provider_type)
+            if not provider_config.enabled:
+                continue
+                
             if self.pool_enabled.get(provider_type, False):
-                table.add_row(
-                    provider_type.upper(),
-                    "Pooled",
-                    f"{pool.stats.current_size}/{pool.max_size}",
-                    f"{pool.stats.utilization_rate:.2%}",
-                    str(pool.stats.total_requests),
-                    f"{pool.stats.success_rate:.2%}"
-                )
+                pool = self.provider_pools.get(provider_type)
+                if pool:
+                    table_data.append([
+                        provider_type.upper(),
+                        "Pooled",
+                        f"{pool.stats.current_size}/{pool.max_size}",
+                        f"{pool.stats.utilization_rate:.2%}",
+                        str(pool.stats.total_requests),
+                        f"{pool.stats.success_rate:.2%}"
+                    ])
             else:
-                table.add_row(
+                table_data.append([
                     provider_type.upper(),
                     "Singleton",
                     "1/1",
                     "N/A",
                     "N/A",
                     "N/A"
-                )
+                ])
         
-        # 顯示表格 - 使用上面已經導入的 Console
-        console.file = StringIO()
-        console.print(table)
-        table_output = console.file.getvalue()
-        
-        self.logger.info(f"Pool Summary:\n{table_output}")
+        # 使用 logger.table 顯示表格
+        if table_data:
+            self.logger.table(
+                "Provider Pool Summary",
+                headers,
+                table_data,
+                style="box"
+            )
     
     async def health_check(self) -> Dict[str, Any]:
         """

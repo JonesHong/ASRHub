@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from src.utils.logger import logger
 from src.core.exceptions import ProviderError, ModelError
+from src.config.manager import ConfigManager
 
 
 @dataclass
@@ -59,31 +60,60 @@ class ProviderBase(ABC):
     所有 ASR 提供者（Whisper、FunASR、Vosk 等）都需要繼承此類別
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, provider_name: Optional[str] = None):
         """
         初始化 Provider
         
         Args:
-            config: Provider 配置
+            provider_name: Provider 名稱，如果不提供則使用類別名稱推測
         """
-        self.config = config
         self.logger = logger
         self.name = self.__class__.__name__
         self._initialized = False
         
-        # 模型相關配置
-        self.model_name = config.get("model", "default")
-        self.model_path = config.get("model_path")
-        self.device = config.get("device", "cpu")
-        self.compute_type = config.get("compute_type", "default")
+        # 初始化 ConfigManager
+        self.config_manager = ConfigManager()
         
-        # 語言設定
-        self.language = config.get("language", "auto")
-        self.supported_languages = []
+        # 決定 provider 名稱
+        if provider_name:
+            self.provider_key = provider_name
+        else:
+            # 從類別名稱推測，例如 WhisperProvider -> whisper
+            self.provider_key = self.name.replace('Provider', '').lower()
         
-        # 音訊參數
-        self.sample_rate = config.get("sample_rate", 16000)
-        self.channels = config.get("channels", 1)
+        # 獲取對應的配置
+        try:
+            provider_config = getattr(self.config_manager.providers, self.provider_key)
+            
+            # 模型相關配置 - 支援不同 provider 的屬性名稱
+            # Whisper 使用 model_size，其他可能使用 model
+            if hasattr(provider_config, 'model_size'):
+                self.model_name = provider_config.model_size
+            elif hasattr(provider_config, 'model'):
+                self.model_name = provider_config.model
+            else:
+                self.model_name = "unknown"
+            
+            self.model_path = provider_config.model_path
+            self.device = provider_config.device
+            
+            # 支援可選的 compute_type
+            if hasattr(provider_config, 'compute_type'):
+                self.compute_type = provider_config.compute_type
+            else:
+                self.compute_type = "default"
+            
+            # 語言設定
+            self.language = provider_config.language
+            self.supported_languages = []
+            
+            # 音訊參數 - 從 stream 配置獲取
+            self.sample_rate = self.config_manager.stream.sample_rate
+            self.channels = self.config_manager.stream.channels
+            
+        except AttributeError as e:
+            self.logger.error(f"無法獲取 {self.provider_key} 的配置：{e}")
+            raise ProviderError(f"Provider {self.provider_key} 配置不存在")
     
     async def initialize(self):
         """
@@ -271,21 +301,3 @@ class ProviderBase(ABC):
         except Exception as e:
             self.logger.warning(f"模型預熱失敗：{e}")
     
-    def update_config(self, config: Dict[str, Any]):
-        """
-        更新 Provider 配置
-        
-        Args:
-            config: 新的配置
-        """
-        self.config.update(config)
-        
-        # 更新相關屬性
-        if "language" in config:
-            self.language = config["language"]
-        if "sample_rate" in config:
-            self.sample_rate = config["sample_rate"]
-        if "channels" in config:
-            self.channels = config["channels"]
-        
-        self.logger.info(f"{self.name} 配置已更新")

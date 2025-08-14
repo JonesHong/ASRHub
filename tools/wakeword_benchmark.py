@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from src.pipeline.operators.wakeword import OpenWakeWordOperator
 from src.utils.logger import logger
+from src.config.manager import ConfigManager
 
 
 class WakeWordBenchmark:
@@ -27,7 +28,10 @@ class WakeWordBenchmark:
     
     def __init__(self):
         """初始化基準測試器"""
-        self.        
+        self.config_manager = ConfigManager()
+        self.logger = logger
+        
+        # 從配置讀取音訊參數        
         # 測試配置
         self.test_configs = [
             {"threshold": 0.3, "name": "低閾值 (0.3)"},
@@ -39,7 +43,7 @@ class WakeWordBenchmark:
         self.results: List[Dict[str, Any]] = []
         
         # 模擬音訊資料（用於效能測試）
-        self.sample_rate = 16000
+        self.sample_rate = self.config_manager.pipeline.default_sample_rate
         self.chunk_size = 1280
         self.test_duration = 30  # 秒
     

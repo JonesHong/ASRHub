@@ -267,6 +267,18 @@ class SocketIOStreamManager:
         buffer = self.stream_buffers[session_id]
         queue = self.stream_queues.get(session_id)
         
+        # 導入枚舉類型
+        from src.models.audio import AudioFormat, AudioEncoding
+        
+        # 確保 format 和 encoding 是枚舉類型
+        format_enum = buffer.format
+        if isinstance(format_enum, str):
+            format_enum = AudioFormat(format_enum)
+            
+        encoding_enum = buffer.encoding
+        if isinstance(encoding_enum, str):
+            encoding_enum = AudioEncoding(encoding_enum)
+        
         return {
             "session_id": session_id,
             "buffer_size": buffer.get_buffer_size(),
@@ -278,8 +290,8 @@ class SocketIOStreamManager:
             "audio_params": {
                 "sample_rate": buffer.sample_rate,
                 "channels": buffer.channels,
-                "format": buffer.format,
-                "encoding": buffer.encoding,
+                "format": format_enum,
+                "encoding": encoding_enum,
                 "bits_per_sample": buffer.bits_per_sample
             }
         }

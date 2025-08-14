@@ -85,23 +85,30 @@ class PipelineValidator:
             result["errors"].append("Pipeline 缺少配置")
             return
         
-        # 檢查必要的配置項目
-        required_config_keys = ["sample_rate", "channels"]
-        for key in required_config_keys:
-            if key not in pipeline.config:
-                result["errors"].append(f"配置缺少必要項目：{key}")
+        # 獲取配置字典以便檢查
+        config_dict = pipeline.config.to_dict()
+        
+        # 檢查必要的配置項目（映射到實際的配置名稱）
+        required_checks = {
+            "default_sample_rate": "sample_rate",
+            "channels": "channels"
+        }
+        
+        for config_key, display_name in required_checks.items():
+            if not hasattr(pipeline.config, config_key):
+                result["errors"].append(f"配置缺少必要項目：{display_name}")
         
         # 檢查取樣率
-        if "sample_rate" in pipeline.config:
-            sample_rate = pipeline.config["sample_rate"]
+        if hasattr(pipeline.config, 'default_sample_rate'):
+            sample_rate = pipeline.config.default_sample_rate
             if sample_rate not in [8000, 16000, 22050, 44100, 48000]:
                 result["warnings"].append(
                     f"非標準取樣率：{sample_rate} Hz，可能影響處理效能"
                 )
         
         # 檢查聲道數
-        if "channels" in pipeline.config:
-            channels = pipeline.config["channels"]
+        if hasattr(pipeline.config, 'channels'):
+            channels = pipeline.config.channels
             if channels < 1 or channels > 8:
                 result["errors"].append(f"無效的聲道數：{channels}")
     
@@ -206,9 +213,9 @@ class PipelineValidator:
             config = pipeline.config
             
             # 檢查緩衝區大小與取樣率的關係
-            if "buffer_size" in config and "sample_rate" in config:
-                buffer_size = config["buffer_size"]
-                sample_rate = config["sample_rate"]
+            if hasattr(config, 'buffer_size') and hasattr(config, 'default_sample_rate'):
+                buffer_size = config.buffer_size
+                sample_rate = config.default_sample_rate
                 
                 # 計算緩衝區時長
                 buffer_duration = buffer_size / (sample_rate * 2)  # 假設 16-bit

@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional, AsyncGenerator
 from src.utils.logger import logger
 from src.core.exceptions import PipelineError
 from src.pipeline.operators.base import OperatorBase
+from src.config.manager import ConfigManager
 
 
 class PipelineBase(ABC):
@@ -16,14 +17,12 @@ class PipelineBase(ABC):
     管理一系列 Operators 的執行順序和資料流
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self):
         """
         初始化 Pipeline
-        
-        Args:
-            config: Pipeline 配置
         """
-        self.config = config
+        self.config_manager = ConfigManager()
+        self.config = self.config_manager.pipeline  # 這是 PipelineSchema 實例，不是字典
         self.logger = logger
         self.operators: List[OperatorBase] = []
         self._running = False
@@ -85,13 +84,33 @@ class PipelineBase(ABC):
         try:
             # 依序通過所有 operators
             processed_data = audio_data
-            for operator in self.operators:
-                processed_data = await operator.process(processed_data, **kwargs)
-                
-                # 如果 operator 返回 None，表示資料被過濾掉
-                if processed_data is None:
-                    self.logger.debug(f"資料被 {operator.__class__.__name__} 過濾")
-                    return None
+            
+            # 如果有多個 operators，使用進度條
+            if len(self.operators) > 1 and kwargs.get('show_progress', True):
+                # 使用 logger.progress.track_list 正確的方式顯示處理進度
+                for i, operator in enumerate(self.logger.progress.track_list(
+                    self.operators, 
+                    description="Pipeline processing"
+                )):
+                    # 顯示當前處理的 operator
+                    op_name = operator.__class__.__name__
+                    self.logger.debug(f"Processing: {op_name}")
+                    
+                    processed_data = await operator.process(processed_data, **kwargs)
+                    
+                    # 如果 operator 返回 None，表示資料被過濾掉
+                    if processed_data is None:
+                        self.logger.debug(f"資料被 {op_name} 過濾")
+                        return None
+            else:
+                # 單個 operator 或不顯示進度條
+                for operator in self.operators:
+                    processed_data = await operator.process(processed_data, **kwargs)
+                    
+                    # 如果 operator 返回 None，表示資料被過濾掉
+                    if processed_data is None:
+                        self.logger.debug(f"資料被 {operator.__class__.__name__} 過濾")
+                        return None
             
             return processed_data
             
@@ -168,7 +187,7 @@ class PipelineBase(ABC):
     
     def get_config(self) -> Dict[str, Any]:
         """獲取 Pipeline 配置"""
-        return self.config.copy()
+        return self.config.to_dict()
     
     def update_config(self, config: Dict[str, Any]):
         """
@@ -177,7 +196,9 @@ class PipelineBase(ABC):
         Args:
             config: 新的配置
         """
-        self.config.update(config)
+        # 重新從 ConfigManager 獲取配置
+        self.config_manager = ConfigManager()
+        self.config = self.config_manager.pipeline
         self.logger.info("Pipeline 配置已更新")
         
         # 通知所有 operators 配置已更新
@@ -202,7 +223,7 @@ class PipelineBase(ABC):
                 }
                 for op in self.operators
             ],
-            "config": self.config
+            "config": self.config.to_dict()
         }
     
     def is_running(self) -> bool:

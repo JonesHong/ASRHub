@@ -21,7 +21,7 @@ class StateDiagram {
             'non-streaming': {
                 IDLE: { x: 100, y: 100 },
                 LISTENING: { x: 300, y: 100 },
-                WAKE_WORD_DETECTED: { x: 500, y: 100 },
+                ACTIVATED: { x: 500, y: 100 },
                 RECORDING: { x: 500, y: 250 },
                 TRANSCRIBING: { x: 300, y: 250 },
                 ERROR: { x: 100, y: 400 },
@@ -30,7 +30,7 @@ class StateDiagram {
             streaming: {
                 IDLE: { x: 100, y: 100 },
                 LISTENING: { x: 300, y: 100 },
-                WAKE_WORD_DETECTED: { x: 500, y: 100 },
+                ACTIVATED: { x: 500, y: 100 },
                 STREAMING: { x: 500, y: 250 },
                 ERROR: { x: 100, y: 400 },
                 RECOVERING: { x: 300, y: 400 }
@@ -60,8 +60,8 @@ class StateDiagram {
 
             'non-streaming': [
                 { from: 'IDLE', to: 'LISTENING', event: 'START_LISTENING' },
-                { from: 'LISTENING', to: 'WAKE_WORD_DETECTED', event: 'WAKE_WORD_TRIGGERED' },
-                { from: 'WAKE_WORD_DETECTED', to: 'RECORDING', event: 'START_RECORDING' },
+                { from: 'LISTENING', to: 'ACTIVATED', event: 'WAKE_TRIGGERED' },
+                { from: 'ACTIVATED', to: 'RECORDING', event: 'START_RECORDING' },
                 { from: 'RECORDING', to: 'TRANSCRIBING', event: 'END_RECORDING' },
                 { from: 'TRANSCRIBING', to: 'IDLE', event: 'TRANSCRIPTION_DONE' },
                 { from: 'LISTENING', to: 'ERROR', event: 'ERROR' },
@@ -71,8 +71,8 @@ class StateDiagram {
             ],
             streaming: [
                 { from: 'IDLE', to: 'LISTENING', event: 'START_LISTENING' },
-                { from: 'LISTENING', to: 'WAKE_WORD_DETECTED', event: 'WAKE_WORD_TRIGGERED' },
-                { from: 'WAKE_WORD_DETECTED', to: 'STREAMING', event: 'START_STREAMING' },
+                { from: 'LISTENING', to: 'ACTIVATED', event: 'WAKE_TRIGGERED' },
+                { from: 'ACTIVATED', to: 'STREAMING', event: 'START_STREAMING' },
                 { from: 'STREAMING', to: 'IDLE', event: 'END_STREAMING' },
                 { from: 'LISTENING', to: 'ERROR', event: 'ERROR' },
                 { from: 'STREAMING', to: 'ERROR', event: 'ERROR' },

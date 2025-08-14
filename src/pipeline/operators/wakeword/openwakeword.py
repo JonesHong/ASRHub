@@ -37,7 +37,7 @@ class OpenWakeWordOperator(OperatorBase):
         初始化 OpenWakeWord Operator
         """
         # 從 ConfigManager 讀取配置
-        config_manager = ConfigManager()
+        self.config_manager = ConfigManager()
         config = {
             "enabled": True,
             "model_path": None,
@@ -46,9 +46,9 @@ class OpenWakeWordOperator(OperatorBase):
         }
         
         # 從配置中獲取 wakeword 相關設定
-        if hasattr(config_manager, 'wake_word_detection') and config_manager.wake_word_detection.enabled:
+        if hasattr(self.config_manager, 'wake_word_detection') and self.config_manager.wake_word_detection.enabled:
             # 找到 openWakeWord 配置
-            for model_config in config_manager.wake_word_detection.models:
+            for model_config in self.config_manager.wake_word_detection.models:
                 if model_config.type == "openWakeWord":
                     config = {
                         "enabled": model_config.enabled,
@@ -61,7 +61,7 @@ class OpenWakeWordOperator(OperatorBase):
                     self.hf_filename = model_config.hf_filename
                     self.hf_token = model_config.hf_token
                     # 從 wake_word_detection 層級獲取 cooldown
-                    self.detection_cooldown = config_manager.wake_word_detection.cooldown
+                    self.detection_cooldown = self.config_manager.wake_word_detection.cooldown
                     break
         else:
             # 如果沒有配置，使用預設值
@@ -82,7 +82,7 @@ class OpenWakeWordOperator(OperatorBase):
         
         # 音訊處理參數
         self.chunk_size = 1280  # openWakeWord 需要的固定大小
-        self.sample_rate = 16000  # 模型需要 16kHz
+        self.sample_rate = self.config_manager.pipeline.default_sample_rate  # 從配置讀取採樣率
         
         # 狀態管理
         self.state = defaultdict(partial(deque, maxlen=60))  # 60 幀的評分佇列
@@ -375,8 +375,8 @@ class OpenWakeWordOperator(OperatorBase):
             需要的音頻格式
         """
         return AudioMetadata(
-            sample_rate=16000,  # OpenWakeWord 需要 16kHz
-            channels=1,         # 只支援單聲道
+            sample_rate=self.config_manager.pipeline.default_sample_rate,  # 從配置讀取
+            channels=self.config_manager.pipeline.channels,               # 從配置讀取
             format=AudioFormat.INT16  # 接受 int16，內部會轉換
         )
     

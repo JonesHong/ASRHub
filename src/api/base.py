@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, AsyncGenerator
 from src.utils.logger import logger
 from src.core.session_manager import SessionManager
 from src.core.exceptions import APIError
+from src.config.manager import ConfigManager
 
 
 class APIResponse:
@@ -50,15 +51,14 @@ class APIBase(ABC):
     所有 API 實作（HTTP SSE、WebSocket、gRPC 等）都需要繼承此類別
     """
     
-    def __init__(self, config: Dict[str, Any], session_manager: SessionManager):
+    def __init__(self, session_manager: SessionManager):
         """
         初始化 API
         
         Args:
-            config: API 配置
             session_manager: Session 管理器
         """
-        self.config = config
+        self.config_manager = ConfigManager()
         self.session_manager = session_manager
         self.logger = logger
         self._running = False

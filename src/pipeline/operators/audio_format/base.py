@@ -30,11 +30,11 @@ class AudioFormatOperatorBase(BufferingOperator):
         """
         # 獲取配置
         from src.config.manager import ConfigManager
-        config_manager = ConfigManager()
+        self.config_manager = ConfigManager()
         
         # 取得 buffer size
         try:
-            buffer_size = config_manager.pipeline.buffer_size
+            buffer_size = self.config_manager.pipeline.buffer_size
         except AttributeError:
             buffer_size = 8192
         
@@ -49,21 +49,22 @@ class AudioFormatOperatorBase(BufferingOperator):
         else:
             # 從配置中取得
             try:
-                if hasattr(config_manager.pipeline, 'audio_format'):
-                    af_config = config_manager.pipeline.audio_format
+                if hasattr(self.config_manager.pipeline, 'audio_format'):
+                    af_config = self.config_manager.pipeline.audio_format
                     self.target_metadata = AudioMetadata(
                         sample_rate=af_config.sample_rate,
                         channels=af_config.channels,
                         format=AudioFormat(af_config.format)
                     )
                 else:
-                    # 使用預設值
+                    # 使用 pipeline 配置作為預設值
                     self.target_metadata = AudioMetadata(
-                        sample_rate=16000,
-                        channels=1,
+                        sample_rate=self.config_manager.pipeline.default_sample_rate,
+                        channels=self.config_manager.pipeline.channels,
                         format=AudioFormat.INT16
                     )
             except AttributeError:
+                # 最後的備用預設值
                 self.target_metadata = AudioMetadata(
                     sample_rate=16000,
                     channels=1,
@@ -72,8 +73,8 @@ class AudioFormatOperatorBase(BufferingOperator):
         
         # 轉換品質設定
         try:
-            if hasattr(config_manager.pipeline, 'audio_format') and hasattr(config_manager.pipeline.audio_format, 'quality'):
-                self.quality = config_manager.pipeline.audio_format.quality
+            if hasattr(self.config_manager.pipeline, 'audio_format') and hasattr(self.config_manager.pipeline.audio_format, 'quality'):
+                self.quality = self.config_manager.pipeline.audio_format.quality
             else:
                 self.quality = 'medium'
         except AttributeError:

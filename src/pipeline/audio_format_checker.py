@@ -7,7 +7,6 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
 from src.models.audio import AudioChunk, AudioFormat, AudioEncoding
-from src.models.audio_metadata import AudioMetadata
 from src.pipeline.operators.base import OperatorBase
 from src.utils.logger import logger
 
@@ -35,37 +34,37 @@ class FormatRequirement:
             return False
         return True
     
-    def get_conversion_target(self, audio_chunk: AudioChunk) -> Optional[AudioMetadata]:
+    def get_conversion_target(self, audio_chunk: AudioChunk) -> Optional[Dict[str, Any]]:
         """獲取轉換目標格式"""
         if self.is_satisfied_by(audio_chunk):
             return None
         
         # 選擇最接近的目標格式
-        target = AudioMetadata(
-            sample_rate=audio_chunk.sample_rate,
-            channels=audio_chunk.channels,
-            format=audio_chunk.format,
-            encoding=audio_chunk.encoding,
-            bits_per_sample=audio_chunk.bits_per_sample
-        )
+        target = {
+            'sample_rate': audio_chunk.sample_rate,
+            'channels': audio_chunk.channels,
+            'format': audio_chunk.format,
+            'encoding': audio_chunk.encoding,
+            'bits_per_sample': audio_chunk.bits_per_sample
+        }
         
         # 優先級：保持原格式 > 選擇第一個支援的格式
         if self.sample_rates and audio_chunk.sample_rate not in self.sample_rates:
             # 選擇最接近的取樣率
-            target.sample_rate = min(self.sample_rates, 
+            target['sample_rate'] = min(self.sample_rates, 
                                     key=lambda x: abs(x - audio_chunk.sample_rate))
         
         if self.channels and audio_chunk.channels not in self.channels:
-            target.channels = self.channels[0]
+            target['channels'] = self.channels[0]
         
         if self.formats and audio_chunk.format not in self.formats:
-            target.format = self.formats[0]
+            target['format'] = self.formats[0]
         
         if self.encodings and audio_chunk.encoding not in self.encodings:
-            target.encoding = self.encodings[0]
+            target['encoding'] = self.encodings[0]
         
         if self.bits_per_sample and audio_chunk.bits_per_sample not in self.bits_per_sample:
-            target.bits_per_sample = self.bits_per_sample[0]
+            target['bits_per_sample'] = self.bits_per_sample[0]
         
         return target
 

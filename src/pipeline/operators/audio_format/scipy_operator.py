@@ -64,6 +64,7 @@ class ScipyAudioFormatOperator(AudioFormatOperatorBase):
             
             # 處理採樣率轉換
             if from_metadata.sample_rate != to_metadata.sample_rate:
+                logger.info(f"Resampling audio from {from_metadata.sample_rate}Hz to {to_metadata.sample_rate}Hz")
                 samples = self._resample(
                     samples,
                     from_metadata.sample_rate,

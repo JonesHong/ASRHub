@@ -34,13 +34,11 @@ class SSEServer(APIBase):
             provider_manager: Provider 管理器（可選）
             pipeline_manager: Pipeline 管理器（可選）
         """
-        # 從 ConfigManager 獲取配置
-        config_manager = ConfigManager()
-        sse_config = config_manager.api.http_sse
+        # 只傳遞 session_manager 給父類
+        super().__init__(session_manager)
         
-        # 轉換為字典以兼容父類
-        config_dict = sse_config.to_dict()
-        super().__init__(config_dict, session_manager)
+        # 從 ConfigManager 獲取配置
+        sse_config = self.config_manager.api.http_sse
         
         self.app = FastAPI(title="ASR Hub SSE API", version="0.1.0")
         self.logger = logger
@@ -315,7 +313,7 @@ class SSEServer(APIBase):
                         from src.providers.manager import ProviderManager
                         from src.config.manager import ConfigManager
                         config_manager = ConfigManager()
-                        provider_config = config_manager.get_config()['providers']
+                        provider_config = config_manager.providers
                         provider_manager = ProviderManager(provider_config)
                         await provider_manager.initialize()
                     
@@ -348,16 +346,16 @@ class SSEServer(APIBase):
                                         # 需要轉換
                                         audio_data = convert_audio_file_to_pcm(
                                             audio_file_data,
-                                            target_sample_rate=16000,
-                                            target_channels=1,
+                                            target_sample_rate=self.config_manager.stream.sample_rate,
+                                            target_channels=self.config_manager.stream.channels,
                                             source_format='wav'
                                         )
                             except Exception:
                                 # 如果 wave 模組無法處理，使用通用轉換
                                 audio_data = convert_audio_file_to_pcm(
                                     audio_file_data,
-                                    target_sample_rate=16000,
-                                    target_channels=1,
+                                    target_sample_rate=self.config_manager.stream.sample_rate,
+                                    target_channels=self.config_manager.stream.channels,
                                     source_format='wav'
                                 )
                         elif file_ext == 'pcm':
@@ -367,8 +365,8 @@ class SSEServer(APIBase):
                             # 轉換為 PCM 格式
                             audio_data = convert_audio_file_to_pcm(
                                 audio_file_data,
-                                target_sample_rate=16000,
-                                target_channels=1,
+                                target_sample_rate=self.config_manager.stream.sample_rate,
+                                target_channels=self.config_manager.stream.channels,
                                 source_format=file_ext
                             )
                     except Exception as e:
@@ -591,14 +589,14 @@ class SSEServer(APIBase):
                     
                     if audio_format == 'webm':
                         # WebM 特別處理
-                        pcm_data = convert_webm_to_pcm(complete_audio, sample_rate=16000, channels=1)
+                        pcm_data = convert_webm_to_pcm(complete_audio, sample_rate=self.config_manager.stream.sample_rate, channels=self.config_manager.stream.channels)
                     else:
                         # 其他格式使用通用轉換
                         from src.utils.audio_converter import convert_audio_file_to_pcm
                         pcm_data = convert_audio_file_to_pcm(
                             complete_audio,
-                            target_sample_rate=16000,
-                            target_channels=1,
+                            target_sample_rate=self.config_manager.stream.sample_rate,
+                            target_channels=self.config_manager.stream.channels,
                             source_format=audio_format
                         )
                     
@@ -616,11 +614,14 @@ class SSEServer(APIBase):
                 self.logger.info(f"音頻已是 PCM 格式，大小: {len(pcm_data)} bytes")
             
             # 建立 AudioChunk
+            from src.models.audio import AudioEncoding
             audio_chunk = AudioChunk(
                 data=pcm_data,
-                sample_rate=16000,
-                channels=1,
-                format=AudioFormat.PCM
+                sample_rate=self.config_manager.stream.sample_rate,
+                channels=self.config_manager.stream.channels,
+                format=AudioFormat.PCM,
+                encoding=AudioEncoding.LINEAR16,  # PCM 使用 LINEAR16 編碼
+                bits_per_sample=16  # 16 位元深度
             )
             
             # 獲取 provider

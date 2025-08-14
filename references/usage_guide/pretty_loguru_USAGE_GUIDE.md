@@ -263,15 +263,10 @@ logger.block("系統資訊", {
 logger.ascii_header("STARTUP")
 
 # 自定義字體
-logger.ascii_header("WELCOME", font="slant", width=80)
+logger.ascii_header("WELCOME", font="slant")
 
-# 帶邊框的 ASCII
-logger.ascii_header(
-    "ERROR",
-    font="doom",
-    border=True,
-    border_style="red"
-)
+# 不同字體樣式
+logger.ascii_header("ERROR", font="doom")
 
 # 組合使用
 logger.ascii_block(

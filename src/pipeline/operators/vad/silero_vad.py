@@ -35,32 +35,22 @@ class SileroVADOperator(OperatorBase):
         self.required_format = self.get_required_audio_format()
         self.window_size_samples = 512  # Silero VAD 使用 512 樣本窗口
         
-        # 嘗試從配置中獲取設定，使用 yaml2py 正確方式
-        try:
-            # 直接存取屬性，讓 yaml2py 處理預設值
-            vad_config = self.config_manager.pipeline.operators.vad
-            
-            self.threshold = vad_config.threshold
-            self.min_silence_duration = vad_config.min_silence_duration
-            self.min_speech_duration = vad_config.min_speech_duration
-            self.model_path = vad_config.model_path
-            
+        # 從配置中獲取設定 - 配置必須存在
+        vad_config = self.config_manager.pipeline.operators.vad
+        # 根據 VAD 類型獲取對應的配置，預設使用 silero
+        if vad_config.type == "silero":
+            silero_config = vad_config.silero
+            self.threshold = silero_config.threshold
+            self.min_silence_duration = silero_config.min_silence_duration
+            self.min_speech_duration = silero_config.min_speech_duration
+            self.model_path = silero_config.model_path
             # 進階功能
-            self.adaptive_threshold = vad_config.adaptive_threshold
-            self.threshold_window_size = vad_config.threshold_window_size
-            self.smoothing_window = vad_config.smoothing_window
-            
-        except AttributeError:
-            # 如果配置不存在，使用硬編碼預設值
-            self.threshold = 0.5
-            self.min_silence_duration = 0.5
-            self.min_speech_duration = 0.25
-            self.model_path = 'models/silero_vad.onnx'
-            
-            # 進階功能
-            self.adaptive_threshold = False
-            self.threshold_window_size = 50
-            self.smoothing_window = 3
+            self.adaptive_threshold = silero_config.adaptive_threshold
+            self.smoothing_window = silero_config.smoothing_window
+            # 自適應閾值窗口大小
+            self.threshold_window_size = silero_config.threshold_window_size
+        else:
+            raise ValueError(f"不支援的 VAD 類型: {vad_config.type}")
         
         # 狀態追蹤
         self.in_speech = False
@@ -102,8 +92,8 @@ class SileroVADOperator(OperatorBase):
             需要的音頻格式
         """
         return AudioMetadata(
-            sample_rate=16000,  # Silero VAD 固定需要 16kHz
-            channels=1,         # 只支援單聲道
+            sample_rate=self.config_manager.pipeline.default_sample_rate,  # 從配置讀取
+            channels=self.config_manager.pipeline.channels,               # 從配置讀取
             format=AudioFormat.INT16  # 接受 int16 輸入
         )
     
@@ -129,8 +119,9 @@ class SileroVADOperator(OperatorBase):
                 # 檢查是否有 model_name 配置
                 model_name = 'silero_vad_v4'  # 預設值
                 try:
-                    if hasattr(config_manager.pipeline.operators.vad, 'model_name'):
-                        model_name = config_manager.pipeline.operators.vad.model_name
+                    vad_config = self.config_manager.pipeline.operators.vad
+                    if vad_config.type == "silero":
+                        model_name = vad_config.silero.model_name
                 except AttributeError:
                     pass
                 models_dir = model_path.parent
@@ -153,8 +144,9 @@ class SileroVADOperator(OperatorBase):
             # 如果有 GPU 可用，優先使用
             use_gpu = False
             try:
-                if hasattr(self.config_manager.pipeline.operators.vad, 'use_gpu'):
-                    use_gpu = self.config_manager.pipeline.operators.vad.use_gpu
+                vad_config = self.config_manager.pipeline.operators.vad
+                if vad_config.type == "silero":
+                    use_gpu = vad_config.silero.use_gpu
             except AttributeError:
                 pass
             
@@ -229,6 +221,48 @@ class SileroVADOperator(OperatorBase):
         
         logger.info("✓ Silero VAD 資源清理完成")
     
+    async def _process_window(self, window_bytes: bytes, vad_results: list, kwargs: dict):
+        """處理單個窗口的音訊"""
+        # 轉換為 numpy array - 使用統一的格式
+        audio_np = np.frombuffer(window_bytes, dtype=self.required_format.format.numpy_dtype).astype(np.float32)
+        audio_np = audio_np / 32768.0  # 正規化到 [-1, 1]
+        
+        # 執行 VAD 推論
+        speech_prob = await self._run_vad_inference(audio_np)
+        
+        # 增加幀計數
+        self.frame_count += 1
+        
+        # 調試輸出
+        if self.frame_count <= 5:  # 前 5 幀都輸出
+            logger.info(f"VAD 推論結果: 幀={self.frame_count}, 機率={speech_prob:.4f}, 音訊能量={np.abs(audio_np).mean():.4f}, 閾值={self.threshold}")
+        
+        # 應用平滑處理
+        speech_prob = self._apply_smoothing(speech_prob)
+        
+        # 保存最後的語音機率
+        self.last_speech_prob = float(speech_prob)
+        
+        # 判斷是否為語音（可能使用自適應閾值）
+        current_threshold = self._get_adaptive_threshold() if self.adaptive_threshold else self.threshold
+        is_speech = speech_prob > current_threshold
+        
+        # 更新狀態
+        current_time = time.time()
+        await self._update_speech_state(is_speech, current_time, speech_prob)
+        
+        # 更新閾值歷史（用於自適應閾值）
+        if self.adaptive_threshold:
+            self._update_threshold_history(speech_prob)
+        
+        vad_results.append({
+            'speech_detected': is_speech,
+            'speech_probability': float(speech_prob),
+            'timestamp': current_time
+        })
+        
+        self.total_frames_processed += 1
+    
     async def process(self, audio_data: bytes, **kwargs) -> Optional[bytes]:
         """
         處理音訊並返回 VAD 結果
@@ -269,50 +303,37 @@ class SileroVADOperator(OperatorBase):
             
             vad_results = []
             
-            while len(self.audio_buffer) >= window_size_bytes:
-                # 提取一個窗口的音訊
-                window_bytes = self.audio_buffer[:window_size_bytes]
-                self.audio_buffer = self.audio_buffer[window_size_bytes:]
+            # 計算需要處理的窗口數
+            num_windows = len(self.audio_buffer) // window_size_bytes
+            
+            # 如果有多個窗口要處理，顯示處理資訊
+            if num_windows > 5:
+                logger.debug(f"VAD 開始處理 {num_windows} 個音訊窗口")
+                window_idx = 0
+                while len(self.audio_buffer) >= window_size_bytes:
+                    # 每處理 10 個窗口顯示一次進度
+                    if window_idx % 10 == 0:
+                        logger.debug(f"VAD 處理進度: {window_idx + 1}/{num_windows}")
+                    
+                    # 提取一個窗口的音訊
+                    window_bytes = self.audio_buffer[:window_size_bytes]
+                    self.audio_buffer = self.audio_buffer[window_size_bytes:]
+                    
+                    # 處理窗口（與原邏輯相同）
+                    await self._process_window(window_bytes, vad_results, kwargs)
+                    window_idx += 1
                 
-                # 轉換為 numpy array - 使用統一的格式
-                audio_np = np.frombuffer(window_bytes, dtype=self.required_format.format.numpy_dtype).astype(np.float32)
-                audio_np = audio_np / 32768.0  # 正規化到 [-1, 1]
+                logger.debug(f"VAD 處理完成，共處理 {window_idx} 個窗口")
+            else:
+                # 少量窗口不需要進度條
+                while len(self.audio_buffer) >= window_size_bytes:
+                    # 提取一個窗口的音訊
+                    window_bytes = self.audio_buffer[:window_size_bytes]
+                    self.audio_buffer = self.audio_buffer[window_size_bytes:]
+                    
+                    # 處理窗口
+                    await self._process_window(window_bytes, vad_results, kwargs)
                 
-                # 執行 VAD 推論
-                speech_prob = await self._run_vad_inference(audio_np)
-                
-                # 增加幀計數
-                self.frame_count += 1
-                
-                # 調試輸出
-                if self.frame_count <= 5:  # 前 5 幀都輸出
-                    logger.info(f"VAD 推論結果: 幀={self.frame_count}, 機率={speech_prob:.4f}, 音訊能量={np.abs(audio_np).mean():.4f}, 閾值={self.threshold}")
-                
-                # 應用平滑處理
-                speech_prob = self._apply_smoothing(speech_prob)
-                
-                # 保存最後的語音機率
-                self.last_speech_prob = float(speech_prob)
-                
-                # 判斷是否為語音（可能使用自適應閾值）
-                current_threshold = self._get_adaptive_threshold() if self.adaptive_threshold else self.threshold
-                is_speech = speech_prob > current_threshold
-                
-                # 更新狀態
-                current_time = time.time()
-                await self._update_speech_state(is_speech, current_time, speech_prob)
-                
-                # 更新閾值歷史（用於自適應閾值）
-                if self.adaptive_threshold:
-                    self._update_threshold_history(speech_prob)
-                
-                vad_results.append({
-                    'speech_detected': is_speech,
-                    'speech_probability': float(speech_prob),
-                    'timestamp': current_time
-                })
-                
-                self.total_frames_processed += 1
             
             # 將 VAD 結果附加到 kwargs
             # 確保有個字典來存放 VAD 結果

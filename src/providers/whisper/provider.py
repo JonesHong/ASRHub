@@ -13,7 +13,6 @@ from src.providers.base import ProviderBase, TranscriptionResult, StreamingResul
 from src.utils.logger import logger
 from src.core.exceptions import ProviderError, ModelError, AudioFormatError
 from src.models.transcript import TranscriptSegment, Word
-from src.config.manager import ConfigManager
 
 
 class WhisperProvider(ProviderBase):
@@ -27,15 +26,11 @@ class WhisperProvider(ProviderBase):
         初始化 Whisper Provider
         使用 ConfigManager 獲取配置
         """
-        # 從 ConfigManager 獲取配置
-        config_manager = ConfigManager()
-        whisper_config = config_manager.providers.whisper
+        # 調用父類初始化，傳入 provider 名稱
+        super().__init__(provider_name="whisper")
         
-        # 轉換為字典以兼容父類
-        config_dict = whisper_config.to_dict()
-        super().__init__(config_dict)
-        
-        self.logger = logger
+        # 獲取 Whisper 特定配置
+        whisper_config = self.config_manager.providers.whisper
         
         # 模型配置
         self.model_size = whisper_config.model_size

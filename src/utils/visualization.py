@@ -28,6 +28,7 @@ import queue
 import time
 import platform
 from scipy import signal
+from src.utils.logger import logger
 
 # 設定中文字體
 if platform.system() == "Windows":
@@ -408,6 +409,29 @@ class WakeWordVisualization(BaseVisualization):
         
         plt.tight_layout()
         return fig, axes
+    
+    def update_wakeword_plot(self, score: float, timestamp: float, threshold: float):
+        """更新喚醒詞檢測圖表"""
+        self.detection_history.append(score)
+        self.time_history.append(timestamp)
+        
+        # 保持歷史記錄長度
+        if len(self.detection_history) > self.max_history_points:
+            self.detection_history.pop(0)
+            self.time_history.pop(0)
+            
+        # 更新喚醒詞檢測線條
+        if self.time_history:
+            start_time = self.time_history[0]
+            relative_times = [t - start_time for t in self.time_history]
+            self.lines['wakeword'].set_data(relative_times, self.detection_history)
+            
+            # 調整 x 軸範圍
+            if relative_times:
+                self.axes[1].set_xlim(max(0, relative_times[-1] - 10), relative_times[-1] + 0.5)
+                
+            # 更新閾值線
+            self.lines['wake_threshold'].set_ydata([threshold, threshold])
 
 
 class RecordingVisualization(BaseVisualization):
@@ -522,7 +546,7 @@ class RecordingVisualization(BaseVisualization):
                         self.axes[1].set_xlim(0, total_time)
                         
         except Exception as e:
-            print(f"聲譜圖更新錯誤: {e}")
+            logger.error(f"聲譜圖更新錯誤: {e}")
 
 
 class PipelineVisualization(BaseVisualization):

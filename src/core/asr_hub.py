@@ -105,10 +105,46 @@ class ASRHub:
             f"降噪：{'啟用' if self.pipeline_config.operators.denoise.enabled else '停用'}",
         ]
         
-        # 顯示系統資訊
-        self.logger.info("系統初始化：")
-        for info in system_info:
-            self.logger.info(f"  {info}")
+        # 使用 ASCII 標題顯示啟動畫面
+        self.logger.ascii_header(
+            self.app_name,
+            font="slant"
+        )
+        
+        # 使用 info 顯示版本和描述資訊
+        self.logger.info(f"📍 版本：v{self.version}")
+        self.logger.info(f"📋 描述：Unified Speech Recognition Middleware")
+        self.logger.info("=" * 60)
+        
+        # 使用視覺化區塊顯示系統配置
+        api_status = {
+            "HTTP SSE": f"{'✓' if True else '✗'} Port {self.api_config.http_sse.port}",
+            "WebSocket": '✓' if self.api_config.websocket.enabled else '✗',
+            "Socket.IO": '✓' if self.api_config.socketio.enabled else '✗',
+            "gRPC": '✓' if self.api_config.grpc.enabled else '✗',
+            "Redis": '✓' if self.api_config.redis.enabled else '✗',
+        }
+        
+        self.logger.block("API SERVICES", api_status, border_style="blue")
+        
+        # 顯示 Provider 狀態
+        provider_status = {
+            "Default": self.providers_config.default,
+            "Whisper": '✓ Enabled' if self.providers_config.whisper.enabled else '✗ Disabled',
+            "FunASR": '✓ Enabled' if self.providers_config.funasr.enabled else '✗ Disabled',
+            "Vosk": '✓ Enabled' if self.providers_config.vosk.enabled else '✗ Disabled',
+        }
+        
+        self.logger.block("PROVIDERS", provider_status, border_style="green")
+        
+        # 顯示 Pipeline 功能
+        pipeline_features = {
+            "Wake Word": '✓' if hasattr(self.config, 'wake_word_detection') and self.config.wake_word_detection.enabled else '✗',
+            "VAD": '✓' if self.pipeline_config.operators.vad.enabled else '✗',
+            "Denoise": '✓' if self.pipeline_config.operators.denoise.enabled else '✗',
+        }
+        
+        self.logger.block("PIPELINE FEATURES", pipeline_features, border_style="yellow")
         
         # 記錄啟動事件
         self.logger.success(f"{self.app_name} v{self.version} 啟動成功！")
@@ -305,7 +341,7 @@ def main():
     
     if args.version:
         config = ConfigManager()
-        print(f"{config.system.name} v{config.system.version}")
+        logger.info(f"{config.system.name} v{config.system.version}")
         sys.exit(0)
     
     # 建立並啟動 ASR Hub

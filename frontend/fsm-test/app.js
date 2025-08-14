@@ -61,6 +61,7 @@ class FSMTestApp {
         const required = {
             'FCMState': typeof FCMState !== 'undefined',
             'FCMEvent': typeof FCMEvent !== 'undefined',
+            'FCMWakeTrigger': typeof FCMWakeTrigger !== 'undefined',
             'FCMEndTrigger': typeof FCMEndTrigger !== 'undefined',
             'FCMController': typeof FCMController !== 'undefined',
             'createStrategy': typeof createStrategy !== 'undefined'
@@ -76,6 +77,7 @@ class FSMTestApp {
         const elements = [
             'modeSelector',
             'eventButtonsContainer',
+            'wakeTriggerContainer',
             'endTriggerContainer',
             'currentState',
             'availableEvents',
@@ -96,6 +98,9 @@ class FSMTestApp {
 
         // 生成事件按鈕
         this.generateEventButtons();
+
+        // 生成喚醒觸發選項
+        this.generateWakeTriggerOptions();
 
         // 生成結束觸發選項
         this.generateEndTriggerOptions();
@@ -132,14 +137,46 @@ class FSMTestApp {
         console.log(`  ✓ 生成 ${count} 個事件按鈕`);
     }
 
+    generateWakeTriggerOptions() {
+        const container = document.getElementById('wakeTriggerContainer');
+        if (!container) {
+            console.warn('⚠️ 找不到喚醒觸發容器');
+            return;
+        }
+
+        container.innerHTML = '';
+        let count = 0;
+
+        Object.keys(FCMWakeTrigger).forEach((key, index) => {
+            const triggerValue = FCMWakeTrigger[key];
+
+            const label = document.createElement('label');
+            label.className = 'trigger-option';
+
+            const input = document.createElement('input');
+            input.type = 'radio';
+            input.name = 'wakeTrigger';
+            input.value = triggerValue;
+            if (index === 0) input.checked = true;
+
+            const span = document.createElement('span');
+            span.textContent = WakeTriggerLabels[key] || key;
+
+            label.appendChild(input);
+            label.appendChild(span);
+            container.appendChild(label);
+            count++;
+        });
+
+        console.log(`  ✓ 生成 ${count} 個喚醒觸發選項`);
+    }
+
     generateEndTriggerOptions() {
         const container = document.getElementById('endTriggerContainer');
         if (!container) {
             console.warn('⚠️ 找不到結束觸發容器');
             return;
         }
-
-        // 使用 fsm.js 中定義的 TriggerLabels
 
         container.innerHTML = '';
         let count = 0;
@@ -157,7 +194,7 @@ class FSMTestApp {
             if (index === 0) input.checked = true;
 
             const span = document.createElement('span');
-            span.textContent = TriggerLabels[key] || key;
+            span.textContent = EndTriggerLabels[key] || key;
 
             label.appendChild(input);
             label.appendChild(span);
@@ -165,7 +202,7 @@ class FSMTestApp {
             count++;
         });
 
-        console.log(`  ✓ 生成 ${count} 個觸發選項`);
+        console.log(`  ✓ 生成 ${count} 個結束觸發選項`);
     }
 
     initializeCore() {
@@ -261,7 +298,7 @@ class FSMTestApp {
         // 喚醒→錄音流程 (非串流模式)
         this.scenarios['wake-record-flow'] = [
             { event: FCMEvent.START_LISTENING, delay: 1000, description: '開始監聽' },
-            { event: FCMEvent.WAKE_WORD_TRIGGERED, delay: 1500, description: '檢測到喚醒詞' },
+            { event: FCMEvent.WAKE_TRIGGERED, delay: 1500, description: '觸發喚醒' },
             { event: FCMEvent.START_RECORDING, delay: 1000, description: '開始錄音' },
             { event: FCMEvent.END_RECORDING, delay: 3000, description: '結束錄音' },
             { event: FCMEvent.TRANSCRIPTION_DONE, delay: 1500, description: '轉譯完成' }
@@ -270,7 +307,7 @@ class FSMTestApp {
         // 串流處理流程
         this.scenarios['streaming-flow'] = [
             { event: FCMEvent.START_LISTENING, delay: 1000, description: '開始監聽' },
-            { event: FCMEvent.WAKE_WORD_TRIGGERED, delay: 1500, description: '檢測到喚醒詞' },
+            { event: FCMEvent.WAKE_TRIGGERED, delay: 1500, description: '觸發喚醒' },
             { event: FCMEvent.START_STREAMING, delay: 1000, description: '開始串流' },
             { event: FCMEvent.END_STREAMING, delay: 3000, description: '結束串流' }
         ];
@@ -289,9 +326,23 @@ class FSMTestApp {
         console.log('🔔 觸發事件:', eventName);
 
         let context = {};
+        
+        // 處理喚醒觸發方式
+        if (eventName === FCMEvent.WAKE_TRIGGERED) {
+            const wakeTrigger = document.querySelector('input[name="wakeTrigger"]:checked');
+            if (wakeTrigger) {
+                context.wakeTrigger = wakeTrigger.value;
+                console.log('  喚醒觸發方式:', wakeTrigger.value);
+            }
+        }
+        
+        // 處理結束觸發方式
         if (eventName === FCMEvent.END_RECORDING || eventName === FCMEvent.END_STREAMING) {
-            const trigger = document.querySelector('input[name="endTrigger"]:checked');
-            if (trigger) context.trigger = trigger.value;
+            const endTrigger = document.querySelector('input[name="endTrigger"]:checked');
+            if (endTrigger) {
+                context.endTrigger = endTrigger.value;
+                console.log('  結束觸發方式:', endTrigger.value);
+            }
         }
 
         await this.fcm.handleEvent(eventName, context);
@@ -366,14 +417,16 @@ class FSMTestApp {
             div.className = `history-item ${index === this.historyIndex ? 'active' : ''}`;
 
             const time = new Date(item.timestamp).toLocaleTimeString();
-            const trigger = item.context?.trigger ? ` (${item.context.trigger})` : '';
+            const wakeTrigger = item.context?.wakeTrigger ? ` [喚醒:${item.context.wakeTrigger}]` : '';
+            const endTrigger = item.context?.endTrigger ? ` [結束:${item.context.endTrigger}]` : '';
+            const triggerInfo = wakeTrigger || endTrigger;
 
             div.innerHTML = `
                 <span class="history-time">${time}</span>
                 <span class="history-transition">
                     ${item.oldState} → ${item.newState}
                 </span>
-                <span class="history-event">${item.event}${trigger}</span>
+                <span class="history-event">${item.event}${triggerInfo}</span>
             `;
 
             div.addEventListener('click', () => {
@@ -570,9 +623,11 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('📄 DOM 載入完成 - app.js v2.0');
     console.log('檢查全域變數:');
     console.log('  FCMEvent:', typeof FCMEvent);
+    console.log('  FCMWakeTrigger:', typeof FCMWakeTrigger);
     console.log('  FCMEndTrigger:', typeof FCMEndTrigger);
     console.log('  EventLabels:', typeof EventLabels);
-    console.log('  TriggerLabels:', typeof TriggerLabels);
+    console.log('  WakeTriggerLabels:', typeof WakeTriggerLabels);
+    console.log('  EndTriggerLabels:', typeof EndTriggerLabels);
 
     // 給一點時間確保所有腳本都載入
     setTimeout(() => {

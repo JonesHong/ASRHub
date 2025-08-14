@@ -292,11 +292,18 @@ class AudioRequestHandler:
         
         audio_format = format_map.get(params["format"], AudioFormat.PCM)
         
+        from src.models.audio import AudioEncoding
+        
+        # 根據格式決定編碼（所有格式都可以使用 LINEAR16）
+        encoding = AudioEncoding.LINEAR16
+        
         return AudioChunk(
             data=data,
             sample_rate=params["sample_rate"],
             channels=params["channels"],
             format=audio_format,
+            encoding=encoding,
+            bits_per_sample=params.get("bits_per_sample", 16),
             sequence_number=sequence_number
         )
 

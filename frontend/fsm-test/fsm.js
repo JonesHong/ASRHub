@@ -2,7 +2,7 @@
 const FCMState = {
     IDLE: 'IDLE',
     LISTENING: 'LISTENING',
-    WAKE_WORD_DETECTED: 'WAKE_WORD_DETECTED',
+    ACTIVATED: 'ACTIVATED',  // 系統被激活（可由關鍵字/按鈕/視覺觸發）
     RECORDING: 'RECORDING',
     STREAMING: 'STREAMING',
     UPLOADING: 'UPLOADING',
@@ -16,7 +16,7 @@ const FCMState = {
 // FCM 事件定義
 const FCMEvent = {
     START_LISTENING: 'START_LISTENING',
-    WAKE_WORD_TRIGGERED: 'WAKE_WORD_TRIGGERED',
+    WAKE_TRIGGERED: 'WAKE_TRIGGERED',  // 統一的觸發喚醒事件
     START_RECORDING: 'START_RECORDING',
     END_RECORDING: 'END_RECORDING',
     START_STREAMING: 'START_STREAMING',
@@ -31,18 +31,25 @@ const FCMEvent = {
     RECOVER: 'RECOVER'
 };
 
+// 喚醒觸發方式
+const FCMWakeTrigger = {
+    KEYWORD: 'KEYWORD',     // 關鍵字/喚醒詞
+    BUTTON: 'BUTTON',       // 按鈕觸發
+    VISION: 'VISION'        // 視覺觸發
+};
+
 // 結束觸發原因
 const FCMEndTrigger = {
-    VAD_TIMEOUT: 'VAD_TIMEOUT',
-    BUTTON: 'BUTTON',
-    VISION: 'VISION'
+    VAD_TIMEOUT: 'VAD_TIMEOUT',  // VAD 偵測到靜音超時
+    BUTTON: 'BUTTON',             // 按鈕結束
+    VISION: 'VISION'              // 視覺結束
 };
 
 // 狀態描述
 const StateDescriptions = {
     IDLE: '閒置等待 - 系統準備接收新的任務',
-    LISTENING: '等待喚醒詞 - 持續監聽音訊流中的喚醒詞',
-    WAKE_WORD_DETECTED: '喚醒後短暫過渡 - 準備開始錄音或串流',
+    LISTENING: '等待觸發 - 監聽關鍵字/等待按鈕/視覺觸發',
+    ACTIVATED: '已激活 - 系統被觸發激活，準備開始錄音或串流',
     RECORDING: '錄音中 - 收集音訊數據到緩衝區（非串流模式）',
     STREAMING: '串流中 - 即時串流音訊到 ASR Provider（串流模式）',
     TRANSCRIBING: '轉譯中 - 將錄音完成的音訊進行轉譯（非串流模式）',
@@ -54,7 +61,7 @@ const StateDescriptions = {
 // 事件按鈕的顯示名稱
 const EventLabels = {
     START_LISTENING: '開始監聽',
-    WAKE_WORD_TRIGGERED: '喚醒詞',
+    WAKE_TRIGGERED: '觸發喚醒',
     START_RECORDING: '開始錄音',
     END_RECORDING: '結束錄音',
     START_STREAMING: '開始串流',
@@ -69,8 +76,15 @@ const EventLabels = {
     RECOVER: '恢復'
 };
 
-// 觸發原因的顯示名稱
-const TriggerLabels = {
+// 喚醒觸發方式的顯示名稱
+const WakeTriggerLabels = {
+    KEYWORD: '關鍵字',
+    BUTTON: '按鈕',
+    VISION: '視覺'
+};
+
+// 結束觸發原因的顯示名稱
+const EndTriggerLabels = {
     VAD_TIMEOUT: 'VAD超時',
     BUTTON: '按鈕',
     VISION: '視覺'
@@ -153,8 +167,8 @@ class NonStreamingStrategy extends FCMStrategy {
     specificTransition(state, event, context) {
         const transitions = {
             [`${FCMState.IDLE}_${FCMEvent.START_LISTENING}`]: FCMState.LISTENING,
-            [`${FCMState.LISTENING}_${FCMEvent.WAKE_WORD_TRIGGERED}`]: FCMState.WAKE_WORD_DETECTED,
-            [`${FCMState.WAKE_WORD_DETECTED}_${FCMEvent.START_RECORDING}`]: FCMState.RECORDING,
+            [`${FCMState.LISTENING}_${FCMEvent.WAKE_TRIGGERED}`]: FCMState.ACTIVATED,
+            [`${FCMState.ACTIVATED}_${FCMEvent.START_RECORDING}`]: FCMState.RECORDING,
             [`${FCMState.RECORDING}_${FCMEvent.END_RECORDING}`]: FCMState.TRANSCRIBING,
             [`${FCMState.TRANSCRIBING}_${FCMEvent.TRANSCRIPTION_DONE}`]: FCMState.IDLE,
         };
@@ -168,8 +182,8 @@ class NonStreamingStrategy extends FCMStrategy {
             case FCMState.IDLE:
                 return [FCMEvent.START_LISTENING];
             case FCMState.LISTENING:
-                return [FCMEvent.WAKE_WORD_TRIGGERED];
-            case FCMState.WAKE_WORD_DETECTED:
+                return [FCMEvent.WAKE_TRIGGERED];
+            case FCMState.ACTIVATED:
                 return [FCMEvent.START_RECORDING];
             case FCMState.RECORDING:
                 return [FCMEvent.END_RECORDING];
@@ -186,8 +200,8 @@ class StreamingStrategy extends FCMStrategy {
     specificTransition(state, event, context) {
         const transitions = {
             [`${FCMState.IDLE}_${FCMEvent.START_LISTENING}`]: FCMState.LISTENING,
-            [`${FCMState.LISTENING}_${FCMEvent.WAKE_WORD_TRIGGERED}`]: FCMState.WAKE_WORD_DETECTED,
-            [`${FCMState.WAKE_WORD_DETECTED}_${FCMEvent.START_STREAMING}`]: FCMState.STREAMING,
+            [`${FCMState.LISTENING}_${FCMEvent.WAKE_TRIGGERED}`]: FCMState.ACTIVATED,
+            [`${FCMState.ACTIVATED}_${FCMEvent.START_STREAMING}`]: FCMState.STREAMING,
             [`${FCMState.STREAMING}_${FCMEvent.END_STREAMING}`]: FCMState.IDLE,
         };
 
@@ -200,8 +214,8 @@ class StreamingStrategy extends FCMStrategy {
             case FCMState.IDLE:
                 return [FCMEvent.START_LISTENING];
             case FCMState.LISTENING:
-                return [FCMEvent.WAKE_WORD_TRIGGERED];
-            case FCMState.WAKE_WORD_DETECTED:
+                return [FCMEvent.WAKE_TRIGGERED];
+            case FCMState.ACTIVATED:
                 return [FCMEvent.START_STREAMING];
             case FCMState.STREAMING:
                 return [FCMEvent.END_STREAMING];

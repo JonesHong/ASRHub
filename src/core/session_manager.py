@@ -273,6 +273,65 @@ class SessionManager:
         self.sessions.clear()
         self.logger.warning(f"清除了所有 {count} 個 sessions")
     
+    def log_session_status(self):
+        """使用 pretty-loguru 顯示所有活動 sessions 的狀態表格"""
+        if not self.sessions:
+            self.logger.info("目前沒有活動的 sessions")
+            return
+        
+        # 準備表格數據
+        headers = ["Session ID", "State", "Created", "Last Activity", "Wake Source", "Priority"]
+        table_data = []
+        
+        for session_id, session in self.sessions.items():
+            # 計算時間差
+            created_ago = datetime.now() - session.created_at
+            activity_ago = datetime.now() - session.last_activity
+            
+            # 格式化時間
+            created_str = f"{created_ago.seconds // 60}m ago"
+            activity_str = f"{activity_ago.seconds // 60}m ago"
+            
+            # 狀態 emoji
+            state_emoji = {
+                "IDLE": "💤",
+                "LISTENING": "👂",
+                "BUSY": "⚡"
+            }.get(session.state, "❓")
+            
+            table_data.append([
+                session_id[:8] + "...",  # 縮短 ID 顯示
+                f"{state_emoji} {session.state}",
+                created_str,
+                activity_str,
+                session.wake_source or "N/A",
+                str(session.priority)
+            ])
+        
+        # 使用 logger.table 顯示表格
+        self.logger.table(
+            f"Active Sessions ({len(self.sessions)})",
+            headers,
+            table_data,
+            style="box"
+        )
+        
+        # 顯示統計摘要
+        states_count = {}
+        for session in self.sessions.values():
+            states_count[session.state] = states_count.get(session.state, 0) + 1
+        
+        summary = {
+            "Total Sessions": len(self.sessions),
+            "IDLE": states_count.get("IDLE", 0),
+            "LISTENING": states_count.get("LISTENING", 0),
+            "BUSY": states_count.get("BUSY", 0),
+            "Max Allowed": self.max_sessions,
+            "Usage": f"{(len(self.sessions) / self.max_sessions * 100):.1f}%"
+        }
+        
+        self.logger.block("Session Statistics", summary, border_style="blue")
+    
     # 喚醒詞相關方法
     def wake_session(self, session_id: str, source: str = "wake_word", wake_timeout: Optional[float] = None) -> bool:
         """

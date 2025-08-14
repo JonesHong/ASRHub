@@ -40,13 +40,11 @@ class SocketIOServer(APIBase):
             pipeline_manager: Pipeline 管理器
             provider_manager: Provider 管理器
         """
-        # 從 ConfigManager 獲取配置
-        config_manager = ConfigManager()
-        sio_config = config_manager.api.socketio
+        # 只傳遞 session_manager 給父類
+        super().__init__(session_manager)
         
-        # 轉換為字典以兼容父類
-        config_dict = sio_config.to_dict()
-        super().__init__(config_dict, session_manager)
+        # 從 ConfigManager 獲取配置
+        sio_config = self.config_manager.api.socketio
         
         self.pipeline_manager = pipeline_manager
         self.provider_manager = provider_manager
@@ -344,7 +342,7 @@ class SocketIOServer(APIBase):
                 asyncio.create_task(self._process_audio_stream(connection))
                 
             # 創建 AudioChunk（包含完整的音訊元數據）
-            from src.models.audio_metadata import AudioChunkFactory
+            from src.models.audio_factory import AudioChunkFactory
             
             # 從 stream_manager 獲取已驗證的參數
             stream_info = self.stream_manager.get_stream_info(connection.session_id)
@@ -352,23 +350,14 @@ class SocketIOServer(APIBase):
                 params = stream_info['audio_params']
                 
                 # 使用工廠創建 AudioChunk
-                audio_chunk = AudioChunkFactory.create_from_websocket_message(
-                    message={
-                        "audio": audio_data if audio_format != "base64" else data.get("audio"),
-                        "metadata": {
-                            "sample_rate": params.get("sample_rate", 16000),
-                            "channels": params.get("channels", 1),
-                            "format": params.get("format", "pcm").value if hasattr(params.get("format"), "value") else params.get("format", "pcm"),
-                            "encoding": params.get("encoding", "linear16").value if hasattr(params.get("encoding"), "value") else params.get("encoding", "linear16"),
-                            "bits_per_sample": params.get("bits_per_sample", 16)
-                        },
-                        "timestamp": data.get("timestamp"),
-                        "sequence": data.get("chunk_id")
-                    }
+                audio_chunk = AudioChunkFactory.create_from_validated_params(
+                    audio_data=audio_bytes,
+                    params=params,
+                    source_type="socketio"
                 )
                 
-                # 添加到串流（傳送 AudioChunk 而非 bytes）
-                add_success = self.stream_manager.add_audio_chunk(connection.session_id, audio_chunk)
+                # 添加到串流（傳送 bytes，AudioChunk 僅用於驗證）
+                add_success = self.stream_manager.add_audio_chunk(connection.session_id, audio_bytes)
             else:
                 # 向後相容：如果沒有參數，使用原始 bytes
                 add_success = self.stream_manager.add_audio_chunk(connection.session_id, audio_bytes)
@@ -682,12 +671,14 @@ class SocketIOServer(APIBase):
                     return
                 
                 # 建立 AudioChunk 物件
-                from src.models.audio import AudioChunk, AudioFormat
+                from src.models.audio import AudioChunk, AudioFormat, AudioEncoding
                 audio = AudioChunk(
                     data=pcm_data,
-                    sample_rate=16000,  # 預設值，應該從前端參數獲取
-                    channels=1,
-                    format=AudioFormat.PCM  # 轉換後的格式
+                    sample_rate=self.config_manager.pipeline.default_sample_rate,  # 從配置讀取
+                    channels=self.config_manager.pipeline.channels,               # 從配置讀取
+                    format=AudioFormat.PCM,  # 轉換後的格式
+                    encoding=AudioEncoding.LINEAR16,  # PCM 使用 LINEAR16 編碼
+                    bits_per_sample=16  # 16 位元深度
                 )
                 
                 # 透過 Pipeline 處理音訊（如果有）

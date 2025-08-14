@@ -41,13 +41,11 @@ class WebSocketServer(APIBase):
             pipeline_manager: Pipeline 管理器
             provider_manager: Provider 管理器
         """
-        # 從 ConfigManager 獲取配置
-        config_manager = ConfigManager()
-        ws_config = config_manager.api.websocket
+        # 只傳遞 session_manager 給父類
+        super().__init__(session_manager)
         
-        # 轉換為字典以兼容父類
-        config_dict = ws_config.to_dict()
-        super().__init__(config_dict, session_manager)
+        # 從 ConfigManager 獲取配置
+        ws_config = self.config_manager.api.websocket
         
         self.host = ws_config.host
         self.port = ws_config.port
