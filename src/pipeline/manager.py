@@ -29,7 +29,6 @@ class DefaultPipeline(PipelineBase):
         # 先初始化基本屬性，但不調用 _initialize_operators
         self.config_manager = ConfigManager()
         self.config = self.config_manager.pipeline
-        self.logger = logger
         self.operators: List[OperatorBase] = []
         self._running = False
         
@@ -78,7 +77,7 @@ class DefaultPipeline(PipelineBase):
         # Sample Rate Adjustment (已棄用，改用 audio_format)
         if hasattr(operators_config, 'sample_rate_adjustment') and \
            operators_config.sample_rate_adjustment.enabled:
-            self.logger.warning("sample_rate_adjustment 已棄用，請使用 audio_format")
+            logger.warning("sample_rate_adjustment 已棄用，請使用 audio_format")
         
         # VAD
         if hasattr(operators_config, 'vad') and operators_config.vad.enabled:
@@ -86,8 +85,8 @@ class DefaultPipeline(PipelineBase):
                 from src.pipeline.operators.vad.silero_vad import SileroVADOperator
                 planned_operators.append(('vad', SileroVADOperator()))
             except ImportError as e:
-                self.logger.warning(f"無法載入 VAD operator：{e}")
-                self.logger.info("跳過 VAD operator")
+                logger.warning(f"無法載入 VAD operator：{e}")
+                logger.info("跳過 VAD operator")
         
         # Wake Word
         if hasattr(operators_config, 'wakeword') and operators_config.wakeword.enabled:
@@ -95,13 +94,13 @@ class DefaultPipeline(PipelineBase):
                 from src.pipeline.operators.wakeword.openwakeword import OpenWakeWordOperator
                 planned_operators.append(('wakeword', OpenWakeWordOperator()))
             except ImportError as e:
-                self.logger.warning(f"無法載入 wakeword operator：{e}")
-                self.logger.info("跳過 wakeword operator")
+                logger.warning(f"無法載入 wakeword operator：{e}")
+                logger.info("跳過 wakeword operator")
         
         # Recording
         if hasattr(operators_config, 'recording') and operators_config.recording.enabled:
             # TODO: 實現實際的 Recording operator
-            self.logger.debug("Recording operator 尚未實現")
+            logger.debug("Recording operator 尚未實現")
         
         # 分析並構建最終的 pipeline
         self._build_smart_pipeline(planned_operators)
@@ -128,7 +127,7 @@ class DefaultPipeline(PipelineBase):
                     operator_name=name
                 )
                 self.add_operator(converter)
-                self.logger.info(
+                logger.info(
                     f"插入格式轉換: {current_format.sample_rate}Hz -> "
                     f"{required_format.sample_rate}Hz for {name}"
                 )
@@ -249,7 +248,6 @@ class PipelineManager:
         使用 ConfigManager 獲取配置
         """
         self.config_manager = ConfigManager()
-        self.logger = logger
         
         # Pipeline 實例快取
         self.pipelines: Dict[str, PipelineBase] = {}
@@ -271,16 +269,16 @@ class PipelineManager:
     async def initialize(self):
         """初始化 Pipeline Manager"""
         if self._initialized:
-            self.logger.warning("Pipeline Manager 已經初始化")
+            logger.warning("Pipeline Manager 已經初始化")
             return
         
-        self.logger.info("初始化 Pipeline Manager...")
+        logger.info("初始化 Pipeline Manager...")
         
         # 建立預設 Pipeline
         await self._create_default_pipeline()
         
         self._initialized = True
-        self.logger.success("Pipeline Manager 初始化完成")
+        logger.success("Pipeline Manager 初始化完成")
     
     async def _create_default_pipeline(self):
         """建立預設的 Pipeline"""
@@ -301,10 +299,10 @@ class PipelineManager:
             # 儲存到快取
             self.pipelines["default"] = default_pipeline
             
-            self.logger.info("預設 Pipeline 建立成功")
+            logger.info("預設 Pipeline 建立成功")
             
         except Exception as e:
-            self.logger.error(f"建立預設 Pipeline 失敗：{e}")
+            logger.error(f"建立預設 Pipeline 失敗：{e}")
             raise
     
     async def create_pipeline(self, name: str) -> PipelineBase:
@@ -340,11 +338,11 @@ class PipelineManager:
             # 儲存到快取
             self.pipelines[name] = pipeline
             
-            self.logger.info(f"Pipeline '{name}' 建立成功")
+            logger.info(f"Pipeline '{name}' 建立成功")
             return pipeline
             
         except Exception as e:
-            self.logger.error(f"建立 Pipeline '{name}' 失敗：{e}")
+            logger.error(f"建立 Pipeline '{name}' 失敗：{e}")
             raise PipelineError(f"無法建立 Pipeline：{str(e)}")
     
     def get_pipeline(self, name: str = "default") -> Optional[PipelineBase]:
@@ -373,7 +371,7 @@ class PipelineManager:
             pipeline = self.pipelines[name]
             await pipeline.stop()
             del self.pipelines[name]
-            self.logger.info(f"Pipeline '{name}' 已移除")
+            logger.info(f"Pipeline '{name}' 已移除")
     
     def list_pipelines(self) -> List[str]:
         """
@@ -411,7 +409,7 @@ class PipelineManager:
             raise ValueError(f"{operator_class} 必須繼承自 OperatorBase")
         
         self.operator_registry[name] = operator_class
-        self.logger.info(f"註冊 Operator：{name}")
+        logger.info(f"註冊 Operator：{name}")
     
     def get_registered_operators(self) -> List[str]:
         """
@@ -451,19 +449,19 @@ class PipelineManager:
     
     async def cleanup(self):
         """清理所有資源"""
-        self.logger.info("清理 Pipeline Manager...")
+        logger.info("清理 Pipeline Manager...")
         
         # 停止所有 Pipeline
         for name, pipeline in list(self.pipelines.items()):
             try:
                 await pipeline.stop()
-                self.logger.debug(f"Pipeline '{name}' 已停止")
+                logger.debug(f"Pipeline '{name}' 已停止")
             except Exception as e:
-                self.logger.error(f"停止 Pipeline '{name}' 時發生錯誤：{e}")
+                logger.error(f"停止 Pipeline '{name}' 時發生錯誤：{e}")
         
         self.pipelines.clear()
         self._initialized = False
-        self.logger.info("Pipeline Manager 清理完成")
+        logger.info("Pipeline Manager 清理完成")
     
     def get_status(self) -> Dict[str, Any]:
         """

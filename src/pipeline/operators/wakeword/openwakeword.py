@@ -13,6 +13,7 @@ import scipy.signal
 from datetime import datetime
 from huggingface_hub import hf_hub_download, HfFolder
 
+from src.utils.logger import logger
 from src.pipeline.operators.base import OperatorBase
 from src.core.exceptions import PipelineError
 from src.config.manager import ConfigManager
@@ -103,7 +104,7 @@ class OpenWakeWordOperator(OperatorBase):
     
     async def _initialize(self):
         """初始化 Operator 資源"""
-        self.logger.info("初始化 OpenWakeWord Operator...")
+        logger.info("初始化 OpenWakeWord Operator...")
         
         # 載入模型
         await self._load_model()
@@ -113,11 +114,11 @@ class OpenWakeWordOperator(OperatorBase):
         self.audio_buffer = np.array([], dtype=np.float32)
         self.last_detection_time = 0
         
-        self.logger.info("✓ OpenWakeWord Operator 初始化完成")
+        logger.info("✓ OpenWakeWord Operator 初始化完成")
     
     async def _cleanup(self):
         """清理 Operator 資源"""
-        self.logger.info("清理 OpenWakeWord Operator...")
+        logger.info("清理 OpenWakeWord Operator...")
         
         # 清理模型
         if self.model:
@@ -128,7 +129,7 @@ class OpenWakeWordOperator(OperatorBase):
         self.state.clear()
         self.audio_buffer = np.array([], dtype=np.float32)
         
-        self.logger.info("✓ OpenWakeWord Operator 清理完成")
+        logger.info("✓ OpenWakeWord Operator 清理完成")
     
     async def _load_model(self):
         """載入 openWakeWord 模型"""
@@ -151,7 +152,7 @@ class OpenWakeWordOperator(OperatorBase):
             hf_token = self.hf_token or os.environ.get("HF_TOKEN") or HfFolder.get_token()
             
             if hf_token and self.hf_repo_id and self.hf_filename:
-                self.logger.info(f"從 HuggingFace 下載模型: {self.hf_repo_id}/{self.hf_filename}")
+                logger.info(f"從 HuggingFace 下載模型: {self.hf_repo_id}/{self.hf_filename}")
                 try:
                     model_path = hf_hub_download(
                         repo_id=self.hf_repo_id,
@@ -159,9 +160,9 @@ class OpenWakeWordOperator(OperatorBase):
                         token=hf_token,
                         repo_type="model"
                     )
-                    self.logger.info(f"✓ 模型下載成功: {model_path}")
+                    logger.info(f"✓ 模型下載成功: {model_path}")
                 except Exception as e:
-                    self.logger.error(f"模型下載失敗: {e}")
+                    logger.error(f"模型下載失敗: {e}")
                     raise PipelineError(f"無法下載模型: {e}")
             else:
                 raise PipelineError("請設定模型路徑或提供 HF_TOKEN")
@@ -172,9 +173,9 @@ class OpenWakeWordOperator(OperatorBase):
                 wakeword_models=[model_path],
                 inference_framework="onnx"
             )
-            self.logger.info(f"✓ 模型載入成功: {model_path}")
+            logger.info(f"✓ 模型載入成功: {model_path}")
         except Exception as e:
-            self.logger.error(f"模型載入失敗: {e}")
+            logger.error(f"模型載入失敗: {e}")
             raise PipelineError(f"無法載入模型: {e}")
     
     async def process(self, audio_data: bytes, **kwargs) -> Optional[bytes]:
@@ -254,7 +255,7 @@ class OpenWakeWordOperator(OperatorBase):
                             }
                             detections.append(detection)
                             
-                            self.logger.info(
+                            logger.info(
                                 f"🎯 偵測到喚醒詞！模型: {model_name}, "
                                 f"分數: {score:.3f}"
                             )
@@ -264,7 +265,7 @@ class OpenWakeWordOperator(OperatorBase):
                                 await self._trigger_callback(detection)
             
             except Exception as e:
-                self.logger.error(f"推論錯誤: {e}")
+                logger.error(f"推論錯誤: {e}")
         
         # 將偵測結果存入 kwargs（供後續 operator 使用）
         if detections:
@@ -281,7 +282,7 @@ class OpenWakeWordOperator(OperatorBase):
             else:
                 self.detection_callback(detection)
         except Exception as e:
-            self.logger.error(f"回呼執行錯誤: {e}")
+            logger.error(f"回呼執行錯誤: {e}")
     
     def set_detection_callback(self, callback):
         """
@@ -332,7 +333,7 @@ class OpenWakeWordOperator(OperatorBase):
         for model_name in self.state:
             self.state[model_name].clear()
             self.state[model_name].extend(np.zeros(60))
-        self.logger.debug("已清空音訊緩衝區和評分佇列")
+        logger.debug("已清空音訊緩衝區和評分佇列")
     
     def update_config(self, config: Dict[str, Any]):
         """更新配置"""
@@ -341,11 +342,11 @@ class OpenWakeWordOperator(OperatorBase):
         # 更新特定參數
         if "threshold" in config:
             self.threshold = config["threshold"]
-            self.logger.info(f"更新偵測閾值: {self.threshold}")
+            logger.info(f"更新偵測閾值: {self.threshold}")
         
         if "detection_cooldown" in config:
             self.detection_cooldown = config["detection_cooldown"]
-            self.logger.info(f"更新冷卻期: {self.detection_cooldown}秒")
+            logger.info(f"更新冷卻期: {self.detection_cooldown}秒")
     
     def get_info(self) -> Dict[str, Any]:
         """獲取 Operator 資訊"""

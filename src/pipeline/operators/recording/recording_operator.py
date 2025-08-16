@@ -16,7 +16,6 @@ from src.pipeline.operators.base import OperatorBase
 from src.core.exceptions import PipelineError
 from src.utils.logger import logger
 
-logger = logger
 
 
 class RecordingOperator(OperatorBase):

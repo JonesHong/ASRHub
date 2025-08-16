@@ -27,7 +27,6 @@ class OperatorBase(ABC):
         2. 從 ConfigManager 取得自己的配置
         3. 設定自己需要的屬性
         """
-        self.logger = logger
         self.enabled = True
         self._initialized = False
     
@@ -37,10 +36,10 @@ class OperatorBase(ABC):
         可以在此初始化資源、載入模型等
         """
         if self._initialized:
-            self.logger.warning(f"{self.__class__.__name__} 已經初始化")
+            logger.warning(f"{self.__class__.__name__} 已經初始化")
             return
         
-        self.logger.info(f"啟動 {self.__class__.__name__}")
+        logger.info(f"啟動 {self.__class__.__name__}")
         await self._initialize()
         self._initialized = True
     
@@ -50,10 +49,10 @@ class OperatorBase(ABC):
         可以在此釋放資源、清理緩衝等
         """
         if not self._initialized:
-            self.logger.warning(f"{self.__class__.__name__} 未初始化")
+            logger.warning(f"{self.__class__.__name__} 未初始化")
             return
         
-        self.logger.info(f"停止 {self.__class__.__name__}")
+        logger.info(f"停止 {self.__class__.__name__}")
         await self._cleanup()
         self._initialized = False
     
@@ -99,7 +98,7 @@ class OperatorBase(ABC):
         Args:
             config: 新的配置
         """
-        self.logger.debug(f"{self.__class__.__name__} 收到配置更新請求")
+        logger.debug(f"{self.__class__.__name__} 收到配置更新請求")
     
     def is_enabled(self) -> bool:
         """檢查 Operator 是否啟用"""
@@ -113,7 +112,7 @@ class OperatorBase(ABC):
             enabled: 是否啟用
         """
         self.enabled = enabled
-        self.logger.info(f"{self.__class__.__name__} {'啟用' if enabled else '停用'}")
+        logger.info(f"{self.__class__.__name__} {'啟用' if enabled else '停用'}")
     
     def get_info(self) -> Dict[str, Any]:
         """
@@ -165,7 +164,7 @@ class OperatorBase(ABC):
         """
         # 基本驗證，子類別可以擴展
         if not audio_data:
-            self.logger.warning("收到空的音訊資料")
+            logger.warning("收到空的音訊資料")
             return False
         
         return True
@@ -225,7 +224,7 @@ class BufferingOperator(OperatorBase):
     async def flush(self):
         """清空緩衝區"""
         if self.buffer:
-            self.logger.debug(f"清空緩衝區，大小：{len(self.buffer)} bytes")
+            logger.debug(f"清空緩衝區，大小：{len(self.buffer)} bytes")
             self.buffer.clear()
     
     def add_to_buffer(self, data: bytes):

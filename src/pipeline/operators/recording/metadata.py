@@ -10,7 +10,6 @@ from pathlib import Path
 
 from src.utils.logger import logger
 
-logger = logger
 
 
 @dataclass

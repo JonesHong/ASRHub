@@ -35,7 +35,6 @@ class AudioStreamProcessor:
             channels: 聲道數
             dtype: 音訊資料類型
         """
-        self.logger = logger
         
         # 音訊參數
         self.buffer_size = buffer_size
@@ -61,7 +60,7 @@ class AudioStreamProcessor:
         self.silence_duration = 0.5  # 靜音持續時間（秒）
         self._silence_samples = 0
         
-        self.logger.info(
+        logger.info(
             f"音訊串流處理器初始化 - "
             f"採樣率: {sample_rate}Hz, "
             f"聲道: {channels}, "
@@ -72,7 +71,7 @@ class AudioStreamProcessor:
         """啟動串流處理器"""
         async with self._lock:
             if self.is_active:
-                self.logger.warning("串流處理器已經在運行")
+                logger.warning("串流處理器已經在運行")
                 return
             
             self.is_active = True
@@ -81,19 +80,19 @@ class AudioStreamProcessor:
             self.total_bytes = 0
             self._silence_samples = 0
             
-            self.logger.info("音訊串流處理器已啟動")
+            logger.info("音訊串流處理器已啟動")
     
     async def stop(self):
         """停止串流處理器"""
         async with self._lock:
             if not self.is_active:
-                self.logger.warning("串流處理器未在運行")
+                logger.warning("串流處理器未在運行")
                 return
             
             self.is_active = False
             self.buffer.clear()
             
-            self.logger.info(
+            logger.info(
                 f"音訊串流處理器已停止 - "
                 f"處理樣本: {self.total_samples}, "
                 f"總位元組: {self.total_bytes}"
@@ -206,7 +205,7 @@ class AudioStreamProcessor:
             else:
                 callback(data)
         except Exception as e:
-            self.logger.error(f"回呼執行錯誤: {e}")
+            logger.error(f"回呼執行錯誤: {e}")
     
     def set_audio_callback(self, callback: Callable):
         """設定音訊回呼函數"""
@@ -262,13 +261,13 @@ class AudioStreamProcessor:
         """更新配置"""
         if "silence_threshold" in config:
             self.silence_threshold = config["silence_threshold"]
-            self.logger.info(f"更新靜音閾值: {self.silence_threshold}")
+            logger.info(f"更新靜音閾值: {self.silence_threshold}")
         
         if "silence_duration" in config:
             self.silence_duration = config["silence_duration"]
-            self.logger.info(f"更新靜音持續時間: {self.silence_duration}秒")
+            logger.info(f"更新靜音持續時間: {self.silence_duration}秒")
         
         if "buffer_size" in config:
             self.buffer_size = config["buffer_size"]
             self.buffer = deque(maxlen=self.buffer_size)
-            self.logger.info(f"更新緩衝區大小: {self.buffer_size}")
+            logger.info(f"更新緩衝區大小: {self.buffer_size}")

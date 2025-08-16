@@ -64,7 +64,7 @@ class WhisperProvider(ProviderBase):
             else:
                 await self._load_openai_whisper()
             
-            self.logger.success(
+            logger.success(
                 f"Whisper 模型載入成功 - "
                 f"模型：{self.model_size}，"
                 f"裝置：{self.device}，"
@@ -72,7 +72,7 @@ class WhisperProvider(ProviderBase):
             )
             
         except Exception as e:
-            self.logger.error(f"載入 Whisper 模型失敗：{e}")
+            logger.error(f"載入 Whisper 模型失敗：{e}")
             raise ModelError(f"無法載入 Whisper 模型：{str(e)}")
     
     async def _load_faster_whisper(self):
@@ -132,7 +132,7 @@ class WhisperProvider(ProviderBase):
                     pass
             
             self.model = None
-            self.logger.info("Whisper 模型已卸載")
+            logger.info("Whisper 模型已卸載")
     
     async def transcribe(self, 
                         audio_data: bytes, 
@@ -182,11 +182,11 @@ class WhisperProvider(ProviderBase):
             
             # 如果是健康檢查且結果為空，使用 TRACE 級別
             if is_silence and len(result.text) == 0:
-                self.logger.trace(
+                logger.trace(
                     f"健康檢查完成 - 處理時間：{result.processing_time:.2f}秒"
                 )
             else:
-                self.logger.info(
+                logger.info(
                     f"轉譯完成 - "
                     f"文字長度：{len(result.text)}，"
                     f"處理時間：{result.processing_time:.2f}秒，"
@@ -196,7 +196,7 @@ class WhisperProvider(ProviderBase):
             return result
             
         except Exception as e:
-            self.logger.error(f"轉譯失敗：{e}")
+            logger.error(f"轉譯失敗：{e}")
             raise ProviderError(f"Whisper 轉譯失敗：{str(e)}")
     
     async def _transcribe_faster_whisper(self,
@@ -360,7 +360,7 @@ class WhisperProvider(ProviderBase):
         """
         # 確保音訊資料長度是偶數（16-bit PCM 需要）
         if len(audio_bytes) % 2 != 0:
-            self.logger.warning("音訊資料長度為奇數，添加填充位元組")
+            logger.warning("音訊資料長度為奇數，添加填充位元組")
             audio_bytes = audio_bytes + b'\x00'
         
         # 假設輸入是 16-bit PCM
@@ -404,7 +404,7 @@ class WhisperProvider(ProviderBase):
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"音訊檔案不存在：{file_path}")
         
-        self.logger.info(f"開始轉譯檔案：{file_path}")
+        logger.info(f"開始轉譯檔案：{file_path}")
         
         try:
             # 使用 faster-whisper 或 whisper 直接載入檔案
@@ -441,7 +441,7 @@ class WhisperProvider(ProviderBase):
             if not hasattr(result, 'audio_duration'):
                 result.audio_duration = 0  # 將在轉譯函數中設定
             
-            self.logger.info(
+            logger.info(
                 f"檔案轉譯完成 - "
                 f"檔案：{os.path.basename(file_path)}，"
                 f"文字長度：{len(result.text)}，"
@@ -452,7 +452,7 @@ class WhisperProvider(ProviderBase):
             return result
             
         except Exception as e:
-            self.logger.error(f"檔案轉譯失敗：{e}")
+            logger.error(f"檔案轉譯失敗：{e}")
             raise ProviderError(f"Whisper 檔案轉譯失敗：{str(e)}")
     
     async def _transcribe_faster_whisper_file(self,
@@ -537,7 +537,7 @@ class WhisperProvider(ProviderBase):
         if not self._initialized:
             await self.initialize()
         
-        self.logger.debug("開始預熱 Whisper 模型")
+        logger.debug("開始預熱 Whisper 模型")
         
         # 使用 1 秒的靜音進行預熱
         silence_duration = 1.0
@@ -548,6 +548,6 @@ class WhisperProvider(ProviderBase):
         try:
             # 執行一次轉譯
             await self.transcribe(silence_bytes)
-            self.logger.debug("Whisper 模型預熱完成")
+            logger.debug("Whisper 模型預熱完成")
         except Exception as e:
-            self.logger.warning(f"模型預熱失敗：{e}")
+            logger.warning(f"模型預熱失敗：{e}")

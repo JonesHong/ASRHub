@@ -10,7 +10,9 @@ from datetime import datetime, timedelta
 
 from src.utils.logger import logger
 from src.models.audio import AudioChunk
-from src.core.fsm import FSMController, FSMState
+from src.store import get_global_store
+from src.store.sessions import sessions_actions
+from src.store.sessions.sessions_state import FSMStateEnum
 
 
 class RingBuffer:
@@ -29,7 +31,6 @@ class RingBuffer:
         self.max_samples = size_seconds * sample_rate
         self.buffer: Deque[AudioChunk] = deque(maxlen=self.max_samples // 512)  # 假設每個 chunk 512 樣本
         self.total_samples = 0
-        self.logger = logger
         
     def append(self, chunk: AudioChunk):
         """
@@ -43,7 +44,7 @@ class RingBuffer:
         
         # 如果超過最大大小，自動丟棄最舊的數據（deque 的 maxlen 自動處理）
         if len(self.buffer) == self.buffer.maxlen:
-            self.logger.debug(f"循環緩衝區已滿，丟棄最舊數據")
+            logger.debug(f"循環緩衝區已滿，丟棄最舊數據")
     
     def get_audio(self, duration_seconds: Optional[float] = None) -> bytes:
         """
@@ -74,7 +75,7 @@ class RingBuffer:
         """清空緩衝區"""
         self.buffer.clear()
         self.total_samples = 0
-        self.logger.debug("循環緩衝區已清空")
+        logger.debug("循環緩衝區已清空")
     
     def get_size(self) -> int:
         """獲取緩衝區當前大小（樣本數）"""
@@ -96,7 +97,6 @@ class SlidingWindow:
         self.sample_rate = sample_rate
         self.max_samples = size * sample_rate
         self.window: List[AudioChunk] = []
-        self.logger = logger
         
     def update(self, chunk: AudioChunk):
         """
@@ -144,22 +144,22 @@ class AudioBufferManager:
     """音訊緩衝區管理器"""
     
     def __init__(self, ring_buffer_size: int = 30, 
-                 fsm_controller: Optional[FSMController] = None,
+                 session_id: Optional[str] = None,
                  sample_rate: int = 16000):
         """
         初始化緩衝區管理器
         
         Args:
             ring_buffer_size: 循環緩衝區大小（秒）
-            fsm_controller: FSM 控制器
+            session_id: 會話 ID（用於 PyStoreX）
             sample_rate: 採樣率
         """
         self.ring_buffer = RingBuffer(ring_buffer_size, sample_rate)
         self.recording_buffer: List[AudioChunk] = []
         self.wake_word_window = SlidingWindow(size=3, sample_rate=sample_rate)
-        self.fsm = fsm_controller
+        self.session_id = session_id
+        self.store = get_global_store() if session_id else None
         self.sample_rate = sample_rate
-        self.logger = logger
         
         # 統計資訊
         self.total_chunks_received = 0
@@ -169,7 +169,7 @@ class AudioBufferManager:
         # 串流緩衝區
         self.streaming_buffer: List[AudioChunk] = []
         
-        self.logger.info(f"音訊緩衝區管理器初始化完成，循環緩衝區：{ring_buffer_size}秒")
+        logger.info(f"音訊緩衝區管理器初始化完成，循環緩衝區：{ring_buffer_size}秒")
     
     def add_chunk(self, chunk: AudioChunk):
         """
@@ -192,7 +192,7 @@ class AudioBufferManager:
         if self.should_buffer_for_recording():
             if not self.recording_buffer and not self.recording_start_time:
                 self.recording_start_time = datetime.now()
-                self.logger.debug("開始錄音緩衝")
+                logger.debug("開始錄音緩衝")
             self.recording_buffer.append(chunk)
         
         # 根據 FSM 狀態決定是否串流
@@ -206,7 +206,16 @@ class AudioBufferManager:
         Returns:
             是否需要緩衝
         """
-        return self.fsm and self.fsm.state == FSMState.RECORDING
+        if not self.store or not self.session_id:
+            return False
+        
+        state = self.store.state
+        if hasattr(state, 'sessions') and state.sessions:
+            sessions = state.sessions.get('sessions', {})
+            session = sessions.get(self.session_id)
+            if session:
+                return session.get('fsm_state') == FSMStateEnum.RECORDING
+        return False
     
     def should_stream(self) -> bool:
         """
@@ -215,7 +224,16 @@ class AudioBufferManager:
         Returns:
             是否需要串流
         """
-        return self.fsm and self.fsm.state == FSMState.STREAMING
+        if not self.store or not self.session_id:
+            return False
+        
+        state = self.store.state
+        if hasattr(state, 'sessions') and state.sessions:
+            sessions = state.sessions.get('sessions', {})
+            session = sessions.get(self.session_id)
+            if session:
+                return session.get('fsm_state') == FSMStateEnum.STREAMING
+        return False
     
     def should_pause_for_reply(self) -> bool:
         """
@@ -224,7 +242,16 @@ class AudioBufferManager:
         Returns:
             是否需要暫停
         """
-        return self.fsm and self.fsm.state == FSMState.BUSY
+        if not self.store or not self.session_id:
+            return False
+        
+        state = self.store.state
+        if hasattr(state, 'sessions') and state.sessions:
+            sessions = state.sessions.get('sessions', {})
+            session = sessions.get(self.session_id)
+            if session:
+                return session.get('fsm_state') == FSMStateEnum.BUSY
+        return False
     
     def get_wake_word_buffer(self) -> bytes:
         """
@@ -264,12 +291,12 @@ class AudioBufferManager:
         """清空錄音緩衝"""
         self.recording_buffer.clear()
         self.recording_start_time = None
-        self.logger.debug("錄音緩衝已清空")
+        logger.debug("錄音緩衝已清空")
     
     def clear_streaming_buffer(self):
         """清空串流緩衝"""
         self.streaming_buffer.clear()
-        self.logger.debug("串流緩衝已清空")
+        logger.debug("串流緩衝已清空")
     
     def get_recording_duration(self) -> float:
         """
@@ -328,4 +355,4 @@ class AudioBufferManager:
         self.recording_start_time = None
         self.total_chunks_received = 0
         self.total_bytes_processed = 0
-        self.logger.info("所有緩衝區已重置")
+        logger.info("所有緩衝區已重置")

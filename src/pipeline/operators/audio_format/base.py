@@ -40,7 +40,6 @@ class AudioFormatOperatorBase(BufferingOperator):
         
         super().__init__(buffer_size)
         
-        self.logger = logger
         self.operator_id = operator_id
         
         # 設定目標元數據
@@ -83,7 +82,7 @@ class AudioFormatOperatorBase(BufferingOperator):
         # 當前輸入格式
         self.current_input_metadata = None
         
-        self.logger.info(
+        logger.info(
             f"AudioFormatOperator[{self.operator_id}] 初始化 - "
             f"目標格式: {self.target_metadata.sample_rate}Hz, "
             f"{self.target_metadata.channels}ch, {self.target_metadata.format.value}"
@@ -116,11 +115,11 @@ class AudioFormatOperatorBase(BufferingOperator):
             
             # 檢查是否需要轉換
             if input_metadata == self.target_metadata:
-                self.logger.debug(f"[{self.operator_id}] 音頻格式已符合目標，無需轉換")
+                logger.debug(f"[{self.operator_id}] 音頻格式已符合目標，無需轉換")
                 return audio_data
             
             # 記錄轉換信息
-            self.logger.debug(
+            logger.debug(
                 f"[{self.operator_id}] 格式轉換: "
                 f"{input_metadata.sample_rate}Hz {input_metadata.channels}ch {input_metadata.format.value} -> "
                 f"{self.target_metadata.sample_rate}Hz {self.target_metadata.channels}ch {self.target_metadata.format.value}"
@@ -139,7 +138,7 @@ class AudioFormatOperatorBase(BufferingOperator):
             return converted_data
             
         except Exception as e:
-            self.logger.error(f"[{self.operator_id}] 音頻格式轉換失敗: {e}")
+            logger.error(f"[{self.operator_id}] 音頻格式轉換失敗: {e}")
             raise PipelineError(f"音頻格式轉換失敗: {str(e)}")
     
     @abstractmethod
@@ -191,7 +190,7 @@ class AudioFormatOperatorBase(BufferingOperator):
     def _update_statistics(self, input_size: int, output_size: int):
         """更新統計信息"""
         ratio = output_size / input_size if input_size > 0 else 0
-        self.logger.debug(
+        logger.debug(
             f"[{self.operator_id}] 轉換完成 - "
             f"輸入: {input_size} bytes, 輸出: {output_size} bytes, "
             f"比例: {ratio:.2f}"
@@ -261,7 +260,7 @@ class AudioFormatOperatorBase(BufferingOperator):
         # 優先使用 AudioMetadata 對象
         if 'target_metadata' in config and isinstance(config['target_metadata'], AudioMetadata):
             self.target_metadata = config['target_metadata']
-            self.logger.info(
+            logger.info(
                 f"[{self.operator_id}] 目標格式更新為: "
                 f"{self.target_metadata.sample_rate}Hz, "
                 f"{self.target_metadata.channels}ch, "
@@ -275,7 +274,7 @@ class AudioFormatOperatorBase(BufferingOperator):
                 channels=target_config.get('channels', self.target_metadata.channels),
                 format=AudioFormat(target_config.get('format', self.target_metadata.format.value))
             )
-            self.logger.info(
+            logger.info(
                 f"[{self.operator_id}] 目標格式更新為: "
                 f"{self.target_metadata.sample_rate}Hz, "
                 f"{self.target_metadata.channels}ch, "
@@ -285,12 +284,12 @@ class AudioFormatOperatorBase(BufferingOperator):
         # 更新品質
         if 'quality' in config:
             self.quality = config['quality']
-            self.logger.info(f"[{self.operator_id}] 轉換品質更新為: {self.quality}")
+            logger.info(f"[{self.operator_id}] 轉換品質更新為: {self.quality}")
     
     async def flush(self):
         """清空緩衝區"""
         await super().flush()
-        self.logger.debug(f"[{self.operator_id}] 緩衝區已清空")
+        logger.debug(f"[{self.operator_id}] 緩衝區已清空")
     
     def get_chunk_size_for_rate(self, sample_rate: int, base_chunk: int = 512) -> int:
         """

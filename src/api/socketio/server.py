@@ -13,7 +13,9 @@ from datetime import datetime
 
 from src.api.base import APIBase, APIResponse
 from src.utils.logger import logger
-from src.core.session_manager import SessionManager
+# from src.core.session_manager import SessionManager  # DEPRECATED
+from src.store import get_global_store
+from src.store.sessions import sessions_actions, sessions_selectors
 from src.core.exceptions import APIError
 from src.api.socketio.stream_manager import SocketIOStreamManager
 from src.pipeline.manager import PipelineManager
@@ -28,7 +30,7 @@ class SocketIOServer(APIBase):
     支援事件驅動通訊、房間管理和廣播功能
     """
     
-    def __init__(self, session_manager: SessionManager,
+    def __init__(self, store=None,
                  pipeline_manager: Optional[PipelineManager] = None,
                  provider_manager: Optional[ProviderManager] = None):
         """
@@ -36,12 +38,12 @@ class SocketIOServer(APIBase):
         使用 ConfigManager 獲取配置
         
         Args:
-            session_manager: Session 管理器
+            store: PyStoreX store 實例
             pipeline_manager: Pipeline 管理器
             provider_manager: Provider 管理器
         """
-        # 只傳遞 session_manager 給父類
-        super().__init__(session_manager)
+        # 傳遞 store 給父類
+        super().__init__(store)
         
         # 從 ConfigManager 獲取配置
         sio_config = self.config_manager.api.socketio
@@ -51,8 +53,6 @@ class SocketIOServer(APIBase):
         self.host = sio_config.host
         self.port = sio_config.port
         
-        # 初始化 logger
-        self.logger = logger
         
         # 建立 Socket.io 服務器
         self.sio = socketio.AsyncServer(
@@ -130,10 +130,10 @@ class SocketIOServer(APIBase):
             self.site = web.TCPSite(self.runner, self.host, self.port)
             await self.site.start()
             
-            self.logger.info(f"Socket.io server started on {self.host}:{self.port}")
+            logger.info(f"Socket.io server started on {self.host}:{self.port}")
             
         except Exception as e:
-            self.logger.error(f"Failed to start Socket.io server: {e}")
+            logger.error(f"Failed to start Socket.io server: {e}")
             raise
             
     async def stop(self):
@@ -153,10 +153,10 @@ class SocketIOServer(APIBase):
             if hasattr(self, 'runner'):
                 await self.runner.cleanup()
             
-            self.logger.info("Socket.io server stopped")
+            logger.info("Socket.io server stopped")
             
         except Exception as e:
-            self.logger.error(f"Error stopping Socket.io server: {e}")
+            logger.error(f"Error stopping Socket.io server: {e}")
             
     async def _handle_connect(self, sid: str, environ: Dict[str, Any]):
         """
@@ -189,10 +189,10 @@ class SocketIOServer(APIBase):
                 to=sid
             )
             
-            self.logger.info(f"New Socket.io connection: {sid}")
+            logger.info(f"New Socket.io connection: {sid}")
             
         except Exception as e:
-            self.logger.error(f"Error handling connection: {e}")
+            logger.error(f"Error handling connection: {e}")
             
     async def _handle_disconnect(self, sid: str):
         """
@@ -224,10 +224,10 @@ class SocketIOServer(APIBase):
             # 移除連線記錄
             del self.connections[sid]
             
-            self.logger.info(f"Socket.io connection disconnected: {sid}")
+            logger.info(f"Socket.io connection disconnected: {sid}")
             
         except Exception as e:
-            self.logger.error(f"Error handling disconnect: {e}")
+            logger.error(f"Error handling disconnect: {e}")
             
     async def _handle_control_event(self, sid: str, data: Dict[str, Any]):
         """
@@ -258,9 +258,9 @@ class SocketIOServer(APIBase):
                     try:
                         validated_params = await self.validate_audio_params(audio_config)
                         connection.audio_config = validated_params
-                        self.logger.info(f"Socket.io 音訊配置已儲存，sid: {sid}, session_id: {connection.session_id}")
+                        logger.info(f"Socket.io 音訊配置已儲存，sid: {sid}, session_id: {connection.session_id}")
                     except APIError as e:
-                        self.logger.error(f"音訊配置驗證失敗: {e}")
+                        logger.error(f"音訊配置驗證失敗: {e}")
                         await self._emit_error(sid, f"音訊配置錯誤: {str(e)}")
                         return
                 
@@ -289,7 +289,7 @@ class SocketIOServer(APIBase):
                 await self._broadcast_status_to_room(connection.session_id)
                 
         except Exception as e:
-            self.logger.error(f"Error handling control event: {e}")
+            logger.error(f"Error handling control event: {e}")
             await self._emit_error(sid, str(e))
             
     async def _handle_audio_chunk_event(self, sid: str, data: Dict[str, Any]):
@@ -311,9 +311,10 @@ class SocketIOServer(APIBase):
                 await self._emit_error(sid, "No active session")
                 return
                 
-            # 檢查 session 狀態
-            session = self.session_manager.get_session(connection.session_id)
-            if not session or session.state != "LISTENING":
+            # 使用 selector 檢查 session 狀態
+            state = self.store.get_state() if self.store else None
+            session = sessions_selectors.get_session(connection.session_id)(state) if state else None
+            if not session or session.get("state", "IDLE") != "LISTENING":
                 await self._emit_error(sid, "Session not in LISTENING state")
                 return
                 
@@ -331,7 +332,7 @@ class SocketIOServer(APIBase):
             if connection.session_id not in self.stream_manager.stream_buffers:
                 # 檢查連線是否有音訊配置
                 if not hasattr(connection, 'audio_config') or connection.audio_config is None:
-                    self.logger.error(f"Socket.io 連線 {sid} 沒有音訊配置")
+                    logger.error(f"Socket.io 連線 {sid} 沒有音訊配置")
                     await self._emit_error(sid, "缺少音訊參數")
                     return
                     
@@ -388,7 +389,7 @@ class SocketIOServer(APIBase):
                 await self._emit_error(sid, "Failed to process audio chunk")
                 
         except Exception as e:
-            self.logger.error(f"Error handling audio chunk: {e}")
+            logger.error(f"Error handling audio chunk: {e}")
             await self._emit_error(sid, str(e))
             
     async def _handle_subscribe_event(self, sid: str, data: Dict[str, Any]):
@@ -419,14 +420,15 @@ class SocketIOServer(APIBase):
                 to=sid
             )
             
-            # 發送當前狀態
-            session = self.session_manager.get_session(session_id)
+            # 使用 selector 發送當前狀態
+            state = self.store.get_state() if self.store else None
+            session = sessions_selectors.get_session(session_id)(state) if state else None
             if session:
                 await self.sio.emit(
                     'status_update',
                     {
                         'session_id': session_id,
-                        'state': session.state,
+                        'state': session.get("state", "IDLE"),
                         'timestamp': datetime.now().isoformat()
                     },
                     namespace=self.namespace,
@@ -434,7 +436,7 @@ class SocketIOServer(APIBase):
                 )
                 
         except Exception as e:
-            self.logger.error(f"Error handling subscribe: {e}")
+            logger.error(f"Error handling subscribe: {e}")
             await self._emit_error(sid, str(e))
             
     async def _handle_unsubscribe_event(self, sid: str, data: Dict[str, Any]):
@@ -466,7 +468,7 @@ class SocketIOServer(APIBase):
             )
             
         except Exception as e:
-            self.logger.error(f"Error handling unsubscribe: {e}")
+            logger.error(f"Error handling unsubscribe: {e}")
             await self._emit_error(sid, str(e))
             
     async def _join_session_room(self, sid: str, session_id: str):
@@ -489,7 +491,7 @@ class SocketIOServer(APIBase):
             self.session_rooms[session_id] = set()
         self.session_rooms[session_id].add(sid)
         
-        self.logger.info(f"Socket {sid} joined room {room_name}")
+        logger.info(f"Socket {sid} joined room {room_name}")
         
     async def _leave_session_room(self, sid: str, session_id: str):
         """
@@ -510,7 +512,7 @@ class SocketIOServer(APIBase):
         if session_id in self.session_rooms:
             self.session_rooms[session_id].discard(sid)
             
-        self.logger.info(f"Socket {sid} left room {room_name}")
+        logger.info(f"Socket {sid} left room {room_name}")
         
     async def _broadcast_status_to_room(self, session_id: str):
         """
@@ -519,7 +521,9 @@ class SocketIOServer(APIBase):
         Args:
             session_id: Session ID
         """
-        session = self.session_manager.get_session(session_id)
+        # 使用 selector 獲取 session
+        state = self.store.get_state() if self.store else None
+        session = sessions_selectors.get_session(session_id)(state) if state else None
         if not session:
             return
             
@@ -529,7 +533,7 @@ class SocketIOServer(APIBase):
             'status_update',
             {
                 'session_id': session_id,
-                'state': session.state,
+                'state': session.get("state", "IDLE"),
                 'timestamp': datetime.now().isoformat()
             },
             namespace=self.namespace,
@@ -592,7 +596,7 @@ class SocketIOServer(APIBase):
             if audio_chunks:
                 # 合併所有音訊片段
                 complete_audio = b''.join(audio_chunks)
-                self.logger.info(f"收集完成，共 {len(audio_chunks)} 個片段，總大小 {len(complete_audio)} bytes")
+                logger.info(f"收集完成，共 {len(audio_chunks)} 個片段，總大小 {len(complete_audio)} bytes")
                 
                 # 呼叫實際的轉譯處理
                 await self._transcribe_audio(connection, complete_audio, room_name)
@@ -608,7 +612,7 @@ class SocketIOServer(APIBase):
                 )
                 
         except Exception as e:
-            self.logger.error(f"Error processing audio stream: {e}")
+            logger.error(f"Error processing audio stream: {e}")
             await self.sio.emit(
                 'error',
                 {
@@ -650,13 +654,13 @@ class SocketIOServer(APIBase):
                 final_text = f"[模擬] 收到 {len(audio_data)} bytes 的音訊"
             else:
                 # 先將 WebM 轉換為 PCM
-                self.logger.info("開始轉換 WebM 音訊到 PCM 格式")
+                logger.info("開始轉換 WebM 音訊到 PCM 格式")
                 try:
                     from src.utils.audio_converter import convert_webm_to_pcm
                     pcm_data = convert_webm_to_pcm(audio_data)
-                    self.logger.info(f"音訊轉換成功: {len(audio_data)} bytes WebM -> {len(pcm_data)} bytes PCM")
+                    logger.info(f"音訊轉換成功: {len(audio_data)} bytes WebM -> {len(pcm_data)} bytes PCM")
                 except Exception as e:
-                    self.logger.error(f"音訊轉換失敗: {e}")
+                    logger.error(f"音訊轉換失敗: {e}")
                     # 如果轉換失敗，無法處理
                     await self.sio.emit(
                         'error',
@@ -694,7 +698,7 @@ class SocketIOServer(APIBase):
                 
                 # 使用 ProviderManager 的 transcribe 方法（支援池化）
                 provider_name = self.provider_manager.default_provider
-                self.logger.info(f"使用 {provider_name} 進行轉譯")
+                logger.info(f"使用 {provider_name} 進行轉譯")
                 
                 # 執行轉譯
                 result = await self.provider_manager.transcribe(
@@ -730,10 +734,10 @@ class SocketIOServer(APIBase):
                         room=room_name
                     )
             
-            self.logger.info(f"轉譯完成: {final_text}")
+            logger.info(f"轉譯完成: {final_text}")
             
         except Exception as e:
-            self.logger.error(f"Transcription error: {e}")
+            logger.error(f"Transcription error: {e}")
             await self.sio.emit(
                 'error',
                 {
@@ -760,12 +764,15 @@ class SocketIOServer(APIBase):
             API 回應
         """
         try:
-            session = self.session_manager.get_session(session_id)
+            # 使用 selector 獲取 session
+            state = self.store.get_state() if self.store else None
+            session = sessions_selectors.get_session(session_id)(state) if state else None
             
             if command == "start":
                 if not session:
-                    session = self.session_manager.create_session(session_id)
-                self.session_manager.update_session_state(session_id, "LISTENING")
+                    # 使用 Store dispatch 創建 session
+                    self.store.dispatch(sessions_actions.create_session(session_id))
+                self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                 return self.create_success_response(
                     {"status": "started", "session_id": session_id},
                     session_id
@@ -773,7 +780,7 @@ class SocketIOServer(APIBase):
                 
             elif command == "stop":
                 if session:
-                    self.session_manager.update_session_state(session_id, "IDLE")
+                    self.store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
                     # 停止音訊串流
                     self.stream_manager.stop_stream(session_id)
                 return self.create_success_response(
@@ -784,7 +791,7 @@ class SocketIOServer(APIBase):
             elif command == "status":
                 status = {
                     "session_id": session_id,
-                    "state": session.state if session else "NO_SESSION",
+                    "state": session.get("state", "IDLE") if session else "NO_SESSION",
                     "exists": session is not None,
                     "stream_active": self.stream_manager.is_stream_active(session_id)
                 }
@@ -792,7 +799,7 @@ class SocketIOServer(APIBase):
                 
             elif command == "busy_start":
                 if session:
-                    self.session_manager.update_session_state(session_id, "BUSY")
+                    self.store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
                 return self.create_success_response(
                     {"status": "busy_started", "session_id": session_id},
                     session_id
@@ -800,7 +807,7 @@ class SocketIOServer(APIBase):
                 
             elif command == "busy_end":
                 if session:
-                    self.session_manager.update_session_state(session_id, "LISTENING")
+                    self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                 return self.create_success_response(
                     {"status": "busy_ended", "session_id": session_id},
                     session_id
@@ -810,7 +817,7 @@ class SocketIOServer(APIBase):
                 return self.create_error_response(f"Unknown command: {command}", session_id)
                 
         except Exception as e:
-            self.logger.error(f"Error handling command {command}: {e}")
+            logger.error(f"Error handling command {command}: {e}")
             return self.create_error_response(str(e), session_id)
             
     async def handle_transcribe(self, 

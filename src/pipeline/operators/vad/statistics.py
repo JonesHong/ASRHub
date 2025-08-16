@@ -10,8 +10,6 @@ from collections import deque
 
 from src.utils.logger import logger
 
-logger = logger
-
 
 @dataclass
 class VADFrame:

@@ -6,6 +6,7 @@ import time
 from pystorex import create_effect
 from reactivex import timer, interval
 from reactivex import operators as ops
+from src.utils.logger import logger
 
 from .stats_actions import (
     # 統計重置和初始化
@@ -40,8 +41,7 @@ from .stats_actions import (
 class StatsEffects:
     """Stats 相關的 Effects"""
     
-    def __init__(self, logger=None, metrics_client=None):
-        self.logger = logger
+    def __init__(self, metrics_client=None):
         self.metrics_client = metrics_client
     
     @create_effect(dispatch=False)
@@ -131,8 +131,8 @@ class StatsEffects:
     
     def _log_stats_action(self, action):
         """記錄統計 Action 到日誌"""
-        if self.logger:
-            self.logger.info(f"Stats Event: {action.type} | Payload: {action.payload}")
+        if logger:
+            logger.info(f"Stats Event: {action.type} | Payload: {action.payload}")
         else:
             print(f"Stats Event: {action.type} | Data: {action.payload}")
     
@@ -171,8 +171,8 @@ class StatsEffects:
                 )
                 
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"Failed to send performance metrics: {e}")
+            if logger:
+                logger.error(f"Failed to send performance metrics: {e}")
     
     def _monitor_quality_metrics(self, action):
         """監控品質指標"""
@@ -187,8 +187,8 @@ class StatsEffects:
                 
                 # 低置信度告警
                 if confidence < 0.7:
-                    if self.logger:
-                        self.logger.warning(
+                    if logger:
+                        logger.warning(
                             f"Low wake word confidence: {confidence:.2f} "
                             f"(session: {action.payload['session_id']})"
                         )
@@ -197,8 +197,8 @@ class StatsEffects:
                 if self.metrics_client:
                     self.metrics_client.increment("asr.wake_word.false_positive")
                 
-                if self.logger:
-                    self.logger.warning(
+                if logger:
+                    logger.warning(
                         f"Wake word false positive detected "
                         f"(session: {action.payload['session_id']})"
                     )
@@ -209,15 +209,15 @@ class StatsEffects:
                 if self.metrics_client:
                     self.metrics_client.increment(f"asr.{operation}.failed")
                 
-                if self.logger:
-                    self.logger.warning(
+                if logger:
+                    logger.warning(
                         f"{operation.capitalize()} failed: {action.payload['error']} "
                         f"(session: {action.payload['session_id']})"
                     )
                     
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"Failed to monitor quality metrics: {e}")
+            if logger:
+                logger.error(f"Failed to monitor quality metrics: {e}")
     
     def _handle_error_alert(self, action):
         """處理錯誤告警"""
@@ -233,23 +233,23 @@ class StatsEffects:
             alert_level = self._get_error_alert_level(error_type)
             
             if alert_level == "critical":
-                if self.logger:
-                    self.logger.critical(
+                if logger:
+                    logger.critical(
                         f"Critical error in session {session_id}: "
                         f"{error_type} - {error_message}"
                     )
                 # 這裡可以集成告警系統發送緊急通知
                 
             elif alert_level == "warning":
-                if self.logger:
-                    self.logger.warning(
+                if logger:
+                    logger.warning(
                         f"Warning in session {session_id}: "
                         f"{error_type} - {error_message}"
                     )
                     
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"Failed to handle error alert: {e}")
+            if logger:
+                logger.error(f"Failed to handle error alert: {e}")
     
     def _track_session_lifecycle(self, action):
         """追蹤會話生命週期"""
@@ -258,15 +258,15 @@ class StatsEffects:
                 if self.metrics_client:
                     self.metrics_client.increment("asr.sessions.created")
                 
-                if self.logger:
-                    self.logger.info(f"Session created: {action.payload['session_id']}")
+                if logger:
+                    logger.info(f"Session created: {action.payload['session_id']}")
             
             elif action.type == session_destroyed_stat.type:
                 if self.metrics_client:
                     self.metrics_client.increment("asr.sessions.destroyed")
                 
-                if self.logger:
-                    self.logger.info(f"Session destroyed: {action.payload['session_id']}")
+                if logger:
+                    logger.info(f"Session destroyed: {action.payload['session_id']}")
             
             elif action.type == update_active_sessions_peak.type:
                 peak_count = action.payload["count"]
@@ -274,12 +274,12 @@ class StatsEffects:
                 if self.metrics_client:
                     self.metrics_client.gauge("asr.sessions.active_peak", peak_count)
                 
-                if self.logger:
-                    self.logger.info(f"New active sessions peak: {peak_count}")
+                if logger:
+                    logger.info(f"New active sessions peak: {peak_count}")
                     
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"Failed to track session lifecycle: {e}")
+            if logger:
+                logger.error(f"Failed to track session lifecycle: {e}")
     
     def _analyze_wake_word_performance(self, actions):
         """分析喚醒詞性能"""
@@ -298,8 +298,8 @@ class StatsEffects:
                 self.metrics_client.gauge("asr.wake_word.detections_per_minute", detected_count)
                 self.metrics_client.gauge("asr.wake_word.false_positives_per_minute", false_positive_count)
             
-            if self.logger:
-                self.logger.info(
+            if logger:
+                logger.info(
                     f"Wake word performance (last minute): "
                     f"Accuracy: {accuracy:.1f}%, "
                     f"Detections: {detected_count}, "
@@ -307,8 +307,8 @@ class StatsEffects:
                 )
                 
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"Failed to analyze wake word performance: {e}")
+            if logger:
+                logger.error(f"Failed to analyze wake word performance: {e}")
     
     def _get_error_alert_level(self, error_type: str) -> str:
         """根據錯誤類型獲取告警級別"""
@@ -328,8 +328,8 @@ class StatsEffects:
 class StatsReportingEffects:
     """統計報告相關的 Effects"""
     
-    def __init__(self, logger=None):
-        self.logger = logger
+    def __init__(self):
+        pass
     
     @create_effect
     def periodic_stats_report(self, action_stream):
@@ -358,8 +358,8 @@ class StatsReportingEffects:
         try:
             # 這裡可以實現將統計數據保存到文件或資料庫的邏輯
             timestamp = time.time()
-            if self.logger:
-                self.logger.debug(f"Persisting stats at {timestamp}: {action.type}")
+            if logger:
+                logger.debug(f"Persisting stats at {timestamp}: {action.type}")
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"Failed to persist stats: {e}")
+            if logger:
+                logger.error(f"Failed to persist stats: {e}")

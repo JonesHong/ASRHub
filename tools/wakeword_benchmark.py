@@ -29,7 +29,6 @@ class WakeWordBenchmark:
     def __init__(self):
         """初始化基準測試器"""
         self.config_manager = ConfigManager()
-        self.logger = logger
         
         # 從配置讀取音訊參數        
         # 測試配置
@@ -170,7 +169,7 @@ class WakeWordBenchmark:
             return result
             
         except Exception as e:
-            self.logger.error(f"配置測試失敗: {e}")
+            logger.error(f"配置測試失敗: {e}")
             return {
                 "config": config,
                 "error": str(e),
@@ -272,7 +271,7 @@ class WakeWordBenchmark:
             print(f"💾 結果已保存到: {output_file}")
             
         except Exception as e:
-            self.logger.error(f"保存結果失敗: {e}")
+            logger.error(f"保存結果失敗: {e}")
 
 
 def main():

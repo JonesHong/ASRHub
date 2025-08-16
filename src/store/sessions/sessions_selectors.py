@@ -61,32 +61,32 @@ def get_active_session():
 def get_session_fsm_state(session_id: str):
     """獲取特定會話的 FSM 狀態"""
     return create_selector(
-        get_session(session_id),
-        result_fn=lambda session: session["fsm_state"] if session else None
+        get_all_sessions,
+        result_fn=lambda sessions: sessions.get(session_id, {}).get("fsm_state") if sessions.get(session_id) else None
     )
 
 
 def get_session_transcription(session_id: str):
     """獲取特定會話的轉譯結果"""
     return create_selector(
-        get_session(session_id),
-        result_fn=lambda session: session["transcription"] if session else None
+        get_all_sessions,
+        result_fn=lambda sessions: sessions.get(session_id, {}).get("transcription") if sessions.get(session_id) else None
     )
 
 
 def get_session_error(session_id: str):
     """獲取特定會話的錯誤信息"""
     return create_selector(
-        get_session(session_id),
-        result_fn=lambda session: session["error"] if session else None
+        get_all_sessions,
+        result_fn=lambda sessions: sessions.get(session_id, {}).get("error") if sessions.get(session_id) else None
     )
 
 
 def get_session_audio_buffer_size(session_id: str):
     """獲取特定會話的音訊緩衝區大小"""
     return create_selector(
-        get_session(session_id),
-        result_fn=lambda session: len(session["audio_buffer"]) if session else 0
+        get_all_sessions,
+        result_fn=lambda sessions: len(sessions.get(session_id, {}).get("audio_buffer", [])) if sessions.get(session_id) else 0
     )
 
 
@@ -253,3 +253,155 @@ def get_sessions_with_errors():
             if session["error"] is not None
         ]
     )
+
+
+# ============================================================================
+# 新增的 Selectors (取代 SessionManager 功能)
+# ============================================================================
+
+def get_session_state(session_id: str):
+    """獲取特定會話的狀態 (IDLE, LISTENING, BUSY)"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: sessions.get(session_id, {}).get("state", "IDLE") if sessions.get(session_id) else None
+    )
+
+
+def get_session_metadata(session_id: str):
+    """獲取特定會話的 metadata"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: sessions.get(session_id, {}).get("metadata", {}) if sessions.get(session_id) else {}
+    )
+
+
+def get_session_pipeline_config(session_id: str):
+    """獲取特定會話的 pipeline 配置"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: sessions.get(session_id, {}).get("pipeline_config", {}) if sessions.get(session_id) else {}
+    )
+
+
+def get_session_provider_config(session_id: str):
+    """獲取特定會話的 provider 配置"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: sessions.get(session_id, {}).get("provider_config", {}) if sessions.get(session_id) else {}
+    )
+
+
+def get_session_wake_info(session_id: str):
+    """獲取特定會話的喚醒資訊"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: {
+            "wake_source": sessions.get(session_id, {}).get("wake_source"),
+            "wake_time": sessions.get(session_id, {}).get("wake_time"),
+            "wake_timeout": sessions.get(session_id, {}).get("wake_timeout", 30.0),
+            "is_wake_expired": _is_wake_expired(sessions.get(session_id)) if sessions.get(session_id) else False
+        } if sessions.get(session_id) else None
+    )
+
+
+def get_session_priority(session_id: str):
+    """獲取特定會話的優先級"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: sessions.get(session_id, {}).get("priority", 0) if sessions.get(session_id) else 0
+    )
+
+
+def get_sessions_by_wake_source(source: str):
+    """根據喚醒源獲取會話列表"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: [
+            session for session in sessions.values()
+            if session.get("wake_source") == source
+        ]
+    )
+
+
+def get_active_wake_sessions():
+    """獲取所有處於喚醒狀態且未超時的會話"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: [
+            session for session in sessions.values()
+            if session.get("wake_time") and not _is_wake_expired(session)
+        ]
+    )
+
+
+def get_sessions_by_priority(min_priority: int = 0):
+    """根據優先級獲取會話（降序排列）"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: sorted(
+            [s for s in sessions.values() if s.get("priority", 0) >= min_priority],
+            key=lambda s: s.get("priority", 0),
+            reverse=True
+        )
+    )
+
+
+def get_wake_stats():
+    """獲取喚醒統計資訊"""
+    return create_selector(
+        get_all_sessions,
+        get_active_wake_sessions,
+        result_fn=lambda all_sessions, active_wake: {
+            "total_sessions": len(all_sessions),
+            "active_wake_sessions": len(active_wake),
+            "wake_word_sessions": len([s for s in all_sessions.values() if s.get("wake_source") == "wake_word"]),
+            "ui_wake_sessions": len([s for s in all_sessions.values() if s.get("wake_source") == "ui"]),
+            "visual_wake_sessions": len([s for s in all_sessions.values() if s.get("wake_source") == "visual"]),
+            "wake_expired_sessions": len([s for s in all_sessions.values() if _is_wake_expired(s)])
+        }
+    )
+
+
+def get_session_by_state(state: str):
+    """根據狀態獲取會話列表"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: [
+            session for session in sessions.values()
+            if session.get("state") == state
+        ]
+    )
+
+
+def get_session_mode(session_id: str):
+    """獲取特定會話的模式"""
+    return create_selector(
+        get_session(session_id),
+        result_fn=lambda session: session.get("mode", "streaming") if session else None
+    )
+
+
+def list_sessions():
+    """列出所有有效的會話（類似 SessionManager.list_sessions）"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: list(sessions.values())
+    )
+
+
+def session_exists(session_id: str):
+    """檢查會話是否存在"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: session_id in sessions
+    )
+
+
+# 輔助函數
+def _is_wake_expired(session):
+    """檢查喚醒是否已超時"""
+    import time
+    if not session or not session.get("wake_time"):
+        return False
+    wake_timeout = session.get("wake_timeout", 30.0)
+    return (time.time() - session["wake_time"]) > wake_timeout

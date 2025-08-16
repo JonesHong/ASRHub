@@ -11,7 +11,6 @@ from src.models.audio_format import AudioFormat
 from src.core.exceptions import AudioFormatError
 from src.utils.logger import logger
 
-logger = logger
 
 
 def create_wav_header(

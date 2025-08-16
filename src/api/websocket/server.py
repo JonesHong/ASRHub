@@ -13,7 +13,9 @@ from datetime import datetime
 
 from src.api.base import APIBase, APIResponse
 from src.utils.logger import logger
-from src.core.session_manager import SessionManager
+# from src.core.session_manager import SessionManager  # DEPRECATED
+from src.store import get_global_store
+from src.store.sessions import sessions_actions, sessions_selectors
 from src.core.exceptions import APIError
 from src.api.websocket.stream_manager import WebSocketStreamManager
 from src.pipeline.manager import PipelineManager
@@ -29,7 +31,7 @@ class WebSocketServer(APIBase):
     支援即時雙向通訊和音訊串流處理
     """
     
-    def __init__(self, session_manager: SessionManager,
+    def __init__(self, store=None,
                  pipeline_manager: Optional[PipelineManager] = None,
                  provider_manager: Optional[ProviderManager] = None):
         """
@@ -37,12 +39,12 @@ class WebSocketServer(APIBase):
         使用 ConfigManager 獲取配置
         
         Args:
-            session_manager: Session 管理器
+            store: PyStoreX store 實例
             pipeline_manager: Pipeline 管理器
             provider_manager: Provider 管理器
         """
-        # 只傳遞 session_manager 給父類
-        super().__init__(session_manager)
+        # 傳遞 store 給父類
+        super().__init__(store)
         
         # 從 ConfigManager 獲取配置
         ws_config = self.config_manager.api.websocket
@@ -51,7 +53,6 @@ class WebSocketServer(APIBase):
         self.port = ws_config.port
         self.server = None
         self.connections: Dict[str, WebSocketConnection] = {}
-        self.logger = logger
         self.stream_manager = WebSocketStreamManager()
         self.pipeline_manager = pipeline_manager
         self.provider_manager = provider_manager
@@ -69,13 +70,13 @@ class WebSocketServer(APIBase):
                 self.host,
                 self.port
             )
-            self.logger.info(f"WebSocket server started on {self.host}:{self.port}")
+            logger.info(f"WebSocket server started on {self.host}:{self.port}")
             
             # 啟動心跳檢查任務
             asyncio.create_task(self._heartbeat_task())
             
         except Exception as e:
-            self.logger.error(f"Failed to start WebSocket server: {e}")
+            logger.error(f"Failed to start WebSocket server: {e}")
             raise
     
     async def stop(self):
@@ -92,10 +93,10 @@ class WebSocketServer(APIBase):
                 self.server.close()
                 await self.server.wait_closed()
                 
-            self.logger.info("WebSocket server stopped")
+            logger.info("WebSocket server stopped")
             
         except Exception as e:
-            self.logger.error(f"Error stopping WebSocket server: {e}")
+            logger.error(f"Error stopping WebSocket server: {e}")
             
     async def handle_connection(self, websocket: WebSocketServerProtocol, path: str):
         """
@@ -114,7 +115,7 @@ class WebSocketServer(APIBase):
         )
         
         self.connections[connection_id] = connection
-        self.logger.info(f"New WebSocket connection: {connection_id}")
+        logger.info(f"New WebSocket connection: {connection_id}")
         
         try:
             # 發送歡迎訊息
@@ -126,9 +127,9 @@ class WebSocketServer(APIBase):
                 await self._handle_message(connection, message)
                 
         except websockets.exceptions.ConnectionClosed:
-            self.logger.info(f"WebSocket connection closed: {connection_id}")
+            logger.info(f"WebSocket connection closed: {connection_id}")
         except Exception as e:
-            self.logger.error(f"Error handling connection {connection_id}: {e}")
+            logger.error(f"Error handling connection {connection_id}: {e}")
         finally:
             await self._close_connection(connection_id)
             
@@ -172,7 +173,7 @@ class WebSocketServer(APIBase):
                 await self._send_error(connection, f"Unknown message type: {message_type}")
                 
         except Exception as e:
-            self.logger.error(f"Error handling message: {e}")
+            logger.error(f"Error handling message: {e}")
             await self._send_error(connection, str(e))
             
     async def _handle_control_message(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
@@ -196,7 +197,7 @@ class WebSocketServer(APIBase):
         # 如果沒有 session_id，先建立新的 session
         if not connection.session_id and command == "start":
             connection.session_id = data.get("session_id") or str(uuid.uuid4())
-            self.logger.info(f"從 control start 命令設置 session_id: {connection.session_id}")
+            logger.info(f"從 control start 命令設置 session_id: {connection.session_id}")
             
         response = await self.handle_control_command(
             command=command,
@@ -231,9 +232,10 @@ class WebSocketServer(APIBase):
             return
             
         try:
-            # 檢查 session 狀態
-            session = self.session_manager.get_session(connection.session_id)
-            if not session or session.state != "LISTENING":
+            # 使用 selector 檢查 session 狀態
+            state = self.store.get_state() if self.store else None
+            session = sessions_selectors.get_session(connection.session_id)(state) if state else None
+            if not session or session.get("state", "IDLE") != "LISTENING":
                 await self._send_error(connection, "Session not in LISTENING state")
                 return
                 
@@ -241,8 +243,8 @@ class WebSocketServer(APIBase):
             if connection.session_id not in self.stream_manager.stream_buffers:
                 # 檢查連線是否有音訊配置
                 if not hasattr(connection, 'audio_config') or connection.audio_config is None:
-                    self.logger.error(f"連線 {connection.id} 沒有音訊配置, session_id: {connection.session_id}")
-                    self.logger.debug(f"連線屬性: {[attr for attr in dir(connection) if not attr.startswith('_')]}")
+                    logger.error(f"連線 {connection.id} 沒有音訊配置, session_id: {connection.session_id}")
+                    logger.debug(f"連線屬性: {[attr for attr in dir(connection) if not attr.startswith('_')]}")
                     await self._send_error(connection, "缺少音訊配置，請先發送 audio_config 訊息")
                     return
                     
@@ -271,7 +273,7 @@ class WebSocketServer(APIBase):
                 await self._send_error(connection, "Failed to process audio chunk")
                 
         except Exception as e:
-            self.logger.error(f"Error handling audio data: {e}")
+            logger.error(f"Error handling audio data: {e}")
             await self._send_error(connection, str(e))
     
     async def _handle_audio_json(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
@@ -286,7 +288,7 @@ class WebSocketServer(APIBase):
         if "session_id" in data:
             if not connection.session_id:
                 connection.session_id = data["session_id"]
-                self.logger.info(f"從 audio 訊息設置 session_id: {connection.session_id}")
+                logger.info(f"從 audio 訊息設置 session_id: {connection.session_id}")
         
         if not connection.session_id:
             await self._send_error(connection, "No session_id provided")
@@ -303,7 +305,7 @@ class WebSocketServer(APIBase):
             audio_bytes = base64.b64decode(audio_base64)
             await self._handle_audio_data(connection, audio_bytes)
         except Exception as e:
-            self.logger.error(f"Error decoding audio data: {e}")
+            logger.error(f"Error decoding audio data: {e}")
             await self._send_error(connection, "Failed to decode audio data")
         
     async def handle_control_command(self, 
@@ -322,12 +324,15 @@ class WebSocketServer(APIBase):
             API 回應
         """
         try:
-            session = self.session_manager.get_session(session_id)
+            # 使用 selector 獲取 session
+            state = self.store.get_state() if self.store else None
+            session = sessions_selectors.get_session(session_id)(state) if state else None
             
             if command == "start":
                 if not session:
-                    session = self.session_manager.create_session(session_id)
-                self.session_manager.update_session_state(session_id, "LISTENING")
+                    # 使用 Store dispatch 創建 session
+                    self.store.dispatch(sessions_actions.create_session(session_id))
+                self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                 return self.create_success_response(
                     {"status": "started", "session_id": session_id},
                     session_id
@@ -335,7 +340,7 @@ class WebSocketServer(APIBase):
                 
             elif command == "stop":
                 if session:
-                    self.session_manager.update_session_state(session_id, "IDLE")
+                    self.store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
                     # 停止音訊串流
                     self.stream_manager.stop_stream(session_id)
                 return self.create_success_response(
@@ -346,14 +351,14 @@ class WebSocketServer(APIBase):
             elif command == "status":
                 status = {
                     "session_id": session_id,
-                    "state": session.state if session else "NO_SESSION",
+                    "state": session.get("state", "IDLE") if session else "NO_SESSION",
                     "exists": session is not None
                 }
                 return self.create_success_response(status, session_id)
                 
             elif command == "busy_start":
                 if session:
-                    self.session_manager.update_session_state(session_id, "BUSY")
+                    self.store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
                 return self.create_success_response(
                     {"status": "busy_started", "session_id": session_id},
                     session_id
@@ -361,7 +366,7 @@ class WebSocketServer(APIBase):
                 
             elif command == "busy_end":
                 if session:
-                    self.session_manager.update_session_state(session_id, "LISTENING")
+                    self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                 return self.create_success_response(
                     {"status": "busy_ended", "session_id": session_id},
                     session_id
@@ -371,7 +376,7 @@ class WebSocketServer(APIBase):
                 return self.create_error_response(f"Unknown command: {command}", session_id)
                 
         except Exception as e:
-            self.logger.error(f"Error handling command {command}: {e}")
+            logger.error(f"Error handling command {command}: {e}")
             return self.create_error_response(str(e), session_id)
             
     async def handle_transcribe(self, 
@@ -423,7 +428,7 @@ class WebSocketServer(APIBase):
         try:
             await connection.websocket.send(json.dumps(message))
         except Exception as e:
-            self.logger.error(f"Error sending message: {e}")
+            logger.error(f"Error sending message: {e}")
             
     async def _handle_audio_config(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
         """
@@ -439,18 +444,18 @@ class WebSocketServer(APIBase):
         if "session_id" in data:
             if not connection.session_id:
                 connection.session_id = data["session_id"]
-                self.logger.info(f"從 audio_config 訊息設置 session_id: {connection.session_id}")
+                logger.info(f"從 audio_config 訊息設置 session_id: {connection.session_id}")
         
         # 驗證音訊參數
         try:
-            self.logger.debug(f"收到音訊配置: {config}")
+            logger.debug(f"收到音訊配置: {config}")
             validated_params = await self.validate_audio_params(config)
             
             # 儲存音訊配置到連線
             connection.audio_config = validated_params
             
-            self.logger.info(f"音訊配置已儲存到連線 {connection.id}, session_id: {connection.session_id}")
-            self.logger.debug(f"儲存的配置: {validated_params}")
+            logger.info(f"音訊配置已儲存到連線 {connection.id}, session_id: {connection.session_id}")
+            logger.debug(f"儲存的配置: {validated_params}")
             
             # 發送確認訊息
             await self._send_message(connection, {
@@ -466,12 +471,12 @@ class WebSocketServer(APIBase):
                 "timestamp": datetime.now().isoformat()
             })
             
-            self.logger.info(f"音訊配置已更新: {validated_params}")
+            logger.info(f"音訊配置已更新: {validated_params}")
             
         except APIError as e:
             await self._send_error(connection, f"音訊配置錯誤: {str(e)}")
         except Exception as e:
-            self.logger.error(f"處理音訊配置時發生錯誤: {e}")
+            logger.error(f"處理音訊配置時發生錯誤: {e}")
             await self._send_error(connection, "處理音訊配置失敗")
         
     async def _send_error(self, connection: 'WebSocketConnection', error_message: str):
@@ -497,16 +502,18 @@ class WebSocketServer(APIBase):
         if not connection.session_id:
             return
             
-        session = self.session_manager.get_session(connection.session_id)
+        # 使用 selector 獲取 session
+        state = self.store.get_state() if self.store else None
+        session = sessions_selectors.get_session(connection.session_id)(state) if state else None
         if not session:
             return
             
         # 建立狀態更新訊息
         status_message = MessageBuilder.build_status(
             session_id=connection.session_id,
-            state=session.state,
+            state=session.get("state", "IDLE"),
             details={
-                "last_activity": session.last_activity.isoformat() if hasattr(session, 'last_activity') else None
+                "last_activity": session.get("last_activity").isoformat() if isinstance(session.get("last_activity"), datetime) else session.get("last_activity")
             }
         )
         
@@ -516,7 +523,7 @@ class WebSocketServer(APIBase):
                 try:
                     await self._send_message(conn, status_message)
                 except Exception as e:
-                    self.logger.error(f"Error broadcasting to connection {conn_id}: {e}")
+                    logger.error(f"Error broadcasting to connection {conn_id}: {e}")
         
     async def _close_connection(self, connection_id: str):
         """
@@ -538,7 +545,7 @@ class WebSocketServer(APIBase):
             # 移除連線記錄
             del self.connections[connection_id]
             
-            self.logger.info(f"Connection {connection_id} closed and cleaned up")
+            logger.info(f"Connection {connection_id} closed and cleaned up")
             
     async def _heartbeat_task(self):
         """心跳檢查任務"""
@@ -553,14 +560,14 @@ class WebSocketServer(APIBase):
                             pong_waiter = await connection.websocket.ping()
                             await asyncio.wait_for(pong_waiter, timeout=10)
                         except (websockets.exceptions.ConnectionClosed, asyncio.TimeoutError):
-                            self.logger.warning(f"Connection {conn_id} failed heartbeat")
+                            logger.warning(f"Connection {conn_id} failed heartbeat")
                             await self._close_connection(conn_id)
                             
                 # 每 30 秒檢查一次
                 await asyncio.sleep(30)
                 
             except Exception as e:
-                self.logger.error(f"Error in heartbeat task: {e}")
+                logger.error(f"Error in heartbeat task: {e}")
                 
     async def _process_audio_stream(self, connection: 'WebSocketConnection'):
         """
@@ -593,7 +600,7 @@ class WebSocketServer(APIBase):
             if audio_chunks:
                 # 合併所有音訊片段
                 complete_audio = b''.join(audio_chunks)
-                self.logger.info(f"收集完成，共 {len(audio_chunks)} 個片段，總大小 {len(complete_audio)} bytes")
+                logger.info(f"收集完成，共 {len(audio_chunks)} 個片段，總大小 {len(complete_audio)} bytes")
                 
                 # 呼叫實際的轉譯處理
                 await self._transcribe_audio(connection, complete_audio)
@@ -601,7 +608,7 @@ class WebSocketServer(APIBase):
                 await self._send_error(connection, "沒有收到音訊資料")
                 
         except Exception as e:
-            self.logger.error(f"Error processing audio stream: {e}")
+            logger.error(f"Error processing audio stream: {e}")
             await self._send_error(connection, f"處理音訊串流錯誤: {str(e)}")
         finally:
             # 清理串流
@@ -630,12 +637,12 @@ class WebSocketServer(APIBase):
                 final_text = f"[模擬] 收到 {len(audio_data)} bytes 的音訊"
             else:
                 # 先將 WebM 轉換為 PCM
-                self.logger.info("開始轉換 WebM 音訊到 PCM 格式")
+                logger.info("開始轉換 WebM 音訊到 PCM 格式")
                 try:
                     pcm_data = convert_webm_to_pcm(audio_data)
-                    self.logger.info(f"音訊轉換成功: {len(audio_data)} bytes WebM -> {len(pcm_data)} bytes PCM")
+                    logger.info(f"音訊轉換成功: {len(audio_data)} bytes WebM -> {len(pcm_data)} bytes PCM")
                 except Exception as e:
-                    self.logger.error(f"音訊轉換失敗: {e}")
+                    logger.error(f"音訊轉換失敗: {e}")
                     # 如果轉換失敗，無法處理
                     await self._send_error(connection, 
                         "無法轉換音訊格式。請確保系統已安裝 FFmpeg 或 pydub。"
@@ -670,7 +677,7 @@ class WebSocketServer(APIBase):
                 
                 # 使用 ProviderManager 的 transcribe 方法（支援池化）
                 provider_name = self.provider_manager.default_provider
-                self.logger.info(f"使用 {provider_name} 進行轉譯")
+                logger.info(f"使用 {provider_name} 進行轉譯")
                 
                 # 執行轉譯
                 result = await self.provider_manager.transcribe(
@@ -695,10 +702,10 @@ class WebSocketServer(APIBase):
                     final_text = "無法辨識音訊內容"
                     await self._send_error(connection, final_text)
             
-            self.logger.info(f"轉譯完成: {final_text}")
+            logger.info(f"轉譯完成: {final_text}")
             
         except Exception as e:
-            self.logger.error(f"Transcription error: {e}")
+            logger.error(f"Transcription error: {e}")
             await self._send_error(connection, f"轉譯錯誤: {str(e)}")
                 
 

@@ -13,7 +13,6 @@ from tqdm.asyncio import tqdm
 
 from src.utils.logger import logger
 
-logger = logger
 
 
 class VADModelDownloader:

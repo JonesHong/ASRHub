@@ -42,7 +42,7 @@ class FFmpegAudioFormatOperator(AudioFormatOperatorBase):
         # 檢查 FFmpeg 是否可用
         self._check_ffmpeg_available()
         
-        self.logger.info(f"FFmpegAudioFormatOperator[{self.operator_id}] 初始化完成")
+        logger.info(f"FFmpegAudioFormatOperator[{self.operator_id}] 初始化完成")
     
     def _check_ffmpeg_available(self):
         """檢查 FFmpeg 是否可用"""
@@ -50,10 +50,10 @@ class FFmpegAudioFormatOperator(AudioFormatOperatorBase):
             subprocess.run([self.ffmpeg_path, '-version'], 
                          capture_output=True, check=True)
             self.ffmpeg_available = True
-            self.logger.debug(f"[{self.operator_id}] FFmpeg 可用")
+            logger.debug(f"[{self.operator_id}] FFmpeg 可用")
         except (subprocess.CalledProcessError, FileNotFoundError):
             self.ffmpeg_available = False
-            self.logger.warning(f"[{self.operator_id}] FFmpeg 不可用")
+            logger.warning(f"[{self.operator_id}] FFmpeg 不可用")
             if not self.use_pydub_fallback:
                 raise AudioFormatError("FFmpeg 未安裝且未啟用 pydub 備份")
     
@@ -118,10 +118,10 @@ class FFmpegAudioFormatOperator(AudioFormatOperatorBase):
                     expected_alignment = bytes_per_sample * to_metadata.channels
                     if len(pcm_data) % expected_alignment != 0:
                         padding_needed = expected_alignment - (len(pcm_data) % expected_alignment)
-                        self.logger.warning(f"音頻數據未對齊，添加 {padding_needed} 字節填充")
+                        logger.warning(f"音頻數據未對齊，添加 {padding_needed} 字節填充")
                         pcm_data += b'\x00' * padding_needed
                 
-                self.logger.debug(
+                logger.debug(
                     f"[{self.operator_id}] FFmpeg 轉換成功: "
                     f"{len(audio_data)} bytes -> {len(pcm_data)} bytes"
                 )
@@ -129,7 +129,7 @@ class FFmpegAudioFormatOperator(AudioFormatOperatorBase):
                 return pcm_data
                 
         except Exception as e:
-            self.logger.error(f"[{self.operator_id}] FFmpeg 轉換失敗: {e}")
+            logger.error(f"[{self.operator_id}] FFmpeg 轉換失敗: {e}")
             raise AudioFormatError(f"FFmpeg 轉換失敗: {str(e)}")
     
     async def _convert_with_pydub(self, audio_data: bytes,
@@ -164,7 +164,7 @@ class FFmpegAudioFormatOperator(AudioFormatOperatorBase):
             # 導出為 PCM
             pcm_data = audio.raw_data
             
-            self.logger.debug(
+            logger.debug(
                 f"[{self.operator_id}] pydub 轉換成功: "
                 f"{len(audio_data)} bytes -> {len(pcm_data)} bytes"
             )
@@ -272,7 +272,7 @@ class FFmpegAudioFormatOperator(AudioFormatOperatorBase):
                     return info.get('streams', [{}])[0]
                 
         except Exception as e:
-            self.logger.error(f"ffprobe 失敗: {e}")
+            logger.error(f"ffprobe 失敗: {e}")
         
         return {}
     
@@ -290,7 +290,7 @@ class FFmpegAudioFormatOperator(AudioFormatOperatorBase):
         
         if 'additional_args' in config:
             self.additional_args = config['additional_args']
-            self.logger.info(f"[{self.operator_id}] FFmpeg 額外參數更新: {self.additional_args}")
+            logger.info(f"[{self.operator_id}] FFmpeg 額外參數更新: {self.additional_args}")
         
         if 'use_pydub_fallback' in config:
             self.use_pydub_fallback = config['use_pydub_fallback']

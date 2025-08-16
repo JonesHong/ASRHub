@@ -24,7 +24,6 @@ class ProviderManager:
         使用 ConfigManager 獲取配置
         """
         self.config_manager = ConfigManager()
-        self.logger = logger
         
         # Provider 實例快取
         self.providers: Dict[str, ProviderBase] = {}
@@ -49,10 +48,10 @@ class ProviderManager:
     async def initialize(self):
         """初始化 Provider Manager"""
         if self._initialized:
-            self.logger.warning("Provider Manager 已經初始化")
+            logger.warning("Provider Manager 已經初始化")
             return
         
-        self.logger.info("初始化 Provider Manager...")
+        logger.info("初始化 Provider Manager...")
         
         # 初始化已啟用的 Providers
         await self._initialize_enabled_providers()
@@ -70,7 +69,7 @@ class ProviderManager:
             
             if available:
                 self.default_provider = available[0]
-                self.logger.warning(
+                logger.warning(
                     f"預設 Provider '{self.config_manager.providers.default}' 不可用，"
                     f"使用 '{self.default_provider}' 作為預設"
                 )
@@ -78,7 +77,7 @@ class ProviderManager:
                 raise ConfigurationError("沒有可用的 ASR Provider")
         
         self._initialized = True
-        self.logger.success("Provider Manager 初始化完成")
+        logger.success("Provider Manager 初始化完成")
     
     async def _initialize_enabled_providers(self):
         """初始化所有已啟用的 Providers"""
@@ -102,7 +101,7 @@ class ProviderManager:
             name: Provider 名稱
         """
         if name not in self.provider_registry:
-            self.logger.error(f"未知的 Provider 類型：{name}")
+            logger.error(f"未知的 Provider 類型：{name}")
             return
         
         try:
@@ -116,10 +115,10 @@ class ProviderManager:
             # 儲存到快取
             self.providers[name] = provider
             
-            self.logger.info(f"Provider '{name}' 初始化成功")
+            logger.info(f"Provider '{name}' 初始化成功")
             
         except Exception as e:
-            self.logger.error(f"初始化 Provider '{name}' 失敗：{e}")
+            logger.error(f"初始化 Provider '{name}' 失敗：{e}")
             # 繼續初始化其他 providers，不要因為一個失敗就停止
     
     async def _create_provider_pool(self, name: str, pool_config: Any):
@@ -131,7 +130,7 @@ class ProviderManager:
             pool_config: 池化配置
         """
         if name not in self.provider_registry:
-            self.logger.error(f"未知的 Provider 類型：{name}")
+            logger.error(f"未知的 Provider 類型：{name}")
             return
         
         try:
@@ -162,7 +161,7 @@ class ProviderManager:
             self.provider_pools[name] = pool
             self.pool_enabled[name] = True
             
-            self.logger.info(
+            logger.info(
                 f"Provider Pool '{name}' 初始化成功",
                 extra={
                     "min_size": min_size,
@@ -172,7 +171,7 @@ class ProviderManager:
             )
             
         except Exception as e:
-            self.logger.error(f"初始化 Provider Pool '{name}' 失敗：{e}")
+            logger.error(f"初始化 Provider Pool '{name}' 失敗：{e}")
             # 繼續初始化其他 providers，不要因為一個失敗就停止
     
     async def create_provider(self,
@@ -208,11 +207,11 @@ class ProviderManager:
             # 儲存到快取
             self.providers[name] = provider
             
-            self.logger.info(f"Provider '{name}' (類型：{provider_type}) 建立成功")
+            logger.info(f"Provider '{name}' (類型：{provider_type}) 建立成功")
             return provider
             
         except Exception as e:
-            self.logger.error(f"建立 Provider '{name}' 失敗：{e}")
+            logger.error(f"建立 Provider '{name}' 失敗：{e}")
             raise ProviderError(f"無法建立 Provider：{str(e)}")
     
     def get_provider(self, name: Optional[str] = None) -> Optional[ProviderBase]:
@@ -250,14 +249,14 @@ class ProviderManager:
             await pool.cleanup()
             del self.provider_pools[name]
             del self.pool_enabled[name]
-            self.logger.info(f"Provider Pool '{name}' 已移除")
+            logger.info(f"Provider Pool '{name}' 已移除")
         
         # 移除單例
         if name in self.providers:
             provider = self.providers[name]
             await provider.cleanup()
             del self.providers[name]
-            self.logger.info(f"Provider '{name}' 已移除")
+            logger.info(f"Provider '{name}' 已移除")
     
     def list_providers(self) -> List[str]:
         """
@@ -316,7 +315,7 @@ class ProviderManager:
             raise ValueError(f"{provider_class} 必須繼承自 ProviderBase")
         
         self.provider_registry[provider_type] = provider_class
-        self.logger.info(f"註冊 Provider 類型：{provider_type}")
+        logger.info(f"註冊 Provider 類型：{provider_type}")
     
     def get_registered_providers(self) -> List[str]:
         """
@@ -355,20 +354,20 @@ class ProviderManager:
                 raise ProviderError(f"Provider Pool '{provider_name}' 不存在")
             
             # 使用池化模式
-            self.logger.debug(
+            logger.debug(
                 f"使用池化模式 - Provider: {provider_name}, "
                 f"池狀態: {pool.stats.in_use_count}/{pool.stats.current_size} 使用中"
             )
             async with pool.acquire() as provider:
                 result = await provider.transcribe(audio_data, **kwargs)
-                self.logger.debug(
+                logger.debug(
                     f"池化轉譯完成 - Provider: {provider_name}, "
                     f"釋放後狀態: {pool.stats.in_use_count}/{pool.stats.current_size} 使用中"
                 )
                 return result
         else:
             # 使用單例模式
-            self.logger.warning(f"使用單例模式 - Provider: {provider_name} (池化未啟用)")
+            logger.warning(f"使用單例模式 - Provider: {provider_name} (池化未啟用)")
             provider = self.providers.get(provider_name)
             if not provider:
                 raise ProviderError(f"Provider '{provider_name}' 不存在")
@@ -417,14 +416,14 @@ class ProviderManager:
     
     async def warmup_providers(self):
         """預熱所有 Providers"""
-        self.logger.info("開始預熱所有 Providers...")
+        logger.info("開始預熱所有 Providers...")
         
         for name, provider in self.providers.items():
             try:
                 await provider.warmup()
-                self.logger.debug(f"Provider '{name}' 預熱完成")
+                logger.debug(f"Provider '{name}' 預熱完成")
             except Exception as e:
-                self.logger.warning(f"Provider '{name}' 預熱失敗：{e}")
+                logger.warning(f"Provider '{name}' 預熱失敗：{e}")
     
     def get_pool_status(self) -> Dict[str, Any]:
         """
@@ -494,7 +493,7 @@ class ProviderManager:
         
         # 使用 logger.tree 顯示樹狀結構
         if tree_data:
-            self.logger.tree("ASR Provider Manager Status", tree_data)
+            logger.tree("ASR Provider Manager Status", tree_data)
         
         # 準備表格數據
         table_data = []
@@ -530,7 +529,7 @@ class ProviderManager:
         
         # 使用 logger.table 顯示表格
         if table_data:
-            self.logger.table(
+            logger.table(
                 "Provider Pool Summary",
                 headers,
                 table_data,
@@ -572,7 +571,7 @@ class ProviderManager:
                         ])
                         
                 except Exception as e:
-                    self.logger.error(f"健康檢查失敗 ({provider_type}): {e}")
+                    logger.error(f"健康檢查失敗 ({provider_type}): {e}")
                     results["providers"][provider_type] = {
                         "status": "error",
                         "error": str(e)
@@ -591,29 +590,29 @@ class ProviderManager:
     
     async def cleanup(self):
         """清理所有資源"""
-        self.logger.info("清理 Provider Manager...")
+        logger.info("清理 Provider Manager...")
         
         # 停止所有 Provider Pools
         for name, pool in list(self.provider_pools.items()):
             try:
                 await pool.cleanup()
-                self.logger.debug(f"Provider Pool '{name}' 已停止")
+                logger.debug(f"Provider Pool '{name}' 已停止")
             except Exception as e:
-                self.logger.error(f"停止 Provider Pool '{name}' 時發生錯誤：{e}")
+                logger.error(f"停止 Provider Pool '{name}' 時發生錯誤：{e}")
         
         # 停止所有單例 Providers
         for name, provider in list(self.providers.items()):
             try:
                 await provider.cleanup()
-                self.logger.debug(f"Provider '{name}' 已停止")
+                logger.debug(f"Provider '{name}' 已停止")
             except Exception as e:
-                self.logger.error(f"停止 Provider '{name}' 時發生錯誤：{e}")
+                logger.error(f"停止 Provider '{name}' 時發生錯誤：{e}")
         
         self.provider_pools.clear()
         self.providers.clear()
         self.pool_enabled.clear()
         self._initialized = False
-        self.logger.info("Provider Manager 清理完成")
+        logger.info("Provider Manager 清理完成")
     
     def get_status(self) -> Dict[str, Any]:
         """
@@ -656,7 +655,7 @@ class ProviderManager:
             raise ProviderError(f"Provider '{name}' 不存在")
         
         self.default_provider = name
-        self.logger.info(f"預設 Provider 設定為：{name}")
+        logger.info(f"預設 Provider 設定為：{name}")
     
     async def reload_provider(self, name: str):
         """
@@ -668,7 +667,7 @@ class ProviderManager:
         if name not in self.providers:
             raise ProviderError(f"Provider '{name}' 不存在")
         
-        self.logger.info(f"重新載入 Provider '{name}'...")
+        logger.info(f"重新載入 Provider '{name}'...")
         
         # 獲取現有 provider
         provider = self.providers[name]
@@ -685,9 +684,9 @@ class ProviderManager:
         
         if provider_type:
             await self._create_provider(name)
-            self.logger.success(f"Provider '{name}' 重新載入完成")
+            logger.success(f"Provider '{name}' 重新載入完成")
         else:
-            self.logger.error(f"無法確定 Provider '{name}' 的類型")
+            logger.error(f"無法確定 Provider '{name}' 的類型")
     
     async def get_pool_status(self, name: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -729,17 +728,17 @@ class ProviderManager:
     def log_pool_metrics(self):
         """記錄所有池的指標"""
         if not self.provider_pools:
-            self.logger.info("沒有啟用的 Provider 池")
+            logger.info("沒有啟用的 Provider 池")
             return
         
-        self.logger.info("===== Provider Pool Metrics =====")
+        logger.info("===== Provider Pool Metrics =====")
         
         for name, pool in self.provider_pools.items():
             # 獲取統計資訊
             stats = pool.get_statistics()
             
             # 記錄池指標
-            self.logger.info(
+            logger.info(
                 f"{name} Pool",
                 extra={
                     "size": f"{stats['current_size']}/{pool.max_size}",
@@ -770,7 +769,7 @@ class ProviderManager:
         pool = self.provider_pools[name]
         await pool.scale(new_size)
         
-        self.logger.info(f"Provider Pool '{name}' 已調整大小至 {new_size}")
+        logger.info(f"Provider Pool '{name}' 已調整大小至 {new_size}")
     
     def is_pool_enabled(self, name: str) -> bool:
         """

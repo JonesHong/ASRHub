@@ -6,7 +6,9 @@ ASR Hub API 基礎類別
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, AsyncGenerator
 from src.utils.logger import logger
-from src.core.session_manager import SessionManager
+# from src.core.session_manager import SessionManager  # DEPRECATED
+from src.store import get_global_store
+from src.store.sessions.sessions_selectors import session_exists, get_session
 from src.core.exceptions import APIError
 from src.config.manager import ConfigManager
 
@@ -51,16 +53,15 @@ class APIBase(ABC):
     所有 API 實作（HTTP SSE、WebSocket、gRPC 等）都需要繼承此類別
     """
     
-    def __init__(self, session_manager: SessionManager):
+    def __init__(self, store=None):
         """
         初始化 API
         
         Args:
-            session_manager: Session 管理器
+            store: PyStoreX store 實例
         """
         self.config_manager = ConfigManager()
-        self.session_manager = session_manager
-        self.logger = logger
+        self.store = store or get_global_store()
         self._running = False
     
     @abstractmethod
@@ -137,8 +138,9 @@ class APIBase(ABC):
         Returns:
             是否有效
         """
-        session = self.session_manager.get_session(session_id)
-        return session is not None
+        # 使用 selector 檢查 session 是否存在
+        state = self.store.get_state() if self.store else None
+        return session_exists(session_id)(state) if state else False
     
     def create_error_response(self, error_msg: str, session_id: Optional[str] = None) -> APIResponse:
         """

@@ -67,7 +67,6 @@ class ProviderBase(ABC):
         Args:
             provider_name: Provider 名稱，如果不提供則使用類別名稱推測
         """
-        self.logger = logger
         self.name = self.__class__.__name__
         self._initialized = False
         
@@ -112,7 +111,7 @@ class ProviderBase(ABC):
             self.channels = self.config_manager.stream.channels
             
         except AttributeError as e:
-            self.logger.error(f"無法獲取 {self.provider_key} 的配置：{e}")
+            logger.error(f"無法獲取 {self.provider_key} 的配置：{e}")
             raise ProviderError(f"Provider {self.provider_key} 配置不存在")
     
     async def initialize(self):
@@ -121,16 +120,16 @@ class ProviderBase(ABC):
         載入模型、分配資源等
         """
         if self._initialized:
-            self.logger.warning(f"{self.name} 已經初始化")
+            logger.warning(f"{self.name} 已經初始化")
             return
         
         try:
-            self.logger.info(f"初始化 {self.name}")
+            logger.info(f"初始化 {self.name}")
             await self._load_model()
             self._initialized = True
-            self.logger.info(f"{self.name} 初始化完成")
+            logger.info(f"{self.name} 初始化完成")
         except Exception as e:
-            self.logger.error(f"{self.name} 初始化失敗：{e}")
+            logger.error(f"{self.name} 初始化失敗：{e}")
             raise ModelError(f"無法初始化 {self.name}：{str(e)}")
     
     async def cleanup(self):
@@ -139,16 +138,16 @@ class ProviderBase(ABC):
         釋放模型、清理資源等
         """
         if not self._initialized:
-            self.logger.warning(f"{self.name} 未初始化")
+            logger.warning(f"{self.name} 未初始化")
             return
         
         try:
-            self.logger.info(f"清理 {self.name}")
+            logger.info(f"清理 {self.name}")
             await self._unload_model()
             self._initialized = False
-            self.logger.info(f"{self.name} 清理完成")
+            logger.info(f"{self.name} 清理完成")
         except Exception as e:
-            self.logger.error(f"{self.name} 清理失敗：{e}")
+            logger.error(f"{self.name} 清理失敗：{e}")
     
     @abstractmethod
     async def _load_model(self):
@@ -274,7 +273,7 @@ class ProviderBase(ABC):
             是否有效
         """
         if not audio_data:
-            self.logger.warning("收到空的音訊資料")
+            logger.warning("收到空的音訊資料")
             return False
         
         # 基本驗證，子類別可以擴展
@@ -289,7 +288,7 @@ class ProviderBase(ABC):
             await self.initialize()
         
         try:
-            self.logger.debug("開始預熱模型")
+            logger.debug("開始預熱模型")
             # 使用靜音資料進行預熱
             silence_duration = 1.0  # 1 秒靜音
             silence_samples = int(self.sample_rate * silence_duration)
@@ -297,7 +296,7 @@ class ProviderBase(ABC):
             
             # 執行一次轉譯
             await self.transcribe(silence_data)
-            self.logger.debug("模型預熱完成")
+            logger.debug("模型預熱完成")
         except Exception as e:
-            self.logger.warning(f"模型預熱失敗：{e}")
+            logger.warning(f"模型預熱失敗：{e}")
     

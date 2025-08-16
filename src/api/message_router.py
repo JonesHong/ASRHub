@@ -79,7 +79,6 @@ class MessageRouter:
     
     def __init__(self):
         """初始化訊息路由器"""
-        self.logger = logger
         
         # 訊息轉換器註冊表
         self.converters: Dict[tuple, Callable] = {}
@@ -134,7 +133,7 @@ class MessageRouter:
         """啟動訊息路由器"""
         self._running = True
         self._router_task = asyncio.create_task(self._routing_loop())
-        self.logger.info("Message router started")
+        logger.info("Message router started")
         
     async def stop(self):
         """停止訊息路由器"""
@@ -147,7 +146,7 @@ class MessageRouter:
             except asyncio.CancelledError:
                 pass
                 
-        self.logger.info("Message router stopped")
+        logger.info("Message router stopped")
         
     def register_converter(self, 
                          source_protocol: ConnectionType,
@@ -163,7 +162,7 @@ class MessageRouter:
         """
         key = (source_protocol, target_protocol)
         self.converters[key] = converter
-        self.logger.info(
+        logger.info(
             f"Registered converter: {source_protocol.value} -> {target_protocol.value}"
         )
         
@@ -176,7 +175,7 @@ class MessageRouter:
             handler: 處理函式
         """
         self.handlers[message_type].append(handler)
-        self.logger.info(f"Registered handler for {message_type.value}")
+        logger.info(f"Registered handler for {message_type.value}")
         
     def register_protocol_adapter(self, protocol: ConnectionType, adapter: Any):
         """
@@ -187,7 +186,7 @@ class MessageRouter:
             adapter: 適配器實例
         """
         self.protocol_adapters[protocol] = adapter
-        self.logger.info(f"Registered adapter for {protocol.value}")
+        logger.info(f"Registered adapter for {protocol.value}")
         
     async def route_message(self, message: UnifiedMessage):
         """
@@ -214,7 +213,7 @@ class MessageRouter:
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
-                self.logger.error(f"Error in routing loop: {e}")
+                logger.error(f"Error in routing loop: {e}")
                 
     async def _process_message(self, message: UnifiedMessage):
         """
@@ -230,14 +229,14 @@ class MessageRouter:
                 try:
                     await handler(message)
                 except Exception as e:
-                    self.logger.error(f"Error in message handler: {e}")
+                    logger.error(f"Error in message handler: {e}")
                     
             # 如果有目標協定，進行轉換和轉發
             if message.target_protocol:
                 await self._forward_message(message)
                 
         except Exception as e:
-            self.logger.error(f"Error processing message: {e}")
+            logger.error(f"Error processing message: {e}")
             
     async def _forward_message(self, message: UnifiedMessage):
         """
@@ -251,7 +250,7 @@ class MessageRouter:
         converter = self.converters.get(converter_key)
         
         if not converter:
-            self.logger.warning(
+            logger.warning(
                 f"No converter found for {message.source_protocol.value} -> "
                 f"{message.target_protocol.value}"
             )
@@ -261,13 +260,13 @@ class MessageRouter:
         try:
             converted_data = await converter(message)
         except Exception as e:
-            self.logger.error(f"Error converting message: {e}")
+            logger.error(f"Error converting message: {e}")
             return
             
         # 獲取目標協定適配器
         adapter = self.protocol_adapters.get(message.target_protocol)
         if not adapter:
-            self.logger.warning(
+            logger.warning(
                 f"No adapter found for {message.target_protocol.value}"
             )
             return
@@ -276,7 +275,7 @@ class MessageRouter:
         try:
             await adapter.send_message(converted_data)
         except Exception as e:
-            self.logger.error(f"Error sending message: {e}")
+            logger.error(f"Error sending message: {e}")
             
     async def _convert_websocket_to_socketio(self, message: UnifiedMessage) -> Dict[str, Any]:
         """
@@ -385,7 +384,7 @@ class MessageRouter:
             rule: 路由規則
         """
         self.routing_rules.append(rule)
-        self.logger.info(f"Added routing rule: {rule}")
+        logger.info(f"Added routing rule: {rule}")
         
     def create_unified_message(self,
                              message_type: MessageType,

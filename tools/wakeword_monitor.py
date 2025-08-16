@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from src.pipeline.operators.wakeword import OpenWakeWordOperator
 from src.core.system_listener import SystemListener
-from src.core.session_manager import SessionManager
+# from src.core.session_manager import SessionManager  # DEPRECATED
 from src.utils.logger import logger
 
 
@@ -38,7 +38,7 @@ class WakeWordMonitor:
         # 組件
         self.wakeword_operator = None
         self.system_listener = None
-        self.session_manager = None
+        # self.session_manager = None  # DEPRECATED - no longer needed
         
         # 統計
         self.stats = {
@@ -58,7 +58,7 @@ class WakeWordMonitor:
         
         try:
             # 初始化組件
-            self.session_manager = SessionManager()
+            # self.session_manager = SessionManager()  # DEPRECATED - no longer needed
             
             # 初始化喚醒詞偵測器
             self.wakeword_operator = OpenWakeWordOperator()
@@ -87,7 +87,7 @@ class WakeWordMonitor:
             await self._monitoring_loop()
             
         except Exception as e:
-            self.logger.error(f"啟動失敗: {e}")
+            logger.error(f"啟動失敗: {e}")
             raise
     
     async def stop(self):
@@ -106,7 +106,7 @@ class WakeWordMonitor:
             print("✅ 監控器已停止")
             
         except Exception as e:
-            self.logger.error(f"停止錯誤: {e}")
+            logger.error(f"停止錯誤: {e}")
     
     async def _monitoring_loop(self):
         """監控主迴圈"""
@@ -139,7 +139,7 @@ class WakeWordMonitor:
         except KeyboardInterrupt:
             print("\n用戶中斷監控")
         except Exception as e:
-            self.logger.error(f"監控迴圈錯誤: {e}")
+            logger.error(f"監控迴圈錯誤: {e}")
     
     def _show_status(self):
         """顯示監控狀態"""

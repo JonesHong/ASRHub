@@ -55,7 +55,6 @@ class SocketIOStreamManager:
         Args:
             max_buffer_size: 最大緩衝區大小（字節）
         """
-        self.logger = logger
         self.max_buffer_size = max_buffer_size
         self.stream_buffers: Dict[str, SocketIOAudioBuffer] = {}
         self.stream_queues: Dict[str, asyncio.Queue] = {}
@@ -75,7 +74,7 @@ class SocketIOStreamManager:
         """
         try:
             if session_id in self.stream_buffers:
-                self.logger.warning(f"Stream already exists for session {session_id}")
+                logger.warning(f"Stream already exists for session {session_id}")
                 return False
                 
             # 處理 format 和 encoding 可能是枚舉或字符串的情況
@@ -103,11 +102,11 @@ class SocketIOStreamManager:
             self.active_streams[session_id] = True
             self.chunk_sequences[session_id] = 0
             
-            self.logger.info(f"Created audio stream for session {session_id} with params: {audio_params}")
+            logger.info(f"Created audio stream for session {session_id} with params: {audio_params}")
             return True
             
         except Exception as e:
-            self.logger.error(f"Error creating stream: {e}")
+            logger.error(f"Error creating stream: {e}")
             return False
             
     def add_audio_chunk(self, session_id: str, audio_data: bytes, 
@@ -125,7 +124,7 @@ class SocketIOStreamManager:
         """
         try:
             if session_id not in self.stream_buffers:
-                self.logger.error(f"No stream found for session {session_id}")
+                logger.error(f"No stream found for session {session_id}")
                 return False
                 
             buffer = self.stream_buffers[session_id]
@@ -141,7 +140,7 @@ class SocketIOStreamManager:
             if chunk_id is not None:
                 expected_id = self.chunk_sequences[session_id]
                 if chunk_id != expected_id:
-                    self.logger.warning(
+                    logger.warning(
                         f"Chunk sequence mismatch for session {session_id}: "
                         f"expected {expected_id}, got {chunk_id}"
                     )
@@ -164,13 +163,13 @@ class SocketIOStreamManager:
                 if not queue.full():
                     queue.put_nowait(audio_chunk)
                 else:
-                    self.logger.warning(f"Queue full for session {session_id}, dropping chunk")
+                    logger.warning(f"Queue full for session {session_id}, dropping chunk")
                     return False
                     
             return True
             
         except Exception as e:
-            self.logger.error(f"Error adding audio chunk: {e}")
+            logger.error(f"Error adding audio chunk: {e}")
             return False
             
     async def get_audio_stream(self, session_id: str) -> AsyncGenerator[AudioChunk, None]:
@@ -197,7 +196,7 @@ class SocketIOStreamManager:
                 # 超時繼續等待
                 continue
             except Exception as e:
-                self.logger.error(f"Error in audio stream: {e}")
+                logger.error(f"Error in audio stream: {e}")
                 break
                 
     def stop_stream(self, session_id: str):
@@ -209,7 +208,7 @@ class SocketIOStreamManager:
         """
         if session_id in self.active_streams:
             self.active_streams[session_id] = False
-            self.logger.info(f"Stopped stream for session {session_id}")
+            logger.info(f"Stopped stream for session {session_id}")
             
     def cleanup_stream(self, session_id: str):
         """
@@ -237,7 +236,7 @@ class SocketIOStreamManager:
         if session_id in self.chunk_sequences:
             del self.chunk_sequences[session_id]
             
-        self.logger.info(f"Cleaned up stream for session {session_id}")
+        logger.info(f"Cleaned up stream for session {session_id}")
         
     def is_stream_active(self, session_id: str) -> bool:
         """
@@ -314,7 +313,7 @@ class SocketIOStreamManager:
         usage_ratio = buffer.get_buffer_size() / self.max_buffer_size
         
         if usage_ratio > threshold:
-            self.logger.warning(
+            logger.warning(
                 f"Backpressure triggered for session {session_id}: "
                 f"{usage_ratio:.2%} buffer usage"
             )
@@ -324,7 +323,7 @@ class SocketIOStreamManager:
         if session_id in self.stream_queues:
             queue = self.stream_queues[session_id]
             if queue.qsize() > queue.maxsize * threshold:
-                self.logger.warning(
+                logger.warning(
                     f"Backpressure triggered for session {session_id}: "
                     f"queue near capacity ({queue.qsize()}/{queue.maxsize})"
                 )

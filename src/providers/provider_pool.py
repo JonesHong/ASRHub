@@ -144,8 +144,6 @@ class ProviderPool:
         self.idle_timeout = idle_timeout
         self.health_check_interval = health_check_interval
         
-        # 日誌
-        self.logger = logger
         
         # 池管理
         self._available: asyncio.Queue[ProviderWrapper] = asyncio.Queue()
@@ -167,10 +165,10 @@ class ProviderPool:
     async def initialize(self):
         """初始化池"""
         if self._initialized:
-            self.logger.warning(f"{self.provider_type} 池已經初始化")
+            logger.warning(f"{self.provider_type} 池已經初始化")
             return
         
-        self.logger.info(f"初始化 {self.provider_type} 池...")
+        logger.info(f"初始化 {self.provider_type} 池...")
         
         try:
             # 創建最小數量的 Provider
@@ -183,7 +181,7 @@ class ProviderPool:
             self._initialized = True
             
             # 記錄初始化資訊
-            self.logger.success(
+            logger.success(
                 f"{self.provider_type} 池初始化完成",
                 extra={
                     "min_size": self.min_size,
@@ -193,7 +191,7 @@ class ProviderPool:
             )
             
             # 顯示池狀態
-            self.logger.info(
+            logger.info(
                 f"{self.provider_type} Pool Status - "
                 f"Size: {self.stats.current_size}/{self.max_size}, "
                 f"Available: {self._available.qsize()}, "
@@ -201,7 +199,7 @@ class ProviderPool:
             )
             
         except Exception as e:
-            self.logger.error(f"初始化池失敗：{e}")
+            logger.error(f"初始化池失敗：{e}")
             await self.cleanup()
             raise ResourceError(f"無法初始化 {self.provider_type} 池：{str(e)}")
     
@@ -231,12 +229,12 @@ class ProviderPool:
             self.stats.current_size += 1
             self.stats.created_count += 1
             
-            self.logger.debug(f"創建新的 {self.provider_type} 實例 (當前大小: {self.stats.current_size})")
+            logger.debug(f"創建新的 {self.provider_type} 實例 (當前大小: {self.stats.current_size})")
             
             return wrapper
             
         except Exception as e:
-            self.logger.error(f"創建 Provider 失敗：{e}")
+            logger.error(f"創建 Provider 失敗：{e}")
             return None
     
     async def _destroy_provider(self, wrapper: ProviderWrapper):
@@ -249,10 +247,10 @@ class ProviderPool:
             self.stats.current_size -= 1
             self.stats.destroyed_count += 1
             
-            self.logger.debug(f"銷毀 {self.provider_type} 實例 (當前大小: {self.stats.current_size})")
+            logger.debug(f"銷毀 {self.provider_type} 實例 (當前大小: {self.stats.current_size})")
             
         except Exception as e:
-            self.logger.error(f"銷毀 Provider 失敗：{e}")
+            logger.error(f"銷毀 Provider 失敗：{e}")
     
     @asynccontextmanager
     async def acquire(self):
@@ -294,7 +292,7 @@ class ProviderPool:
             self.stats.in_use_count = len(self._in_use)
             self.stats.idle_count = self._available.qsize()
             
-            self.logger.trace(
+            logger.trace(
                 f"獲取 {self.provider_type} 實例",
                 extra={"wait_time": wait_time, "in_use": self.stats.in_use_count}
             )
@@ -362,7 +360,7 @@ class ProviderPool:
                 await self._available.put(wrapper)
                 self.stats.idle_count = self._available.qsize()
                 
-                self.logger.trace(
+                logger.trace(
                     f"釋放 {self.provider_type} 實例",
                     extra={"in_use": self.stats.in_use_count, "available": self.stats.idle_count}
                 )
@@ -371,7 +369,7 @@ class ProviderPool:
                 await self._destroy_provider(wrapper)
                 
         except Exception as e:
-            self.logger.error(f"釋放 Provider 失敗：{e}")
+            logger.error(f"釋放 Provider 失敗：{e}")
     
     async def health_check(self) -> Dict[str, Any]:
         """
@@ -457,7 +455,7 @@ class ProviderPool:
         """
         
         # 使用基本的 info 日誌替代 block
-        self.logger.info(f"{self.provider_type} Pool Metrics:\n{status_text}")
+        logger.info(f"{self.provider_type} Pool Metrics:\n{status_text}")
         
         # 顯示表格 - 使用 info 輸出表格內容
         from rich.console import Console
@@ -468,7 +466,7 @@ class ProviderPool:
         console.print(table)
         table_output = console.file.getvalue()
         
-        self.logger.info(f"Pool Status Table:\n{table_output}")
+        logger.info(f"Pool Status Table:\n{table_output}")
     
     async def _active_health_check(self):
         """
@@ -509,13 +507,13 @@ class ProviderPool:
                         )
                         # 成功，重置錯誤計數
                         wrapper.reset_error()
-                        self.logger.trace(f"{self.provider_type} Provider 健康檢查通過")
+                        logger.trace(f"{self.provider_type} Provider 健康檢查通過")
                     except asyncio.TimeoutError:
                         wrapper.mark_error("Health check timeout")
-                        self.logger.warning(f"{self.provider_type} Provider 健康檢查超時")
+                        logger.warning(f"{self.provider_type} Provider 健康檢查超時")
                     except Exception as e:
                         wrapper.mark_error(f"Health check failed: {e}")
-                        self.logger.warning(f"{self.provider_type} Provider 健康檢查失敗：{e}")
+                        logger.warning(f"{self.provider_type} Provider 健康檢查失敗：{e}")
                 
                 # 如果 Provider 不健康，不放回隊列
                 if wrapper.is_healthy:
@@ -523,7 +521,7 @@ class ProviderPool:
                 else:
                     # 銷毀不健康的 Provider
                     await self._destroy_provider(wrapper)
-                    self.logger.info(f"移除不健康的 {self.provider_type} Provider")
+                    logger.info(f"移除不健康的 {self.provider_type} Provider")
                     
                     # 嘗試創建替代實例
                     if self.stats.current_size < self.min_size:
@@ -532,7 +530,7 @@ class ProviderPool:
                             temp_queue.append(new_wrapper)
                             
             except Exception as e:
-                self.logger.error(f"主動健康檢查失敗：{e}")
+                logger.error(f"主動健康檢查失敗：{e}")
                 temp_queue.append(wrapper)  # 出錯時仍放回隊列
         
         # 放回所有檢查過的健康 Provider
@@ -550,7 +548,7 @@ class ProviderPool:
                 
                 # 記錄健康狀態
                 if health_info["status"] != "healthy":
-                    self.logger.warning(
+                    logger.warning(
                         f"{self.provider_type} 池健康檢查",
                         extra=health_info
                     )
@@ -572,7 +570,7 @@ class ProviderPool:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self.logger.error(f"健康檢查失敗：{e}")
+                logger.error(f"健康檢查失敗：{e}")
     
     async def _cleanup_idle_providers(self):
         """清理過期的空閒 Provider"""
@@ -606,7 +604,7 @@ class ProviderPool:
         # 清理過期的 Provider
         for wrapper in to_cleanup:
             await self._destroy_provider(wrapper)
-            self.logger.debug(f"清理過期的 {self.provider_type} 實例")
+            logger.debug(f"清理過期的 {self.provider_type} 實例")
     
     async def scale(self, new_size: int):
         """
@@ -625,7 +623,7 @@ class ProviderPool:
             
             if new_size > current_size:
                 # 擴展池
-                self.logger.info(f"擴展 {self.provider_type} 池: {current_size} -> {new_size}")
+                logger.info(f"擴展 {self.provider_type} 池: {current_size} -> {new_size}")
                 
                 for _ in range(new_size - current_size):
                     wrapper = await self._create_provider()
@@ -634,7 +632,7 @@ class ProviderPool:
                         
             elif new_size < current_size:
                 # 縮減池
-                self.logger.info(f"縮減 {self.provider_type} 池: {current_size} -> {new_size}")
+                logger.info(f"縮減 {self.provider_type} 池: {current_size} -> {new_size}")
                 
                 # 首先嘗試從可用隊列移除
                 to_remove = current_size - new_size
@@ -676,11 +674,11 @@ class ProviderPool:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self.logger.error(f"自動縮放失敗：{e}")
+                logger.error(f"自動縮放失敗：{e}")
     
     async def cleanup(self):
         """清理所有資源"""
-        self.logger.info(f"清理 {self.provider_type} 池...")
+        logger.info(f"清理 {self.provider_type} 池...")
         
         self._closing = True
         
@@ -693,7 +691,7 @@ class ProviderPool:
         # 等待所有使用中的 Provider 釋放
         wait_time = 0
         while len(self._in_use) > 0 and wait_time < 30:
-            self.logger.info(f"等待 {len(self._in_use)} 個 Provider 釋放...")
+            logger.info(f"等待 {len(self._in_use)} 個 Provider 釋放...")
             await asyncio.sleep(1)
             wait_time += 1
         
@@ -702,7 +700,7 @@ class ProviderPool:
             await self._destroy_provider(wrapper)
         
         self._initialized = False
-        self.logger.success(f"{self.provider_type} 池清理完成")
+        logger.success(f"{self.provider_type} 池清理完成")
     
     def get_statistics(self) -> Dict[str, Any]:
         """
@@ -717,13 +715,13 @@ class ProviderPool:
         """記錄池指標"""
         metrics = self.get_statistics()
         
-        self.logger.info(
+        logger.info(
             f"{self.provider_type} Pool Metrics",
             extra=metrics
         )
         
         # 使用表格顯示詳細資訊
-        self.logger.table(
+        logger.table(
             [
                 ["指標", "數值"],
                 ["池大小", f"{metrics['current_size']}/{self.max_size}"],

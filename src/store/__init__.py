@@ -8,7 +8,6 @@ ASR Hub Redux Store 主要入口點
 
 # Store 配置
 from .store_config import (
-    ASRHubStore,
     get_global_store,
     configure_global_store,
     reset_global_store

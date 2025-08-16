@@ -56,7 +56,6 @@ class WebSocketStreamManager:
         Args:
             max_buffer_size: 最大緩衝區大小（字節）
         """
-        self.logger = logger
         self.max_buffer_size = max_buffer_size
         self.stream_buffers: Dict[str, AudioStreamBuffer] = {}
         self.stream_queues: Dict[str, asyncio.Queue] = {}
@@ -75,7 +74,7 @@ class WebSocketStreamManager:
         """
         try:
             if session_id in self.stream_buffers:
-                self.logger.warning(f"Stream already exists for session {session_id}")
+                logger.warning(f"Stream already exists for session {session_id}")
                 return False
             
             # 檢查 audio_params 是否為 None
@@ -106,11 +105,11 @@ class WebSocketStreamManager:
             self.stream_queues[session_id] = asyncio.Queue()
             self.active_streams[session_id] = True
             
-            self.logger.info(f"Created audio stream for session {session_id}")
+            logger.info(f"Created audio stream for session {session_id}")
             return True
             
         except Exception as e:
-            self.logger.error(f"Error creating stream: {e}")
+            logger.error(f"Error creating stream: {e}")
             return False
             
     def add_audio_chunk(self, session_id: str, audio_data: bytes) -> bool:
@@ -126,7 +125,7 @@ class WebSocketStreamManager:
         """
         try:
             if session_id not in self.stream_buffers:
-                self.logger.error(f"No stream found for session {session_id}")
+                logger.error(f"No stream found for session {session_id}")
                 return False
                 
             buffer = self.stream_buffers[session_id]
@@ -168,12 +167,12 @@ class WebSocketStreamManager:
                 if not queue.full():
                     queue.put_nowait(audio_chunk)
                 else:
-                    self.logger.warning(f"Queue full for session {session_id}, dropping chunk")
+                    logger.warning(f"Queue full for session {session_id}, dropping chunk")
                     
             return True
             
         except Exception as e:
-            self.logger.error(f"Error adding audio chunk: {e}")
+            logger.error(f"Error adding audio chunk: {e}")
             return False
             
     async def get_audio_stream(self, session_id: str) -> AsyncGenerator[AudioChunk, None]:
@@ -198,7 +197,7 @@ class WebSocketStreamManager:
                 
                 # 檢查是否為結束標記
                 if audio_chunk is None:
-                    self.logger.info(f"Received end marker for session {session_id}")
+                    logger.info(f"Received end marker for session {session_id}")
                     break
                     
                 yield audio_chunk
@@ -206,11 +205,11 @@ class WebSocketStreamManager:
             except asyncio.TimeoutError:
                 # 檢查串流是否仍然活躍
                 if not self.active_streams.get(session_id, False):
-                    self.logger.info(f"Stream inactive for session {session_id}, ending")
+                    logger.info(f"Stream inactive for session {session_id}, ending")
                     break
                 continue
             except Exception as e:
-                self.logger.error(f"Error in audio stream: {e}")
+                logger.error(f"Error in audio stream: {e}")
                 break
                 
     def stop_stream(self, session_id: str):
@@ -225,7 +224,7 @@ class WebSocketStreamManager:
             if session_id in self.stream_queues:
                 self.stream_queues[session_id].put_nowait(None)
             self.active_streams[session_id] = False
-            self.logger.info(f"Stopped stream for session {session_id}")
+            logger.info(f"Stopped stream for session {session_id}")
             
     def cleanup_stream(self, session_id: str):
         """
@@ -249,7 +248,7 @@ class WebSocketStreamManager:
         if session_id in self.active_streams:
             del self.active_streams[session_id]
             
-        self.logger.info(f"Cleaned up stream for session {session_id}")
+        logger.info(f"Cleaned up stream for session {session_id}")
         
     def get_stream_stats(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -313,7 +312,7 @@ class WebSocketStreamManager:
         usage_ratio = buffer.get_buffer_size() / self.max_buffer_size
         
         if usage_ratio > threshold:
-            self.logger.warning(f"Backpressure triggered for session {session_id}: {usage_ratio:.2%}")
+            logger.warning(f"Backpressure triggered for session {session_id}: {usage_ratio:.2%}")
             return True
             
         return False

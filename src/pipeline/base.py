@@ -23,7 +23,6 @@ class PipelineBase(ABC):
         """
         self.config_manager = ConfigManager()
         self.config = self.config_manager.pipeline  # 這是 PipelineSchema 實例，不是字典
-        self.logger = logger
         self.operators: List[OperatorBase] = []
         self._running = False
         
@@ -41,10 +40,10 @@ class PipelineBase(ABC):
     async def start(self):
         """啟動 Pipeline"""
         if self._running:
-            self.logger.warning("Pipeline 已經在運行中")
+            logger.warning("Pipeline 已經在運行中")
             return
         
-        self.logger.info("啟動 Pipeline")
+        logger.info("啟動 Pipeline")
         self._running = True
         
         # 啟動所有 operators
@@ -54,10 +53,10 @@ class PipelineBase(ABC):
     async def stop(self):
         """停止 Pipeline"""
         if not self._running:
-            self.logger.warning("Pipeline 未在運行中")
+            logger.warning("Pipeline 未在運行中")
             return
         
-        self.logger.info("停止 Pipeline")
+        logger.info("停止 Pipeline")
         self._running = False
         
         # 停止所有 operators（反向順序）
@@ -88,19 +87,19 @@ class PipelineBase(ABC):
             # 如果有多個 operators，使用進度條
             if len(self.operators) > 1 and kwargs.get('show_progress', True):
                 # 使用 logger.progress.track_list 正確的方式顯示處理進度
-                for i, operator in enumerate(self.logger.progress.track_list(
+                for i, operator in enumerate(logger.progress.track_list(
                     self.operators, 
                     description="Pipeline processing"
                 )):
                     # 顯示當前處理的 operator
                     op_name = operator.__class__.__name__
-                    self.logger.debug(f"Processing: {op_name}")
+                    logger.debug(f"Processing: {op_name}")
                     
                     processed_data = await operator.process(processed_data, **kwargs)
                     
                     # 如果 operator 返回 None，表示資料被過濾掉
                     if processed_data is None:
-                        self.logger.debug(f"資料被 {op_name} 過濾")
+                        logger.debug(f"資料被 {op_name} 過濾")
                         return None
             else:
                 # 單個 operator 或不顯示進度條
@@ -109,13 +108,13 @@ class PipelineBase(ABC):
                     
                     # 如果 operator 返回 None，表示資料被過濾掉
                     if processed_data is None:
-                        self.logger.debug(f"資料被 {operator.__class__.__name__} 過濾")
+                        logger.debug(f"資料被 {operator.__class__.__name__} 過濾")
                         return None
             
             return processed_data
             
         except Exception as e:
-            self.logger.error(f"Pipeline 處理錯誤：{e}")
+            logger.error(f"Pipeline 處理錯誤：{e}")
             raise PipelineError(f"Pipeline 處理失敗：{str(e)}")
     
     async def process_stream(self, 
@@ -146,7 +145,7 @@ class PipelineBase(ABC):
                     yield processed_chunk
                     
         except Exception as e:
-            self.logger.error(f"Pipeline 串流處理錯誤：{e}")
+            logger.error(f"Pipeline 串流處理錯誤：{e}")
             raise PipelineError(f"Pipeline 串流處理失敗：{str(e)}")
     
     def add_operator(self, operator: OperatorBase, position: Optional[int] = None):
@@ -162,7 +161,7 @@ class PipelineBase(ABC):
         else:
             self.operators.insert(position, operator)
         
-        self.logger.debug(f"添加 Operator：{operator.__class__.__name__}")
+        logger.debug(f"添加 Operator：{operator.__class__.__name__}")
     
     def remove_operator(self, operator_type: type) -> bool:
         """
@@ -177,7 +176,7 @@ class PipelineBase(ABC):
         for i, operator in enumerate(self.operators):
             if isinstance(operator, operator_type):
                 removed = self.operators.pop(i)
-                self.logger.debug(f"移除 Operator：{removed.__class__.__name__}")
+                logger.debug(f"移除 Operator：{removed.__class__.__name__}")
                 return True
         return False
     
@@ -199,7 +198,7 @@ class PipelineBase(ABC):
         # 重新從 ConfigManager 獲取配置
         self.config_manager = ConfigManager()
         self.config = self.config_manager.pipeline
-        self.logger.info("Pipeline 配置已更新")
+        logger.info("Pipeline 配置已更新")
         
         # 通知所有 operators 配置已更新
         for operator in self.operators:

@@ -74,7 +74,6 @@ class ConnectionManager:
         Args:
             config: 配置
         """
-        self.logger = logger
         self.config = config or {}
         
         # 連線儲存
@@ -103,7 +102,7 @@ class ConnectionManager:
         """啟動連線管理器"""
         self._running = True
         self._health_check_task = asyncio.create_task(self._health_check_loop())
-        self.logger.info("Connection manager started")
+        logger.info("Connection manager started")
         
     async def stop(self):
         """停止連線管理器"""
@@ -119,7 +118,7 @@ class ConnectionManager:
         # 清理所有連線
         await self.cleanup_all_connections()
         
-        self.logger.info("Connection manager stopped")
+        logger.info("Connection manager stopped")
         
     async def register_connection(self, 
                                 connection_type: ConnectionType,
@@ -177,7 +176,7 @@ class ConnectionManager:
                     self.session_connections[session_id] = set()
                 self.session_connections[session_id].add(connection_id)
                 
-            self.logger.info(
+            logger.info(
                 f"Registered {connection_type.value} connection: {connection_id}"
                 f" for session: {session_id}"
             )
@@ -213,7 +212,7 @@ class ConnectionManager:
             # 移除連線
             del self.connections[connection_id]
             
-            self.logger.info(
+            logger.info(
                 f"Unregistered {connection_info.connection_type.value} "
                 f"connection: {connection_id}"
             )
@@ -247,7 +246,7 @@ class ConnectionManager:
             
             connection_info.update_activity()
             
-            self.logger.info(
+            logger.info(
                 f"Updated connection {connection_id} session: "
                 f"{old_session_id} -> {session_id}"
             )
@@ -346,7 +345,7 @@ class ConnectionManager:
                 await self.unregister_connection(conn_id)
                 
             if inactive_connections:
-                self.logger.info(f"Cleaned up {len(inactive_connections)} inactive connections")
+                logger.info(f"Cleaned up {len(inactive_connections)} inactive connections")
                 
     async def cleanup_all_connections(self):
         """清理所有連線"""
@@ -398,13 +397,13 @@ class ConnectionManager:
                 
                 # 記錄統計資訊
                 stats = await self.get_statistics()
-                self.logger.debug(f"Connection statistics: {stats}")
+                logger.debug(f"Connection statistics: {stats}")
                 
                 # 每 60 秒檢查一次
                 await asyncio.sleep(60)
                 
             except Exception as e:
-                self.logger.error(f"Error in health check loop: {e}")
+                logger.error(f"Error in health check loop: {e}")
                 
     def is_session_locked(self, session_id: str) -> bool:
         """

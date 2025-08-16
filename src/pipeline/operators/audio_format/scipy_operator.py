@@ -34,7 +34,7 @@ class ScipyAudioFormatOperator(AudioFormatOperatorBase):
         self.resample_method = 'fft'  # 'fft' 或 'polyphase'
         self.filter_window = 'hamming'  # 濾波器窗口類型
         
-        self.logger.info(f"ScipyAudioFormatOperator[{self.operator_id}] 初始化完成")
+        logger.info(f"ScipyAudioFormatOperator[{self.operator_id}] 初始化完成")
     
     async def _convert_format(self, audio_data: bytes, 
                             from_metadata: AudioMetadata,
@@ -83,7 +83,7 @@ class ScipyAudioFormatOperator(AudioFormatOperatorBase):
             return self._from_numpy(samples, to_metadata.format)
             
         except Exception as e:
-            self.logger.error(f"[{self.operator_id}] SciPy 音頻轉換失敗: {e}")
+            logger.error(f"[{self.operator_id}] SciPy 音頻轉換失敗: {e}")
             raise AudioFormatError(f"SciPy 音頻轉換失敗: {str(e)}")
     
     def _convert_channels(self, samples: np.ndarray, 
@@ -167,11 +167,11 @@ class ScipyAudioFormatOperator(AudioFormatOperatorBase):
         if 'resample_method' in config:
             if config['resample_method'] in ['fft', 'polyphase']:
                 self.resample_method = config['resample_method']
-                self.logger.info(f"[{self.operator_id}] 重採樣方法更新為: {self.resample_method}")
+                logger.info(f"[{self.operator_id}] 重採樣方法更新為: {self.resample_method}")
         
         if 'filter_window' in config:
             self.filter_window = config['filter_window']
-            self.logger.info(f"[{self.operator_id}] 濾波器窗口更新為: {self.filter_window}")
+            logger.info(f"[{self.operator_id}] 濾波器窗口更新為: {self.filter_window}")
     
     def get_info(self) -> dict:
         """獲取 Operator 信息"""

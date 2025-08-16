@@ -8,7 +8,9 @@ from typing import Dict, Any, Optional, AsyncGenerator, List, Union
 from datetime import datetime
 from src.utils.logger import logger
 from src.core.exceptions import StreamError, SessionError
-from src.core.session_manager import SessionManager
+# from src.core.session_manager import SessionManager  # DEPRECATED
+from src.store import get_global_store
+from src.store.sessions import sessions_actions, sessions_selectors
 from src.pipeline.manager import PipelineManager
 from src.providers.manager import ProviderManager
 from src.models.audio import AudioChunk
@@ -23,24 +25,23 @@ class StreamController:
     """
     
     def __init__(self,
-                 session_manager: SessionManager,
-                 pipeline_manager: PipelineManager,
-                 provider_manager: ProviderManager):
+                 store=None,
+                 pipeline_manager: PipelineManager = None,
+                 provider_manager: ProviderManager = None):
         """
         初始化 Stream Controller
         使用 ConfigManager 獲取配置
         
         Args:
-            session_manager: Session 管理器
+            store: PyStoreX store 實例
             pipeline_manager: Pipeline 管理器
             provider_manager: Provider 管理器
         """
         self.config_manager = ConfigManager()
-        self.session_manager = session_manager
+        self.store = store or get_global_store()
         self.pipeline_manager = pipeline_manager
         self.provider_manager = provider_manager
         
-        self.logger = logger
         
         # 串流配置
         stream_config = self.config_manager.stream
@@ -59,14 +60,14 @@ class StreamController:
         if self._initialized:
             return
         
-        self.logger.info("初始化 Stream Controller...")
+        logger.info("初始化 Stream Controller...")
         
         # 確保相關管理器已初始化
-        if not self.session_manager or not self.pipeline_manager or not self.provider_manager:
+        if not self.store or not self.pipeline_manager or not self.provider_manager:
             raise StreamError("相關管理器未正確初始化")
         
         self._initialized = True
-        self.logger.success("Stream Controller 初始化完成")
+        logger.success("Stream Controller 初始化完成")
     
     async def start_stream(self,
                           session_id: str,
@@ -89,8 +90,9 @@ class StreamController:
         Raises:
             StreamError: 如果啟動失敗
         """
-        # 檢查 Session 是否存在
-        session = self.session_manager.get_session(session_id)
+        # 使用 selector 檢查 Session 是否存在
+        state = self.store.get_state() if self.store else None
+        session = sessions_selectors.get_session(session_id)(state) if state else None
         if not session:
             raise SessionError(f"Session {session_id} 不存在")
         
@@ -129,12 +131,12 @@ class StreamController:
             }
             
             # 更新 Session 狀態
-            self.session_manager.update_session_state(session_id, SessionState.LISTENING)
+            self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
             
             # 儲存串流資訊
             self.active_streams[session_id] = stream_info
             
-            self.logger.info(
+            logger.info(
                 f"串流已啟動 - Session: {session_id}, "
                 f"Pipeline: {pipeline_name}, "
                 f"Provider: {provider_name or 'default'}"
@@ -149,7 +151,7 @@ class StreamController:
             }
             
         except Exception as e:
-            self.logger.error(f"啟動串流失敗：{e}")
+            logger.error(f"啟動串流失敗：{e}")
             # 清理狀態
             if session_id in self.active_streams:
                 del self.active_streams[session_id]
@@ -178,7 +180,7 @@ class StreamController:
         
         try:
             # 更新 Session 狀態為 BUSY
-            self.session_manager.update_session_state(session_id, SessionState.BUSY)
+            self.store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
             
             # 如果是原始 bytes，必須有完整的配置資訊
             if isinstance(audio_chunk, bytes):
@@ -200,7 +202,7 @@ class StreamController:
                 )
             
             # 記錄音訊格式資訊
-            self.logger.debug(
+            logger.debug(
                 f"處理音訊片段 - Session: {session_id}, "
                 f"格式: {audio_chunk.sample_rate}Hz, {audio_chunk.channels}ch, "
                 f"{audio_chunk.bits_per_sample}bit, {audio_chunk.format.value}"
@@ -235,19 +237,19 @@ class StreamController:
                     stream_info["segment_count"] += 1
                     
                     # 更新 Session 狀態回 LISTENING
-                    self.session_manager.update_session_state(session_id, SessionState.LISTENING)
+                    self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                     
                     return result
             
             # 更新 Session 狀態回 LISTENING
-            self.session_manager.update_session_state(session_id, SessionState.LISTENING)
+            self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
             
             return None
             
         except Exception as e:
-            self.logger.error(f"處理音訊片段失敗：{e}")
+            logger.error(f"處理音訊片段失敗：{e}")
             # 恢復 Session 狀態
-            self.session_manager.update_session_state(session_id, SessionState.LISTENING)
+            self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
             raise StreamError(f"音訊處理失敗：{str(e)}")
     
     async def process_audio_stream(self,
@@ -311,7 +313,7 @@ class StreamController:
                 }
                 
         except Exception as e:
-            self.logger.error(f"處理音訊串流失敗：{e}")
+            logger.error(f"處理音訊串流失敗：{e}")
             raise StreamError(f"串流處理失敗：{str(e)}")
     
     async def stop_stream(self, session_id: str) -> Dict[str, Any]:
@@ -352,12 +354,12 @@ class StreamController:
             }
             
             # 更新 Session 狀態
-            self.session_manager.update_session_state(session_id, SessionState.IDLE)
+            self.store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
             
             # 清理串流資訊
             del self.active_streams[session_id]
             
-            self.logger.info(
+            logger.info(
                 f"串流已停止 - Session: {session_id}, "
                 f"持續時間: {duration:.2f}秒, "
                 f"片段數: {stream_info['segment_count']}"
@@ -366,7 +368,7 @@ class StreamController:
             return stats
             
         except Exception as e:
-            self.logger.error(f"停止串流失敗：{e}")
+            logger.error(f"停止串流失敗：{e}")
             raise StreamError(f"無法停止串流：{str(e)}")
     
     def _calculate_buffer_duration(self, stream_info: Dict[str, Any]) -> float:
@@ -472,18 +474,18 @@ class StreamController:
     
     async def cleanup(self):
         """清理所有資源"""
-        self.logger.info("清理 Stream Controller...")
+        logger.info("清理 Stream Controller...")
         
         # 停止所有活動串流
         for session_id in list(self.active_streams.keys()):
             try:
                 await self.stop_stream(session_id)
             except Exception as e:
-                self.logger.error(f"停止串流 {session_id} 時發生錯誤：{e}")
+                logger.error(f"停止串流 {session_id} 時發生錯誤：{e}")
         
         self.active_streams.clear()
         self._initialized = False
-        self.logger.info("Stream Controller 清理完成")
+        logger.info("Stream Controller 清理完成")
     
     def get_status(self) -> Dict[str, Any]:
         """

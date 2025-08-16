@@ -13,7 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from src.api.base import APIBase, APIResponse
 from src.utils.logger import logger
-from src.core.session_manager import SessionManager
+# from src.core.session_manager import SessionManager  # DEPRECATED
+from src.store import get_global_store
+from src.store.sessions import sessions_actions, sessions_selectors
 from src.core.exceptions import APIError, SessionError
 from src.config.manager import ConfigManager
 
@@ -24,24 +26,23 @@ class SSEServer(APIBase):
     提供基於 SSE 的即時語音轉文字服務
     """
     
-    def __init__(self, session_manager: SessionManager, provider_manager=None, pipeline_manager=None):
+    def __init__(self, store=None, provider_manager=None, pipeline_manager=None):
         """
         初始化 SSE Server
         使用 ConfigManager 獲取配置
         
         Args:
-            session_manager: Session 管理器
+            store: PyStoreX store 實例
             provider_manager: Provider 管理器（可選）
             pipeline_manager: Pipeline 管理器（可選）
         """
-        # 只傳遞 session_manager 給父類
-        super().__init__(session_manager)
+        # 傳遞 store 給父類
+        super().__init__(store)
         
         # 從 ConfigManager 獲取配置
         sse_config = self.config_manager.api.http_sse
         
         self.app = FastAPI(title="ASR Hub SSE API", version="0.1.0")
-        self.logger = logger
         self.provider_manager = provider_manager
         self.pipeline_manager = pipeline_manager
         
@@ -103,7 +104,7 @@ class SSEServer(APIBase):
             return {
                 "status": "healthy",
                 "timestamp": datetime.now().isoformat(),
-                "active_sessions": self.session_manager.get_session_count(),
+                "active_sessions": len(sessions_selectors.get_all_sessions(self.store.get_state())) if self.store else 0,
                 "active_connections": len(self.sse_connections)
             }
         
@@ -123,7 +124,7 @@ class SSEServer(APIBase):
                 return response.to_dict()
                 
             except Exception as e:
-                self.logger.error(f"控制指令錯誤：{e}")
+                logger.error(f"控制指令錯誤：{e}")
                 raise HTTPException(status_code=500, detail=str(e))
         
         @self.app.get("/transcribe/{session_id}")
@@ -171,13 +172,13 @@ class SSEServer(APIBase):
                 if request.headers.get('X-Audio-Sample-Rate'):
                     try:
                         audio_params['sample_rate'] = int(request.headers['X-Audio-Sample-Rate'])
-                        self.logger.info(f"音頻採樣率: {audio_params['sample_rate']} Hz")
+                        logger.info(f"音頻採樣率: {audio_params['sample_rate']} Hz")
                     except ValueError:
-                        self.logger.warning(f"無效的採樣率: {request.headers['X-Audio-Sample-Rate']}")
+                        logger.warning(f"無效的採樣率: {request.headers['X-Audio-Sample-Rate']}")
                 
                 if request.headers.get('X-Audio-Format'):
                     audio_params['format'] = request.headers['X-Audio-Format']
-                    self.logger.info(f"音頻格式: {audio_params['format']}")
+                    logger.info(f"音頻格式: {audio_params['format']}")
                 
                 # 保存音頻參數到 session
                 if session_id not in self.audio_params:
@@ -197,7 +198,7 @@ class SSEServer(APIBase):
                 return {"status": "success", "bytes_received": len(audio_data)}
                 
             except Exception as e:
-                self.logger.error(f"音訊上傳錯誤：{e}")
+                logger.error(f"音訊上傳錯誤：{e}")
                 raise HTTPException(status_code=500, detail=str(e))
         
         @self.app.post("/session")
@@ -206,30 +207,46 @@ class SSEServer(APIBase):
             try:
                 data = await request.json() if request.headers.get("content-type") == "application/json" else {}
                 
-                session = self.session_manager.create_session(
-                    metadata=data.get("metadata", {}),
-                    pipeline_config=data.get("pipeline_config", {}),
-                    provider_config=data.get("provider_config", {})
-                )
+                # 使用 Store dispatch 創建 session
+                import uuid
+                session_id = data.get("session_id", str(uuid.uuid4()))
+                
+                # Dispatch create_session action
+                self.store.dispatch(sessions_actions.create_session(session_id))
+                
+                # 更新 metadata 和 config
+                if data.get("metadata"):
+                    self.store.dispatch(sessions_actions.update_session_metadata(
+                        session_id, data["metadata"]
+                    ))
+                if data.get("pipeline_config") or data.get("provider_config"):
+                    self.store.dispatch(sessions_actions.update_session_config(
+                        session_id,
+                        pipeline_config=data.get("pipeline_config"),
+                        provider_config=data.get("provider_config")
+                    ))
                 
                 return {
                     "status": "success",
-                    "session_id": session.id,
-                    "created_at": session.created_at.isoformat()
+                    "session_id": session_id,
+                    "created_at": datetime.now().isoformat()
                 }
                 
             except Exception as e:
-                self.logger.error(f"建立 session 錯誤：{e}")
+                logger.error(f"建立 session 錯誤：{e}")
                 raise HTTPException(status_code=500, detail=str(e))
         
         @self.app.get("/session/{session_id}")
         async def get_session(session_id: str):
             """獲取 Session 資訊"""
-            session = self.session_manager.get_session(session_id)
+            # 使用 selector 獲取 session
+            state = self.store.get_state() if self.store else None
+            session = sessions_selectors.get_session(session_id)(state) if state else None
+            
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
             
-            return session.to_dict()
+            return session
         
         @self.app.delete("/session/{session_id}")
         async def delete_session(session_id: str):
@@ -245,8 +262,8 @@ class SSEServer(APIBase):
             # 清理資源
             self._cleanup_session(session_id)
             
-            # 刪除 session
-            self.session_manager.delete_session(session_id)
+            # 使用 Store dispatch 刪除 session
+            self.store.dispatch(sessions_actions.destroy_session(session_id))
             
             return {"status": "success", "message": "Session deleted"}
         
@@ -267,13 +284,21 @@ class SSEServer(APIBase):
                 language = form.get("language", "auto")
                 
                 # 建立臨時 session
-                session = self.session_manager.create_session(
-                    metadata={"type": "one-shot"},
+                import uuid
+                temp_session_id = str(uuid.uuid4())
+                
+                # 使用 Store dispatch 創建 session
+                self.store.dispatch(sessions_actions.create_session(temp_session_id))
+                self.store.dispatch(sessions_actions.update_session_metadata(
+                    temp_session_id, {"type": "one-shot"}
+                ))
+                self.store.dispatch(sessions_actions.update_session_config(
+                    temp_session_id,
                     provider_config={
                         "provider": provider_name,
                         "language": language
                     }
-                )
+                ))
                 
                 try:
                     # 讀取音訊檔案
@@ -304,9 +329,9 @@ class SSEServer(APIBase):
                     # SSEServer 應該有 provider_manager 的引用
                     provider_manager = getattr(self, 'provider_manager', None)
                     
-                    # 如果沒有，嘗試從 session_manager 獲取
+                    # 如果沒有，嘗試從 store 中獲取
                     if not provider_manager:
-                        provider_manager = getattr(self.session_manager, 'provider_manager', None)
+                        provider_manager = getattr(self.store, 'provider_manager', None)
                     
                     # 如果還是沒有，創建一個新的
                     if not provider_manager:
@@ -321,7 +346,7 @@ class SSEServer(APIBase):
                         raise HTTPException(status_code=500, detail="Provider Manager not available")
                     
                     # 使用 Provider 進行轉譯
-                    self.logger.info(f"使用 {provider_name} 轉譯音訊檔案：{audio_path}")
+                    logger.info(f"使用 {provider_name} 轉譯音訊檔案：{audio_path}")
                     
                     # 讀取音訊檔案
                     with open(audio_path, 'rb') as f:
@@ -370,7 +395,7 @@ class SSEServer(APIBase):
                                 source_format=file_ext
                             )
                     except Exception as e:
-                        self.logger.error(f"音訊格式轉換失敗：{e}")
+                        logger.error(f"音訊格式轉換失敗：{e}")
                         raise HTTPException(status_code=400, detail=f"音訊格式轉換失敗：{str(e)}")
                     
                     # 使用 ProviderManager 的 transcribe 方法（支援池化）
@@ -413,12 +438,12 @@ class SSEServer(APIBase):
                     
                 finally:
                     # 清理臨時 session
-                    self.session_manager.delete_session(session.id)
+                    self.store.dispatch(sessions_actions.destroy_session(temp_session_id))
                     
             except HTTPException:
                 raise
             except Exception as e:
-                self.logger.error(f"轉譯錯誤：{e}", exc_info=True)
+                logger.error(f"轉譯錯誤：{e}", exc_info=True)
                 raise HTTPException(status_code=500, detail=str(e))
     
     async def _sse_stream(self, session_id: str, request: Request):
@@ -470,7 +495,7 @@ class SSEServer(APIBase):
                 except asyncio.TimeoutError:
                     continue  # 繼續等待
                 except Exception as e:
-                    self.logger.error(f"SSE 串流錯誤：{e}")
+                    logger.error(f"SSE 串流錯誤：{e}")
                     yield self._format_sse_event("error", {"message": str(e)})
                     break
             
@@ -538,15 +563,16 @@ class SSEServer(APIBase):
         try:
             # 檢查是否已經處理過
             if session_id in self.processed_sessions:
-                self.logger.warning(f"Session {session_id} 已經處理過，跳過重複處理")
+                logger.warning(f"Session {session_id} 已經處理過，跳過重複處理")
                 return
             
             # 標記為已處理
             self.processed_sessions.add(session_id)
-            self.logger.info(f"開始處理 Session {session_id} 的音訊資料")
+            logger.info(f"開始處理 Session {session_id} 的音訊資料")
             
-            # 獲取 session
-            session = self.session_manager.get_session(session_id)
+            # 使用 selector 獲取 session
+            state = self.store.get_state() if self.store else None
+            session = sessions_selectors.get_session(session_id)(state) if state else None
             if not session:
                 raise Exception("Session not found")
             
@@ -560,13 +586,13 @@ class SSEServer(APIBase):
             
             # 獲取完整音訊資料
             complete_audio = bytes(self.audio_buffers[session_id])
-            self.logger.info(f"處理完整音訊，大小: {len(complete_audio)} bytes")
+            logger.info(f"處理完整音訊，大小: {len(complete_audio)} bytes")
             
             # 獲取音頻參數
             audio_params = self.audio_params.get(session_id, {})
             audio_format = audio_params.get('format', 'pcm')  # 預設 PCM
             
-            self.logger.info(f"音頻參數: 格式={audio_format}")
+            logger.info(f"音頻參數: 格式={audio_format}")
             
             # 發送進度事件
             await self._send_sse_event(session_id, "progress", {
@@ -585,7 +611,7 @@ class SSEServer(APIBase):
             if audio_format in ['webm', 'mp3', 'mp4', 'ogg', 'wav']:
                 try:
                     # 需要轉換為 PCM
-                    self.logger.info(f"轉換 {audio_format} 格式，原始大小: {len(complete_audio)} bytes")
+                    logger.info(f"轉換 {audio_format} 格式，原始大小: {len(complete_audio)} bytes")
                     
                     if audio_format == 'webm':
                         # WebM 特別處理
@@ -600,9 +626,9 @@ class SSEServer(APIBase):
                             source_format=audio_format
                         )
                     
-                    self.logger.info(f"轉換成功，PCM 大小: {len(pcm_data)} bytes")
+                    logger.info(f"轉換成功，PCM 大小: {len(pcm_data)} bytes")
                 except Exception as e:
-                    self.logger.error(f"音訊格式轉換失敗: {e}")
+                    logger.error(f"音訊格式轉換失敗: {e}")
                     # 發送錯誤並返回
                     await self._send_sse_event(session_id, "error", {
                         "message": f"音訊格式轉換失敗: {str(e)}",
@@ -611,7 +637,7 @@ class SSEServer(APIBase):
                     return
             else:
                 # 已經是 PCM 格式，直接使用
-                self.logger.info(f"音頻已是 PCM 格式，大小: {len(pcm_data)} bytes")
+                logger.info(f"音頻已是 PCM 格式，大小: {len(pcm_data)} bytes")
             
             # 建立 AudioChunk
             from src.models.audio import AudioEncoding
@@ -638,7 +664,7 @@ class SSEServer(APIBase):
                     processed_audio = await pipeline.process(audio_chunk.data)
             
             # 執行轉譯
-            self.logger.info(f"使用 {provider_name} 進行轉譯")
+            logger.info(f"使用 {provider_name} 進行轉譯")
             
             # 發送部分結果
             await self._send_sse_event(session_id, "transcript", {
@@ -665,7 +691,7 @@ class SSEServer(APIBase):
                     "timestamp": datetime.now().isoformat()
                 })
                 
-                self.logger.info(f"轉譯完成: {result.text[:50]}...")
+                logger.info(f"轉譯完成: {result.text[:50]}...")
             else:
                 await self._send_sse_event(session_id, "error", {
                     "message": "無法辨識音訊內容",
@@ -676,7 +702,7 @@ class SSEServer(APIBase):
             self.audio_buffers[session_id] = bytearray()
             
         except Exception as e:
-            self.logger.error(f"處理音訊錯誤：{e}")
+            logger.error(f"處理音訊錯誤：{e}")
             await self._send_sse_event(session_id, "error", {
                 "message": str(e),
                 "timestamp": datetime.now().isoformat()
@@ -718,15 +744,23 @@ class SSEServer(APIBase):
         if session_id in self.processed_sessions:
             self.processed_sessions.remove(session_id)
         
-        self.logger.debug(f"清理 Session {session_id} 資源")
+        logger.debug(f"清理 Session {session_id} 資源")
+    
+    def _is_wake_expired(self, session) -> bool:
+        """檢查喚醒是否已超時"""
+        import time
+        if not session or not session.get("wake_time"):
+            return False
+        wake_timeout = session.get("wake_timeout", 30.0)
+        return (time.time() - session["wake_time"]) > wake_timeout
     
     async def start(self):
         """啟動 SSE Server"""
         if self._running:
-            self.logger.warning("SSE Server 已經在運行中")
+            logger.warning("SSE Server 已經在運行中")
             return
         
-        self.logger.info(f"啟動 SSE Server: {self.host}:{self.port}")
+        logger.info(f"啟動 SSE Server: {self.host}:{self.port}")
         
         # 設定 Uvicorn 配置
         config = uvicorn.Config(
@@ -744,15 +778,15 @@ class SSEServer(APIBase):
         # 在背景執行
         asyncio.create_task(self.server.serve())
         
-        self.logger.success(f"SSE Server 啟動成功: http://{self.host}:{self.port}")
+        logger.success(f"SSE Server 啟動成功: http://{self.host}:{self.port}")
     
     async def stop(self):
         """停止 SSE Server"""
         if not self._running:
-            self.logger.warning("SSE Server 未在運行中")
+            logger.warning("SSE Server 未在運行中")
             return
         
-        self.logger.info("停止 SSE Server")
+        logger.info("停止 SSE Server")
         
         # 關閉所有 SSE 連線
         for session_id in list(self.sse_connections.keys()):
@@ -767,7 +801,7 @@ class SSEServer(APIBase):
             await self.server.shutdown()
         
         self._running = False
-        self.logger.success("SSE Server 已停止")
+        logger.success("SSE Server 已停止")
     
     async def handle_control_command(self, 
                                    command: str, 
@@ -785,13 +819,15 @@ class SSEServer(APIBase):
             API 回應
         """
         try:
-            session = self.session_manager.get_session(session_id)
+            # 使用 selector 獲取 session
+            state = self.store.get_state() if self.store else None
+            session = sessions_selectors.get_session(session_id)(state) if state else None
             if not session:
                 return self.create_error_response("Session not found", session_id)
             
             # 處理不同的指令
             if command == "start":
-                self.session_manager.update_session_state(session_id, "LISTENING")
+                self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                 await self._send_sse_event(session_id, "status", {
                     "state": "LISTENING",
                     "message": "Started listening"
@@ -799,11 +835,11 @@ class SSEServer(APIBase):
                 return self.create_success_response({"state": "LISTENING"}, session_id)
                 
             elif command == "stop":
-                self.session_manager.update_session_state(session_id, "IDLE")
+                self.store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
                 
                 # 處理緩衝區中的所有音訊
                 if session_id in self.audio_buffers and len(self.audio_buffers[session_id]) > 0:
-                    self.logger.info(f"處理緩衝區音訊，大小: {len(self.audio_buffers[session_id])} bytes")
+                    logger.info(f"處理緩衝區音訊，大小: {len(self.audio_buffers[session_id])} bytes")
                     # 強制處理所有音訊資料
                     await self._process_all_audio(session_id)
                 
@@ -815,13 +851,13 @@ class SSEServer(APIBase):
                 
             elif command == "status":
                 return self.create_success_response({
-                    "state": session.state,
-                    "created_at": session.created_at.isoformat(),
-                    "last_activity": session.last_activity.isoformat()
+                    "state": session.get("state", "IDLE"),
+                    "created_at": session.get("created_at", datetime.now()).isoformat() if isinstance(session.get("created_at"), datetime) else session.get("created_at"),
+                    "last_activity": session.get("last_activity", datetime.now()).isoformat() if isinstance(session.get("last_activity"), datetime) else session.get("last_activity")
                 }, session_id)
                 
             elif command == "busy_start":
-                self.session_manager.update_session_state(session_id, "BUSY")
+                self.store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
                 await self._send_sse_event(session_id, "status", {
                     "state": "BUSY",
                     "message": "Entered busy mode"
@@ -829,7 +865,7 @@ class SSEServer(APIBase):
                 return self.create_success_response({"state": "BUSY"}, session_id)
                 
             elif command == "busy_end":
-                self.session_manager.update_session_state(session_id, "LISTENING")
+                self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                 await self._send_sse_event(session_id, "status", {
                     "state": "LISTENING",
                     "message": "Exited busy mode"
@@ -841,32 +877,39 @@ class SSEServer(APIBase):
                 source = params.get("source", "ui") if params else "ui"
                 wake_timeout = params.get("wake_timeout") if params else None
                 
-                success = self.session_manager.wake_session(
+                # 使用 Store dispatch 喚醒 session
+                self.store.dispatch(sessions_actions.wake_session(
                     session_id, 
                     source=source, 
                     wake_timeout=wake_timeout
-                )
+                ))
+                success = True  # dispatch 本身不返回值，我們假設成功
                 
                 if success:
-                    session = self.session_manager.get_session(session_id)
+                    # 重新獲取 session
+                    state = self.store.get_state() if self.store else None
+                    session = sessions_selectors.get_session(session_id)(state) if state else None
                     await self._send_sse_event(session_id, "wake_word", {
                         "source": source,
-                        "wake_time": session.wake_time.isoformat() if session.wake_time else None,
-                        "wake_timeout": session.wake_timeout
+                        "wake_time": session.get("wake_time").isoformat() if isinstance(session.get("wake_time"), datetime) else session.get("wake_time"),
+                        "wake_timeout": session.get("wake_timeout", 30.0)
                     })
                     return self.create_success_response({
                         "message": f"Session awakened from {source}",
-                        "wake_timeout": session.wake_timeout
+                        "wake_timeout": session.get("wake_timeout", 30.0)
                     }, session_id)
                 else:
                     return self.create_error_response("Failed to wake session", session_id)
             
             elif command == "sleep":
-                session = self.session_manager.get_session(session_id)
+                # 使用 selector 獲取 session
+                state = self.store.get_state() if self.store else None
+                session = sessions_selectors.get_session(session_id)(state) if state else None
                 if session:
-                    session.clear_wake()
+                    # 使用 Store dispatch 清除喚醒狀態
+                    self.store.dispatch(sessions_actions.clear_wake_state(session_id))
                     await self._send_sse_event(session_id, "state_change", {
-                        "old_state": session.state,
+                        "old_state": session.get("state", "IDLE"),
                         "new_state": "IDLE",
                         "event": "sleep"
                     })
@@ -885,9 +928,15 @@ class SSEServer(APIBase):
                     if timeout <= 0:
                         return self.create_error_response("Timeout must be positive", session_id)
                     
-                    session = self.session_manager.get_session(session_id)
+                    # 使用 selector 獲取 session
+                    state = self.store.get_state() if self.store else None
+                    session = sessions_selectors.get_session(session_id)(state) if state else None
                     if session:
-                        session.wake_timeout = timeout
+                        # 更新 wake_timeout
+                        self.store.dispatch(sessions_actions.update_session_metadata(
+                            session_id, 
+                            {"wake_timeout": timeout}
+                        ))
                         return self.create_success_response({
                             "message": f"Wake timeout set to {timeout} seconds",
                             "wake_timeout": timeout
@@ -902,20 +951,21 @@ class SSEServer(APIBase):
                 # 獲取系統狀態（這裡需要 SystemListener 的支援）
                 system_state = "IDLE"  # 暫時硬編碼，之後應該從 SystemListener 獲取
                 
-                # 獲取活躍的喚醒 sessions
-                active_wake_sessions = self.session_manager.get_active_wake_sessions()
+                # 使用 selector 獲取活躍的喚醒 sessions
+                state = self.store.get_state() if self.store else None
+                active_wake_sessions = sessions_selectors.get_active_wake_sessions()(state) if state else []
                 
-                wake_stats = self.session_manager.get_wake_stats()
+                wake_stats = sessions_selectors.get_wake_stats()(state) if state else {}
                 
                 return self.create_success_response({
                     "system_state": system_state,
                     "active_wake_sessions": [
                         {
-                            "id": s.id,
-                            "wake_source": s.wake_source,
-                            "wake_time": s.wake_time.isoformat() if s.wake_time else None,
-                            "wake_timeout": s.wake_timeout,
-                            "is_wake_expired": s.is_wake_expired()
+                            "id": s.get("id"),
+                            "wake_source": s.get("wake_source"),
+                            "wake_time": s.get("wake_time").isoformat() if isinstance(s.get("wake_time"), datetime) else s.get("wake_time"),
+                            "wake_timeout": s.get("wake_timeout", 30.0),
+                            "is_wake_expired": self._is_wake_expired(s)
                         }
                         for s in active_wake_sessions
                     ],
@@ -926,7 +976,7 @@ class SSEServer(APIBase):
                 return self.create_error_response(f"Unknown command: {command}", session_id)
                 
         except Exception as e:
-            self.logger.error(f"處理控制指令錯誤：{e}")
+            logger.error(f"處理控制指令錯誤：{e}")
             return self.create_error_response(str(e), session_id)
     
     async def handle_transcribe(self, 

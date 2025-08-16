@@ -18,7 +18,6 @@ class PipelineValidator:
     
     def __init__(self):
         """初始化 Pipeline Validator"""
-        self.logger = logger
         
         # 驗證規則
         self.validation_rules = {
@@ -68,9 +67,9 @@ class PipelineValidator:
         
         # 記錄驗證結果
         if result["valid"]:
-            self.logger.debug(f"Pipeline 驗證通過，警告數：{len(result['warnings'])}")
+            logger.debug(f"Pipeline 驗證通過，警告數：{len(result['warnings'])}")
         else:
-            self.logger.warning(f"Pipeline 驗證失敗，錯誤數：{len(result['errors'])}")
+            logger.warning(f"Pipeline 驗證失敗，錯誤數：{len(result['errors'])}")
         
         return result
     
