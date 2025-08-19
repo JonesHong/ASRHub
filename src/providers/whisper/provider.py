@@ -13,6 +13,12 @@ from src.providers.base import ProviderBase, TranscriptionResult, StreamingResul
 from src.utils.logger import logger
 from src.core.exceptions import ProviderError, ModelError, AudioFormatError
 from src.models.transcript import TranscriptSegment, Word
+from src.store import get_global_store
+from src.config.manager import ConfigManager
+
+# 模組級變數
+config_manager = ConfigManager()
+store = get_global_store()
 
 
 class WhisperProvider(ProviderBase):
@@ -24,13 +30,12 @@ class WhisperProvider(ProviderBase):
     def __init__(self):
         """
         初始化 Whisper Provider
-        使用 ConfigManager 獲取配置
         """
         # 調用父類初始化，傳入 provider 名稱
         super().__init__(provider_name="whisper")
         
         # 獲取 Whisper 特定配置
-        whisper_config = self.config_manager.providers.whisper
+        whisper_config = config_manager.providers.whisper
         
         # 模型配置
         self.model_size = whisper_config.model_size
@@ -159,6 +164,15 @@ class WhisperProvider(ProviderBase):
         # 移除鎖以支援並發處理 - Provider Pool 會管理並發
         start_time = time.time()
         
+        # 如果有 Store，dispatch 開始轉譯事件
+        session_id = kwargs.get('session_id')
+        if store and session_id:
+            from src.store.sessions.sessions_actions import begin_transcription
+            store.dispatch(begin_transcription(
+                session_id=session_id,
+                timestamp=start_time
+            ))
+        
         try:
             # 將音訊轉換為 numpy 陣列
             audio_array = self._bytes_to_float32(audio_data)
@@ -192,6 +206,17 @@ class WhisperProvider(ProviderBase):
                     f"處理時間：{result.processing_time:.2f}秒，"
                     f"即時因子：{result.processing_time / result.audio_duration:.2f}x"
                 )
+            
+            # 如果有 Store，dispatch 轉譯完成事件
+            if store and session_id:
+                from src.store.sessions.sessions_actions import transcription_done
+                store.dispatch(transcription_done(
+                    session_id=session_id,
+                    text=result.text,
+                    language=result.language,
+                    confidence=result.confidence,
+                    segments=result.segments if hasattr(result, 'segments') else None
+                ))
             
             return result
             

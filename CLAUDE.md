@@ -63,7 +63,7 @@ make clean
 ## Architecture Overview
 
 ### Core Design Principles
-- **Pipeline Architecture**: RxJS-style stream processing with modular operators
+- **Event-Driven Architecture**: PyStoreX-based state management with effects pattern
 - **Provider Abstraction**: Unified interface for multiple ASR providers (Whisper, FunASR, Vosk, etc.)
 - **Multi-Protocol Support**: HTTP SSE, WebSocket, Socket.io, gRPC, Redis
 - **FSM State Management**: Finite State Machine for session state (IDLE, LISTENING, BUSY)
@@ -73,10 +73,11 @@ make clean
 ```
 src/
 ├── config/         # yaml2py generated configuration (DO NOT EDIT - auto-generated)
-├── core/           # Core system: ASRHub, SessionManager, FSM
+├── core/           # Core system: ASRHub, FSM state management
 ├── api/            # API implementations for each protocol
-├── pipeline/       # Stream processing pipeline and operators
+├── operators/      # Stream processing operators (VAD, wakeword, recording, etc.)
 ├── providers/      # ASR provider implementations
+├── store/          # PyStoreX state management and effects
 ├── stream/         # Audio stream handling
 ├── utils/          # Utilities: logger, validators, audio tools
 └── models/         # Data models: Audio, Transcript, Session
@@ -85,14 +86,15 @@ src/
 ### Key Components
 
 1. **ASRHub** (`src/core/asr_hub.py`): Main entry point coordinating all modules
-2. **Pipeline System**: Operators can be chained for audio preprocessing:
+2. **PyStoreX Store** (`src/store/`): Event-driven state management with effects pattern
+3. **Operators** (`src/operators/`): Audio processing operators managed by SessionEffects:
    - VAD (Voice Activity Detection)
    - Denoising
    - Sample rate adjustment
    - Format conversion
    - Wake word detection
-3. **Provider System**: Abstraction layer for different ASR engines
-4. **Stream Controller**: Manages timeout and manual termination for streaming
+4. **Provider System**: Abstraction layer for different ASR engines
+5. **Stream Controller**: Manages timeout and manual termination for streaming
 
 ## Current Implementation Status
 
@@ -135,8 +137,9 @@ port = config.api.http_sse.port
 - **Always run** `yaml2py` after modifying configuration
 - **Use pretty-loguru** for all logging with visual blocks and ASCII headers
 - **Follow SOLID principles** - all components use base classes and interfaces
-- **Pipeline operators** should implement proper stream handling with buffers
+- **Operators** should extend `OperatorBase` and are managed by SessionEffects
 - **Error handling** uses custom exceptions in `src/core/exceptions.py`
+- **State management** uses PyStoreX with actions, reducers, and effects patterns
 
 ## Testing Guidelines
 

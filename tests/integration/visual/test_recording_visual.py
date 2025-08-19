@@ -20,10 +20,17 @@ import threading
 # 添加 src 到路徑
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../..'))
 
-from src.pipeline.operators.recording import RecordingOperator
+from src.operators.recording import RecordingOperator
 from src.utils.logger import logger
-from src.models.audio_format import AudioMetadata, AudioFormat
+from src.audio import AudioMetadata, AudioSampleFormat
 from src.utils.visualization import RecordingVisualization
+from src.store import get_global_store
+from src.store.sessions import sessions_actions
+from pystorex.middleware import LoggerMiddleware
+from src.store.sessions.sessions_selectors import (
+    get_session
+)
+from datetime import datetime
 
 
 class RecordingVisualTester:
@@ -57,40 +64,199 @@ class RecordingVisualTester:
         self.start_time = None
         self.loop = None
         
+        # PyStoreX 相關
+        self.store = None
+        self.state_subscription = None
+        self.session_subscription = None
+        self.action_subscription = None
+        self.action_log = []
+        self.state_changes = []
+        self.test_session_id = "test_recording"
+        
     async def setup(self):
         """設定測試環境"""
         logger.info("設定錄音測試環境...")
         
-        # 創建測試目錄
-        Path('test_recordings').mkdir(exist_ok=True)
-        
-        # 初始化錄音 operator
-        self.recording_operator = RecordingOperator()
-        
-        # 強制設定為檔案儲存模式
-        self.recording_operator.storage_type = 'file'
-        self.recording_operator.storage_path = Path('test_recordings')
-        # 確保目錄存在
-        self.recording_operator.storage_path.mkdir(exist_ok=True)
-        
-        await self.recording_operator.start()
-        
-        logger.info("✓ 測試環境設定完成")
+        try:
+            # 初始化 Store 並啟用 LoggerMiddleware
+            self.store = get_global_store()
+            
+            # 應用 LoggerMiddleware 進行調試（如果尚未應用）
+            if not hasattr(self.store, '_logger_middleware_applied'):
+                self.store.apply_middleware(LoggerMiddleware)
+                self.store._logger_middleware_applied = True
+                logger.info("✓ LoggerMiddleware 已啟用")
+            
+            # 設置狀態監控訂閱
+            self._setup_state_monitoring()
+            
+            # 創建測試 session
+            await self._create_test_session()
+            
+            # 創建測試目錄
+            Path('test_recordings').mkdir(exist_ok=True)
+            
+            # 初始化錄音 operator
+            self.recording_operator = RecordingOperator()
+            
+            # 強制設定為檔案儲存模式
+            self.recording_operator.storage_type = 'file'
+            self.recording_operator.storage_path = Path('test_recordings')
+            # 確保目錄存在
+            self.recording_operator.storage_path.mkdir(exist_ok=True)
+            
+            await self.recording_operator.start()
+            
+            logger.info("✓ 測試環境設定完成")
+            
+        except Exception as e:
+            logger.error(f"設定失敗: {e}")
+            raise
     
     async def cleanup(self):
         """清理測試環境"""
         logger.info("清理測試環境...")
         
-        if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
+        try:
+            # 停止錄音
+            self.is_recording = False
+            
+            # 清理 PyStoreX 訂閱
+            if self.state_subscription:
+                self.state_subscription.dispose()
+            if self.session_subscription:
+                self.session_subscription.dispose()
+            if self.action_subscription:
+                self.action_subscription.dispose()
+            
+            # 清理音訊流
+            if self.stream:
+                try:
+                    self.stream.stop_stream()
+                    self.stream.close()
+                except Exception as e:
+                    logger.error(f"關閉音訊流時發生錯誤: {e}")
+            
+            # 清理錄音 operator
+            if self.recording_operator:
+                try:
+                    await self.recording_operator.stop()
+                except Exception as e:
+                    logger.error(f"停止 RecordingOperator 時發生錯誤: {e}")
+            
+            # 清理 PyAudio
+            if hasattr(self, 'p') and self.p:
+                try:
+                    self.p.terminate()
+                except Exception as e:
+                    logger.error(f"終止 PyAudio 時發生錯誤: {e}")
+            
+            logger.info("✓ 測試環境清理完成")
+            
+        except Exception as e:
+            logger.error(f"清理過程中發生未預期的錯誤: {e}")
+    
+    def _setup_state_monitoring(self):
+        """設置 PyStoreX 狀態監控"""
+        logger.info("設置 PyStoreX 狀態監控...")
         
-        if self.recording_operator:
-            await self.recording_operator.stop()
+        # 監聽完整狀態變化
+        self.state_subscription = self.store._state_subject.subscribe(
+            lambda state: self._on_state_update(state)
+        )
         
-        self.p.terminate()
+        # 監聽特定 session 的狀態變化
+        if hasattr(self.store, 'select'):
+            session_selector = get_session(self.test_session_id)
+            self.session_subscription = self.store.select(
+                session_selector
+            ).subscribe(
+                lambda session_data: self._on_session_update(session_data)
+            )
         
-        logger.info("✓ 測試環境清理完成")
+        # 監聽 action 流
+        if hasattr(self.store, 'action_stream'):
+            self.action_subscription = self.store.action_stream.subscribe(
+                lambda action: self._on_action_dispatched(action)
+            )
+        
+        logger.info("✓ 狀態監控已設置")
+    
+    def _on_state_update(self, state):
+        """處理狀態更新事件"""
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        
+        # 記錄狀態變化
+        self.state_changes.append({
+            "timestamp": timestamp,
+            "state": state
+        })
+        
+        # 只保留最近 100 條記錄
+        if len(self.state_changes) > 100:
+            self.state_changes = self.state_changes[-100:]
+    
+    def _on_session_update(self, session_data):
+        """處理特定 session 的更新"""
+        if session_data:
+            if isinstance(session_data, (tuple, list)) and len(session_data) > 1:
+                prev_session, curr_session = session_data
+            else:
+                curr_session = session_data
+            
+            if curr_session and isinstance(curr_session, dict):
+                timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                logger.info(
+                    f"[{timestamp}] Session {self.test_session_id} updated:\n"
+                    f"  FSM State: {curr_session.get('fsm_state')}\n"
+                    f"  Mode: {curr_session.get('mode')}\n"
+                    f"  Recording State: {curr_session.get('recording_state')}\n"
+                    f"  Audio Buffer Size: {len(curr_session.get('audio_buffer', []))}"
+                )
+    
+    def _on_action_dispatched(self, action):
+        """處理 action dispatch 事件"""
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        
+        # 記錄 action
+        self.action_log.append({
+            "timestamp": timestamp,
+            "type": action.type,
+            "payload": action.payload
+        })
+        
+        # 只保留最近 200 條 action
+        if len(self.action_log) > 200:
+            self.action_log = self.action_log[-200:]
+        
+        # 對重要 action 進行特殊處理和記錄
+        important_actions = [
+            "[Session] Start Recording",
+            "[Session] End Recording",
+            "[Session] Audio Chunk Received",
+            "[Session] Recording Saved",
+            "[Session] Recording Failed"
+        ]
+        
+        if action.type in important_actions:
+            logger.info(
+                f"🎯 [{timestamp}] Action: {action.type}\n"
+                f"   Payload: {action.payload}"
+            )
+    
+    async def _create_test_session(self):
+        """創建測試用的 session"""
+        logger.info(f"創建測試 session: {self.test_session_id}")
+        
+        # Dispatch create_session action
+        self.store.dispatch(
+            sessions_actions.create_session(
+                self.test_session_id,
+                strategy="streaming"  # 使用串流模式以啟用所有功能
+            )
+        )
+        
+        logger.info(f"✓ 測試 session {self.test_session_id} 已創建")
     
     def _update_plot(self, frame):
         """更新圖表（給動畫使用）"""
@@ -166,6 +332,15 @@ class RecordingVisualTester:
         future.result()  # 等待完成
         logger.info(f"錄音開始 (session_id: {session_id})")
         
+        # Dispatch start_recording action 到 PyStoreX
+        if self.store:
+            self.store.dispatch(
+                sessions_actions.start_recording(
+                    self.test_session_id,
+                    trigger="manual"
+                )
+            )
+        
         # 開啟麥克風
         try:
             self.stream = self.p.open(
@@ -238,6 +413,16 @@ class RecordingVisualTester:
         
         # 停止錄音並獲取資料
         logger.info("正在儲存錄音...")
+        
+        # Dispatch end_recording action 到 PyStoreX
+        if self.store:
+            self.store.dispatch(
+                sessions_actions.end_recording(
+                    self.test_session_id,
+                    reason="manual"
+                )
+            )
+        
         stop_future = asyncio.run_coroutine_threadsafe(
             self.recording_operator.stop_recording(session_id), 
             self.loop
@@ -266,6 +451,24 @@ class RecordingVisualTester:
             logger.info(f"音訊資料大小: {len(recorded_data) / 1024:.1f} KB")
             logger.info(f"預期音訊長度: {len(recorded_data) / (self.sample_rate * 2):.2f} 秒")
             logger.info(f"儲存位置: test_recordings/{session_id}_*.wav")
+            
+            # PyStoreX 統計
+            logger.info(f"\n📦 PyStoreX 統計:")
+            logger.info(f"  📨 總 Actions 數: {len(self.action_log)}")
+            logger.info(f"  🔄 狀態變化數: {len(self.state_changes)}")
+            
+            # 顯示最常見的 action 類型
+            if self.action_log:
+                action_types = {}
+                for action in self.action_log:
+                    action_type = action["type"]
+                    action_types[action_type] = action_types.get(action_type, 0) + 1
+                
+                logger.info(f"  📊 Action 類型分布:")
+                sorted_types = sorted(action_types.items(), key=lambda x: x[1], reverse=True)
+                for action_type, count in sorted_types[:5]:
+                    logger.info(f"    {action_type}: {count} 次")
+            
             logger.info(f"{'='*60}")
             
             # 關閉視覺化視窗（如果還開著）
@@ -310,7 +513,7 @@ class RecordingVisualTester:
                 metadata = AudioMetadata(
                     sample_rate=self.sample_rate,
                     channels=self.channels,
-                    format=AudioFormat.INT16
+                    format=AudioSampleFormat.INT16
                 )
                 
                 # 傳遞給 RecordingOperator (使用 run_coroutine_threadsafe)
@@ -328,6 +531,16 @@ class RecordingVisualTester:
                         self._process_count += 1
                         if self._process_count <= 5:
                             logger.debug(f"成功處理音訊數據 #{self._process_count}, 大小: {len(audio_data)} bytes")
+                        
+                        # Dispatch audio_chunk_received action 到 PyStoreX
+                        if self.store:
+                            self.store.dispatch(
+                                sessions_actions.audio_chunk_received(
+                                    self.test_session_id,
+                                    chunk_size=len(audio_data),  # 只傳遞大小
+                                    timestamp=time.time()
+                                )
+                            )
                     except TimeoutError:
                         logger.warning("RecordingOperator.process() 超時")
                     except Exception as e:

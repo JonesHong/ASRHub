@@ -7,7 +7,7 @@ from typing import Dict, Any
 from dataclasses import dataclass
 from enum import Enum
 
-from src.models.audio import AudioFormat, AudioEncoding
+from src.audio import AudioContainerFormat, AudioEncoding
 
 
 class AudioProtocolError(Exception):
@@ -20,7 +20,7 @@ class AudioProtocolConfig:
     """音訊協議配置 - 所有參數必要"""
     sample_rate: int
     channels: int
-    format: AudioFormat
+    format: AudioContainerFormat
     encoding: AudioEncoding
     bits_per_sample: int
     

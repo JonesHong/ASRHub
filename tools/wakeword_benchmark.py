@@ -18,7 +18,7 @@ import statistics
 # 添加 src 到路徑
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from src.pipeline.operators.wakeword import OpenWakeWordOperator
+from src.operators.wakeword import OpenWakeWordOperator
 from src.utils.logger import logger
 from src.config.manager import ConfigManager
 

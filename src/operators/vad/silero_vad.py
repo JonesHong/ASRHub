@@ -10,22 +10,40 @@ import numpy as np
 import onnxruntime as ort
 from pathlib import Path
 
-from src.pipeline.operators.base import OperatorBase
+from src.operators.base import OperatorBase
 from src.core.exceptions import PipelineError
 from src.utils.logger import logger
-from src.models.audio_format import AudioMetadata, AudioFormat
+from src.audio import AudioMetadata, AudioSampleFormat
 from .model_downloader import ensure_vad_model
+
+# 模組級變數 - 直接導入和實例化
+from src.config.manager import ConfigManager
+from src.store import get_global_store
+from src.core.audio_queue_manager import get_audio_queue_manager
+from src.core.timer_manager import timer_manager
+
+config_manager = ConfigManager()
+store = get_global_store()
+audio_queue_manager = get_audio_queue_manager()
 
 
 class SileroVADOperator(OperatorBase):
     """使用 Silero VAD 模型進行語音活動檢測"""
     
     def __init__(self):
+        """
+        初始化 Silero VAD Operator
+        使用模組級變數和 TimerManager 管理計時器
+        """
         super().__init__()
         
-        # 從 ConfigManager 獲取配置
-        from src.config.manager import ConfigManager
-        self.config_manager = ConfigManager()
+        # 使用模組級變數
+        self.store = store
+        self.audio_queue_manager = audio_queue_manager
+        self.config_manager = config_manager
+        
+        # 用於追蹤當前 session_id
+        self.current_session_id = None
         
         self.model = None
         self.h = None  # 隱藏狀態 h
@@ -59,6 +77,7 @@ class SileroVADOperator(OperatorBase):
         self.silence_start_time = None
         self.speech_duration = 0
         self.silence_duration = 0
+        self.last_speech_end_time = None  # 記錄最後一次語音結束時間
         
         # 緩衝區（處理跨幀音訊）
         self.audio_buffer = bytearray()
@@ -94,7 +113,7 @@ class SileroVADOperator(OperatorBase):
         return AudioMetadata(
             sample_rate=self.config_manager.pipeline.default_sample_rate,  # 從配置讀取
             channels=self.config_manager.pipeline.channels,               # 從配置讀取
-            format=AudioFormat.INT16  # 接受 int16 輸入
+            format=AudioSampleFormat.INT16  # 接受 int16 輸入
         )
     
     def get_output_audio_format(self) -> Optional[AudioMetadata]:
@@ -249,7 +268,7 @@ class SileroVADOperator(OperatorBase):
         
         # 更新狀態
         current_time = time.time()
-        await self._update_speech_state(is_speech, current_time, speech_prob)
+        await self._update_speech_state(is_speech, current_time, speech_prob, **kwargs)
         
         # 更新閾值歷史（用於自適應閾值）
         if self.adaptive_threshold:
@@ -274,6 +293,9 @@ class SileroVADOperator(OperatorBase):
         Returns:
             audio_data: 透傳音訊，附加 VAD 資訊在 kwargs 中
         """
+        # 更新當前 session_id
+        self.current_session_id = kwargs.get('session_id')
+        
         if not self.enabled or not self._initialized:
             return audio_data
         
@@ -436,7 +458,7 @@ class SileroVADOperator(OperatorBase):
             logger.error(f"VAD 推論錯誤: {e}")
             raise
     
-    async def _update_speech_state(self, is_speech: bool, timestamp: float, speech_prob: float):
+    async def _update_speech_state(self, is_speech: bool, timestamp: float, speech_prob: float, **kwargs):
         """
         更新語音/靜音狀態
         
@@ -455,11 +477,30 @@ class SileroVADOperator(OperatorBase):
                 self.speech_start_time = timestamp
                 self.in_speech = True
                 self.silence_duration = 0
+                self.silence_start_time = None  # 重置靜音開始時間
+                self._silence_detected_triggered = False  # 重置靜音觸發標記
                 
                 logger.debug(f"語音開始 (機率: {speech_prob:.3f})")
                 
-                # 觸發語音開始回調
-                if self.speech_start_callback:
+                # 使用 TimerManager 取消靜音計時器
+                if self.current_session_id:
+                    timer = timer_manager.get_timer(self.current_session_id)
+                    if timer:
+                        await timer.on_speech_detected()
+                    else:
+                        logger.debug(f"No timer found for session: {self.current_session_id}")
+                
+                # 優先使用 Store dispatch，否則使用回呼（向後相容）
+                if self.store:
+                    # 直接 dispatch speech_detected action
+                    from src.store.sessions.sessions_actions import speech_detected
+                    self.store.dispatch(speech_detected(
+                        session_id=kwargs.get("session_id"),
+                        timestamp=timestamp,
+                        confidence=float(speech_prob)
+                    ))
+                elif self.speech_start_callback:
+                    # 保留回呼介面（向後相容）
                     await self.speech_start_callback({
                         'timestamp': timestamp,
                         'speech_probability': speech_prob
@@ -472,33 +513,84 @@ class SileroVADOperator(OperatorBase):
             self.total_silence_frames += 1
             
             if self.in_speech:
-                # 可能是語音結束
+                # 語音結束，開始靜音計時
                 if self.silence_start_time is None:
                     self.silence_start_time = timestamp
-                
+                    logger.debug(f"開始追蹤靜音時間")
+                    
                 # 計算靜音持續時間
-                silence_duration = timestamp - self.silence_start_time
+                silence_elapsed = timestamp - self.silence_start_time
                 
-                # 檢查是否達到最小靜音時長
-                if silence_duration >= self.min_silence_duration:
-                    # 語音結束
-                    self.speech_end_time = self.silence_start_time
+                # 檢查最小語音持續時間
+                speech_duration = timestamp - self.speech_start_time if self.speech_start_time else 0
+                if speech_duration >= self.min_speech_duration:
+                    # 語音足夠長，標記語音結束
+                    logger.info(f"🔇 語音結束 (語音時長: {speech_duration:.3f}s)")
+                    
+                    # 記錄語音結束
+                    self.speech_end_time = timestamp
+                    self.last_speech_end_time = self.speech_end_time
                     self.in_speech = False
                     self.speech_duration = 0
-                    self.silence_start_time = None
+                    # 不要重置 silence_start_time，因為我們需要繼續計算靜音時間
                     
-                    logger.debug(f"語音結束 (靜音時長: {silence_duration:.3f}s)")
+                    # 立即 dispatch silence_started action 表示進入靜音狀態
+                    if self.store:
+                        from src.store.sessions.sessions_actions import silence_started
+                        logger.info(f"📢 Dispatching silence_started - 進入靜音狀態")
+                        self.store.dispatch(silence_started(
+                            session_id=kwargs.get("session_id"),
+                            timestamp=timestamp
+                        ))
                     
-                    # 觸發語音結束回調
+                    # 觸發語音結束回呼（如果有）
                     if self.speech_end_callback:
                         await self.speech_end_callback({
-                            'timestamp': timestamp,
-                            'speech_duration': self.speech_end_time - self.speech_start_time,
-                            'silence_duration': silence_duration
+                            'speech_duration': speech_duration,
+                            'timestamp': timestamp
                         })
+                # else: 語音太短，繼續等待
+                
             else:
                 # 持續靜音
-                self.silence_duration += frame_duration
+                if self.silence_start_time:
+                    # 計算靜音持續時間
+                    silence_elapsed = timestamp - self.silence_start_time
+                    self.silence_duration = silence_elapsed
+                    
+                    # 檢查是否達到最小靜音持續時間（確認為穩定靜音）
+                    if not hasattr(self, '_silence_detected_triggered') or not self._silence_detected_triggered:
+                        if silence_elapsed >= self.min_silence_duration:
+                            # 靜音已持續足夠時間，現在才觸發 silence_detected
+                            logger.info(f"✅ 確認靜音狀態，開始倒數計時器 (靜音已持續: {silence_elapsed:.3f}s)")
+                            
+                            # 標記已觸發，避免重複
+                            self._silence_detected_triggered = True
+                            
+                            # 使用 TimerManager 開始靜音計時器
+                            if self.current_session_id:
+                                timer = timer_manager.get_timer(self.current_session_id)
+                                if timer:
+                                    logger.info(f"啟動靜音計時器 for session: {self.current_session_id}")
+                                    await timer.on_silence_detected()
+                                else:
+                                    logger.warning(f"No timer found for session: {self.current_session_id}")
+                            
+                            # Dispatch silence_detected action（現在才開始倒數）
+                            if self.store:
+                                from src.store.sessions.sessions_actions import silence_detected
+                                # 從配置讀取倒數時間
+                                try:
+                                    countdown_duration = self.config_manager.pipeline.operators.recording.vad_control.silence_countdown
+                                except:
+                                    countdown_duration = 1.8  # 預設值
+                                    
+                                logger.info(f"📢 Dispatching silence_detected with countdown: {countdown_duration}s")
+                                self.store.dispatch(silence_detected(
+                                    session_id=kwargs.get("session_id"),
+                                    duration=countdown_duration,
+                                    timestamp=timestamp
+                                ))
     
     def set_speech_callbacks(self, 
                             start_callback=None, 
@@ -649,3 +741,70 @@ class SileroVADOperator(OperatorBase):
         # 限制歷史記錄大小
         if len(self.threshold_history) > self.threshold_window_size * 2:
             self.threshold_history = self.threshold_history[-self.threshold_window_size:]
+    
+    
+    async def process_from_queue(self, session_id: str):
+        """
+        從 AudioQueueManager 處理音訊（串流模式）
+        
+        Args:
+            session_id: Session ID
+        """
+        # 設定當前 session_id
+        self.current_session_id = session_id
+        
+        if not self.audio_queue_manager:
+            logger.warning("VADOperator: No AudioQueueManager configured")
+            return
+        
+        logger.info(f"VADOperator: Starting queue processing for session {session_id}")
+        
+        # 確保佇列存在
+        if session_id not in self.audio_queue_manager.queues:
+            await self.audio_queue_manager.create_queue(session_id)
+        
+        try:
+            while self.enabled:
+                try:
+                    # 從佇列拉取音訊（VAD 需要固定大小的塊）
+                    audio_data = await self.audio_queue_manager.pull(session_id, timeout=0.1)
+                    
+                    if audio_data:
+                        # 創建元數據
+                        metadata = AudioMetadata(
+                            sample_rate=self.required_format.sample_rate,
+                            channels=self.required_format.channels,
+                            format=self.required_format.format
+                        )
+                        
+                        # 處理音訊並執行 VAD
+                        result = await self.process(audio_data, metadata=metadata)
+                        
+                        # 如果 Store 存在，dispatch VAD 結果
+                        if self.store and self.in_speech:
+                            from src.store.sessions.sessions_actions import speech_detected
+                            self.store.dispatch(speech_detected(
+                                session_id=session_id,
+                                confidence=self.last_speech_prob,
+                                timestamp=time.time()
+                            ))
+                        elif self.store and not self.in_speech and self.silence_duration > self.min_silence_duration:
+                            from src.store.sessions.sessions_actions import silence_detected
+                            self.store.dispatch(silence_detected(
+                                session_id=session_id,
+                                duration=self.silence_duration,
+                                timestamp=time.time()
+                            ))
+                    else:
+                        # 沒有音訊時短暫等待
+                        await asyncio.sleep(0.01)
+                        
+                except asyncio.TimeoutError:
+                    # 超時是正常的，繼續等待
+                    continue
+                except Exception as e:
+                    logger.error(f"VADOperator queue processing error: {e}")
+                    break
+                    
+        finally:
+            logger.info(f"VADOperator: Stopped queue processing for session {session_id}")

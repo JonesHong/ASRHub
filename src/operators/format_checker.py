@@ -1,13 +1,13 @@
 """
 音訊格式檢查器
-用於 Pipeline 中的格式驗證和自動轉換
+用於 Operator 中的格式驗證和自動轉換
 """
 
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
-from src.models.audio import AudioChunk, AudioFormat, AudioEncoding
-from src.pipeline.operators.base import OperatorBase
+from src.audio import AudioChunk, AudioContainerFormat, AudioEncoding
+from src.operators.base import OperatorBase
 from src.utils.logger import logger
 
 
@@ -16,7 +16,7 @@ class FormatRequirement:
     """格式需求定義"""
     sample_rates: Optional[List[int]] = None  # None 表示任意
     channels: Optional[List[int]] = None
-    formats: Optional[List[AudioFormat]] = None
+    formats: Optional[List[AudioContainerFormat]] = None
     encodings: Optional[List[AudioEncoding]] = None
     bits_per_sample: Optional[List[int]] = None
     
@@ -72,7 +72,7 @@ class FormatRequirement:
 class AudioFormatChecker:
     """
     音訊格式檢查器
-    用於分析 Pipeline 中的格式需求並規劃轉換
+    用於分析 Operator 鏈中的格式需求並規劃轉換
     """
     
     # 常見 Operator 的格式需求
@@ -80,25 +80,25 @@ class AudioFormatChecker:
         "SileroVAD": FormatRequirement(
             sample_rates=[16000],
             channels=[1],
-            formats=[AudioFormat.PCM],
+            formats=[AudioContainerFormat.PCM],
             encodings=[AudioEncoding.FLOAT32]
         ),
         "OpenWakeWord": FormatRequirement(
             sample_rates=[16000],
             channels=[1],
-            formats=[AudioFormat.PCM],
+            formats=[AudioContainerFormat.PCM],
             encodings=[AudioEncoding.LINEAR16]
         ),
         "WhisperProvider": FormatRequirement(
             sample_rates=[16000],
             channels=[1],
-            formats=[AudioFormat.PCM],
+            formats=[AudioContainerFormat.PCM],
             encodings=[AudioEncoding.FLOAT32]
         ),
         "VoskProvider": FormatRequirement(
             sample_rates=[16000, 8000],
             channels=[1],
-            formats=[AudioFormat.PCM],
+            formats=[AudioContainerFormat.PCM],
             encodings=[AudioEncoding.LINEAR16]
         ),
         "GoogleSTTProvider": FormatRequirement(
@@ -110,13 +110,13 @@ class AudioFormatChecker:
     }
     
     @classmethod
-    def analyze_pipeline(
+    def analyze_operators(
         cls,
         operators: List[OperatorBase],
         provider_name: Optional[str] = None
-    ) -> List[Tuple[int, str, AudioMetadata]]:
+    ) -> List[Tuple[int, str, Dict[str, Any]]]:
         """
-        分析 Pipeline 的格式需求
+        分析 Operator 鏈的格式需求
         
         Args:
             operators: Operator 列表
@@ -155,19 +155,19 @@ class AudioFormatChecker:
     @classmethod
     def _select_converter(
         cls,
-        source: AudioMetadata,
-        target: AudioMetadata
+        source: Dict[str, Any],
+        target: Dict[str, Any]
     ) -> str:
         """選擇合適的轉換器"""
         # 如果只是取樣率不同
-        if (source.channels == target.channels and
-            source.format == target.format and
-            source.encoding == target.encoding and
-            source.bits_per_sample == target.bits_per_sample):
+        if (source.get('channels') == target.get('channels') and
+            source.get('format') == target.get('format') and
+            source.get('encoding') == target.get('encoding') and
+            source.get('bits_per_sample') == target.get('bits_per_sample')):
             return "SampleRateConverter"
         
         # 如果需要格式轉換
-        if source.format != target.format:
+        if source.get('format') != target.get('format'):
             return "FFmpegOperator"
         
         # 預設使用 SciPy 轉換器

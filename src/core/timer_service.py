@@ -6,10 +6,10 @@ ASR Hub 計時器服務
 import asyncio
 from typing import Dict, Callable, Optional, Any
 from src.utils.logger import logger
-from src.store import get_global_store
-from src.store.sessions import sessions_actions
-from src.store.sessions.sessions_state import FSMStateEnum
 from src.config.manager import ConfigManager
+
+# 模組級變數
+config_manager = ConfigManager()
 
 
 class TimerService:
@@ -23,22 +23,30 @@ class TimerService:
             session_id: 會話 ID（用於 PyStoreX）
         """
         self.session_id = session_id
-        self.store = get_global_store() if session_id else None
+        self._store = None  # Lazy load to avoid circular import
         self.timers: Dict[str, asyncio.Task] = {}
-        self.config = ConfigManager()
         
-        # 預設超時時間（毫秒）
-        self.default_timeouts = {
-            'awake': 8000,          # 喚醒視窗超時
-            'llm_claim': 3000,      # LLM 接手等待時間
-            'tts_claim': 3000,      # TTS 接手等待時間
-            'recording': -1,        # 錄音上限（-1 無上限）
-            'streaming': -1,        # 串流上限（-1 無上限）
-            'session_idle': 600000, # 會話閒置超時（10分鐘）
-            'vad_silence': 2000,    # VAD 靜音超時
-        }
+        # 從配置讀取超時設定
+        self._load_timeout_config()
         
         logger.info("計時器服務初始化完成")
+    
+    def _get_store(self):
+        """
+        Lazy load store to avoid circular import
+        
+        Returns:
+            Store instance or None
+        """
+        if self._store is None and self.session_id:
+            from src.store import get_global_store
+            self._store = get_global_store()
+        return self._store
+    
+    @property
+    def store(self):
+        """Backward compatibility property"""
+        return self._get_store()
     
     async def start_awake_timer(self):
         """喚醒視窗計時器"""
@@ -160,12 +168,15 @@ class TimerService:
     async def _handle_awake_timeout(self):
         """喚醒視窗超時處理"""
         if self.store and self.session_id:
+            from src.store.sessions import sessions_actions
             logger.info("喚醒視窗超時，重置 FSM")
             self.store.dispatch(sessions_actions.reset_fsm(self.session_id))
     
     async def _handle_llm_timeout(self):
         """LLM 超時處理"""
         if self.store and self.session_id:
+            from src.store.sessions import sessions_actions
+            from src.store.sessions.sessions_state import FSMStateEnum
             # 檢查當前狀態
             state = self.store.state
             if hasattr(state, 'sessions') and state.sessions:
@@ -179,6 +190,8 @@ class TimerService:
     async def _handle_tts_timeout(self):
         """TTS 超時處理"""
         if self.store and self.session_id:
+            from src.store.sessions import sessions_actions
+            from src.store.sessions.sessions_state import FSMStateEnum
             # 檢查當前狀態
             state = self.store.state
             if hasattr(state, 'sessions') and state.sessions:
@@ -192,6 +205,8 @@ class TimerService:
     async def _handle_vad_silence_timeout(self):
         """VAD 靜音超時處理"""
         if self.store and self.session_id:
+            from src.store.sessions import sessions_actions
+            from src.store.sessions.sessions_state import FSMStateEnum
             # 檢查當前狀態
             state = self.store.state
             if hasattr(state, 'sessions') and state.sessions:
@@ -218,6 +233,7 @@ class TimerService:
     async def _handle_recording_timeout(self):
         """錄音超時處理"""
         if self.store and self.session_id:
+            from src.store.sessions import sessions_actions
             logger.info("錄音超時，強制結束")
             self.store.dispatch(
                 sessions_actions.end_recording(
@@ -230,6 +246,7 @@ class TimerService:
     async def _handle_streaming_timeout(self):
         """串流超時處理"""
         if self.store and self.session_id:
+            from src.store.sessions import sessions_actions
             logger.info("串流超時，強制結束")
             self.store.dispatch(
                 sessions_actions.end_streaming(self.session_id)
@@ -238,6 +255,7 @@ class TimerService:
     async def _handle_session_idle_timeout(self):
         """會話閒置超時處理"""
         if self.store and self.session_id:
+            from src.store.sessions import sessions_actions
             logger.info("會話閒置超時，重置")
             self.store.dispatch(sessions_actions.reset_fsm(self.session_id))
     
@@ -260,6 +278,68 @@ class TimerService:
         self.timers.clear()
         logger.debug("取消所有計時器")
     
+    @property
+    def is_active(self) -> bool:
+        """
+        檢查是否有活躍的計時器
+        
+        Returns:
+            是否有計時器正在運行
+        """
+        return len(self.timers) > 0
+    
+    def _load_timeout_config(self):
+        """
+        從配置載入所有超時設定
+        """
+        # 根據 session 的策略類型獲取對應的超時配置
+        # 預設使用 NON_STREAMING 策略
+        default_strategy = getattr(config_manager.fsm, 'default_strategy', 'NON_STREAMING').lower()
+        
+        # 嘗試從 FSM 配置讀取超時設定
+        self.timeout_config = {}
+        if hasattr(config_manager, 'fsm') and hasattr(config_manager.fsm, 'timeout_configs'):
+            strategy_config = getattr(config_manager.fsm.timeout_configs, default_strategy.replace('_', ''), {})
+            
+            # 映射配置鍵到內部使用的鍵
+            config_mapping = {
+                'activated': 'awake',
+                'recording': 'recording', 
+                'streaming': 'streaming',
+                'transcribing': 'llm_claim',
+                'processing': 'session_idle'
+            }
+            
+            for config_key, internal_key in config_mapping.items():
+                if hasattr(strategy_config, config_key):
+                    self.timeout_config[internal_key] = getattr(strategy_config, config_key)
+        
+        # VAD 靜音超時從 stream 配置讀取（轉換為毫秒）
+        if hasattr(config_manager, 'stream'):
+            if hasattr(config_manager.stream, 'silence_timeout'):
+                self.timeout_config['vad_silence'] = int(config_manager.stream.silence_timeout * 1000)
+        
+        # TTS claim 超時（暫時設定為與 llm_claim 相同）
+        if 'llm_claim' in self.timeout_config:
+            self.timeout_config['tts_claim'] = self.timeout_config['llm_claim']
+        
+        # 如果配置中沒有某些值，使用保守的預設值（但記錄警告）
+        required_timeouts = ['awake', 'llm_claim', 'tts_claim', 'recording', 'streaming', 'session_idle', 'vad_silence']
+        for key in required_timeouts:
+            if key not in self.timeout_config:
+                # 使用保守預設值
+                conservative_defaults = {
+                    'awake': 5000,
+                    'llm_claim': 5000,
+                    'tts_claim': 5000,
+                    'recording': 30000,
+                    'streaming': 30000,
+                    'session_idle': 600000,
+                    'vad_silence': 3000
+                }
+                self.timeout_config[key] = conservative_defaults.get(key, -1)
+                logger.warning(f"計時器 '{key}' 未在配置中找到，使用預設值：{self.timeout_config[key]}ms")
+    
     def _get_timeout(self, timer_type: str) -> int:
         """
         獲取超時時間配置
@@ -270,9 +350,4 @@ class TimerService:
         Returns:
             超時時間（毫秒）
         """
-        # 優先從配置文件讀取
-        if hasattr(self.config, 'timers') and hasattr(self.config.timers, timer_type):
-            return getattr(self.config.timers, timer_type)
-        
-        # 使用預設值
-        return self.default_timeouts.get(timer_type, -1)
+        return self.timeout_config.get(timer_type, -1)

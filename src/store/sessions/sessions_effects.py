@@ -6,23 +6,26 @@ Sessions 域的 Effects 實現
 """
 
 import asyncio
-import time
 from typing import Dict, Optional, Any
 from weakref import WeakValueDictionary
-from pystorex import create_effect
-from reactivex import timer, Subject
+from pystorex import create_effect,ofType
+from reactivex import timer
 from reactivex import operators as ops
 
-from src.models.session_mode import SessionMode
+from .sessions_state import FSMStrategy
 from src.utils.logger import logger
 from src.utils.rxpy_async import async_flat_map
+from src.core.audio_queue_manager import get_audio_queue_manager, AudioQueueManager
+from src.core.timer_manager import timer_manager
+from .fsm_config import get_strategy_config
+from .sessions_state import FSMStateEnum, FSMStrategy
 from .sessions_actions import (
     create_session, destroy_session, session_created, session_destroyed,
-    wake_triggered, start_recording, start_streaming, reset_fsm,
+    wake_triggered, start_recording, start_asr_streaming, fsm_reset,
     session_error, transcription_done, begin_transcription, end_recording,
     audio_chunk_received, speech_detected, silence_detected,
-    recording_started, recording_stopped, countdown_started, countdown_cancelled,
-    mode_switched, switch_mode, end_streaming
+    recording_started, countdown_started, countdown_cancelled,
+    mode_switched, switch_mode, end_asr_streaming
 )
 
 
@@ -46,21 +49,47 @@ class SessionEffects:
             logger: 日誌記錄器
         """
         self.store = store
-        self.audio_queue_manager = audio_queue_manager
+        self.audio_queue_manager = audio_queue_manager or get_audio_queue_manager()
         
         # 使用 WeakValueDictionary 自動管理生命週期
-        # 管理每個 session 的 operators
+        # 註：雖然 operators 共享模型（類別層級），但為了簡化狀態管理，
+        # 我們仍為每個 session 創建獨立的 operator 實例。
+        # 這些實例很輕量，只包含狀態，不包含模型。
         self.session_operators: Dict[str, WeakValueDictionary] = {
-            'wakeword': WeakValueDictionary(),
-            'vad': WeakValueDictionary(),
-            'recording': WeakValueDictionary()
+            'format_conversion': WeakValueDictionary(),  # session_id -> format converter
+            'wakeword': WeakValueDictionary(),   # session_id -> operator instance (state only)
+            'vad': WeakValueDictionary(),        # session_id -> operator instance (state only)
+            'recording': WeakValueDictionary()   # session_id -> operator instance (state only)
         }
         
         # 管理每個 session 的 providers
         self.session_providers: WeakValueDictionary = WeakValueDictionary()
         
         # 管理每個 session 的模式
-        self.session_modes: Dict[str, SessionMode] = {}
+        self.session_strategies: Dict[str, FSMStrategy] = {}
+        
+        # Operator 和 Provider 工廠函數（將由 inject_xxx_factory 注入）
+        self.operator_factories = {}
+        self.provider_factories = {}
+        
+        # Pipeline 和 Provider 管理器（可選）
+        # Pipeline functionality now handled internally by SessionEffects
+        self.provider_manager = None
+        
+        # Pipeline 執行順序配置
+        self.pipeline_order = [
+            'format_conversion',  # 1. 格式轉換
+            'wakeword',          # 2. 喚醒詞檢測
+            'vad',               # 3. VAD 處理
+            'recording'          # 4. 錄音管理
+        ]
+    
+    def _format_session_id(self, session_id: str) -> str:
+        """安全格式化 session_id 用於日誌顯示"""
+        if session_id is None:
+            return "[None]"
+        return session_id[:8] if len(session_id) > 8 else session_id
+    
     
     # ============================================================================
     # Session 生命週期 Effects
@@ -73,27 +102,28 @@ class SessionEffects:
         監聽 create_session action，初始化該 session 的所有 operators 和資源。
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type == create_session.type),
-            ops.flat_map(async_flat_map(self._handle_create_session))
+            ofType(create_session),
+            async_flat_map(self._handle_create_session)
         )
     
     async def _handle_create_session(self, action):
         """處理 session 創建邏輯"""
-        session_id = action.payload.get("session_id") or action.payload.get("id")
-        mode_str = action.payload.get("mode", "streaming")
-        mode = SessionMode(mode_str) if isinstance(mode_str, str) else mode_str
-        client_info = action.payload.get("client_info", {})
+        payload = action.payload
+        session_id = payload["id"]
         
-        logger.info(f"Creating session {session_id} with mode {mode}")
+        # 從 strategy 取得策略
+        strategy = payload.get("strategy", FSMStrategy.NON_STREAMING)
+        
+        logger.info(f"Creating session {session_id} with strategy {strategy}")
         
         try:
-            # 儲存 session 模式
-            self.session_modes[session_id] = mode
+            # 儲存 session 策略
+            self.session_strategies[session_id] = strategy
             
-            # 根據模式初始化不同的 operators
-            if mode == SessionMode.BATCH:
+            # 根據策略初始化不同的 operators
+            if strategy == FSMStrategy.BATCH:
                 await self._setup_batch_mode(session_id)
-            elif mode == SessionMode.NON_STREAMING:
+            elif strategy == FSMStrategy.NON_STREAMING:
                 await self._setup_non_streaming_mode(session_id)
             else:  # STREAMING
                 await self._setup_streaming_mode(session_id)
@@ -101,6 +131,10 @@ class SessionEffects:
             # 初始化該 session 的音訊隊列
             if self.audio_queue_manager:
                 await self.audio_queue_manager.create_queue(session_id)
+            
+            # 建立該 session 的 timer
+            await timer_manager.create_timer(session_id)
+            logger.info(f"Timer created for session: {session_id}")
             
             # Dispatch session_created action
             if self.store:
@@ -122,14 +156,13 @@ class SessionEffects:
         監聽 destroy_session action，清理該 session 的所有資源。
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type == destroy_session.type),
-            ops.flat_map(async_flat_map(self._handle_destroy_session))
+            ofType(destroy_session),
+            async_flat_map(self._handle_destroy_session)
         )
     
     async def _handle_destroy_session(self, action):
         """處理 session 銷毀邏輯"""
-        session_id = action.payload.get("session_id") or action.payload.get("id")
-        
+        session_id = action.payload["id"]
         logger.info(f"Destroying session {session_id}")
         
         try:
@@ -145,11 +178,15 @@ class SessionEffects:
             if self.audio_queue_manager:
                 await self.audio_queue_manager.destroy_queue(session_id)
             
+            # 銷毀該 session 的 timer
+            await timer_manager.destroy_timer(session_id)
+            logger.info(f"Timer destroyed for session: {session_id}")
+            
             # 清理 providers
             self.session_providers.pop(session_id, None)
             
             # 清理模式記錄
-            self.session_modes.pop(session_id, None)
+            self.session_strategies.pop(session_id, None)
             
             # Dispatch session_destroyed action
             if self.store:
@@ -161,6 +198,39 @@ class SessionEffects:
             logger.error(f"Failed to destroy session {session_id}: {e}")
             return []
     
+    async def _create_operator(self, operator_type: str, session_id: str, **kwargs) -> Optional[Any]:
+        """創建並初始化 operator 的通用方法
+        
+        Args:
+            operator_type: Operator 類型
+            session_id: Session ID
+            **kwargs: 傳給工廠函數的參數
+            
+        Returns:
+            創建的 operator 實例，失敗返回 None
+        """
+        if operator_type not in self.operator_factories:
+            logger.warning(f"{operator_type} operator factory not injected")
+            return None
+            
+        try:
+            operator = self.operator_factories[operator_type](**kwargs)
+            
+            # 初始化（如果有 initialize 方法）
+            if hasattr(operator, 'initialize'):
+                await operator.initialize()
+                
+            # 儲存到對應的字典
+            if operator_type in self.session_operators:
+                self.session_operators[operator_type][session_id] = operator
+                
+            logger.debug(f"{operator_type} operator created for session {session_id}")
+            return operator
+            
+        except Exception as e:
+            logger.error(f"Failed to create {operator_type} operator: {e}")
+            return None
+    
     async def _setup_batch_mode(self, session_id: str):
         """批次模式：收集完整音訊
         
@@ -169,129 +239,128 @@ class SessionEffects:
         - Recording operator 持續錄製直到手動停止  
         - 完整音訊送入 Whisper 一次轉譯
         """
-        # Phase 1.2 基礎實現：創建 operator 配置但不實例化
-        # 實際的 Operator 類別將在 Phase 2 實現
+        recording = await self._create_operator(
+            'recording', 
+            session_id,
+            store=self.store,
+            audio_queue_manager=self.audio_queue_manager
+        )
         
-        # 儲存 operator 配置
-        operator_config = {
-            'recording': {
-                'enabled': True,
-                'vad_controlled': False,  # 關閉 VAD 控制
-                'max_duration': 300,  # 5 分鐘上限
-                'continuous': True  # 持續錄製
-            },
-            'vad': {
-                'enabled': False  # 批次模式不需要實時 VAD
-            },
-            'wakeword': {
-                'enabled': False  # 批次模式不需要喚醒詞
-            }
-        }
-        
-        # 儲存配置（Phase 2 時會用來初始化實際的 operators）
-        if not hasattr(self, 'session_operator_configs'):
-            self.session_operator_configs = {}
-        self.session_operator_configs[session_id] = operator_config
-        
-        logger.info(f"Session {session_id} 配置為批次模式")
-        return session_id
+        if recording:
+            # 配置批次模式參數
+            recording.vad_controlled = False  # 關閉 VAD 控制
+            recording.max_duration = 300  # 5 分鐘上限
+            logger.info(f"✓ Session {session_id} 配置為批次模式")
     
     async def _setup_non_streaming_mode(self, session_id: str):
-        """非串流實時模式：逐塊處理但等待完整結果
+        """非串流實時模式：逐塊處理但等待完整結果"""
         
-        配置：
-        - 啟動 VAD 進行實時偵測
-        - Recording 根據 VAD 自動分段
-        - 每段完成後送 Whisper，但等待完整結果
-        """
-        # Phase 1.2 基礎實現：創建 operator 配置但不實例化
+        # 獲取 session 的音訊格式（如果有的話）
+        audio_format = self._get_audio_format(session_id)
         
-        operator_config = {
-            'recording': {
-                'enabled': True,
-                'vad_controlled': True,  # VAD 控制錄製
-                'silence_countdown_duration': 1.8,  # 靜音倒數時間
-                'max_duration': 30,  # 單段最大時長
-                'continuous': False  # 分段錄製
-            },
-            'vad': {
-                'enabled': True,
-                'min_silence_duration': 1.8,  # 最小靜音時長
-                'min_speech_duration': 0.5,  # 最小語音時長
-                'threshold': 0.5  # VAD 閾值
-            },
-            'wakeword': {
-                'enabled': False  # 非串流模式可選喚醒詞
-            }
+        # 創建格式轉換 Operator
+        # 如果 session 有音訊格式，使用它；否則使用預設值
+        if audio_format:
+            await self._create_operator(
+                'format_conversion',
+                session_id,
+                target_format="pcm",
+                sample_rate=audio_format.get('sample_rate', 16000),
+                channels=audio_format.get('channels', 1)
+            )
+        else:
+            await self._create_operator(
+                'format_conversion',
+                session_id,
+                target_format="pcm",
+                sample_rate=16000,
+                channels=1
+            )
+        
+        # 檢查是否啟用 WakeWord
+        if self._is_wakeword_enabled():
+            await self._create_operator('wakeword', session_id, store=self.store)
+        
+        # 創建 VAD Operator
+        vad = await self._create_operator('vad', session_id, store=self.store)
+        if vad:
+            vad.min_silence_duration = 1.8
+            vad.min_speech_duration = 0.5
+            vad.threshold = 0.5
+        
+        # 創建 Recording Operator
+        recording = await self._create_operator(
+            'recording',
+            session_id,
+            store=self.store,
+            audio_queue_manager=self.audio_queue_manager
+        )
+        if recording:
+            recording.vad_controlled = True
+            recording.silence_countdown_duration = 1.8
+            recording.max_duration = 30
+        
+        # 記錄創建的 operators
+        created = self._get_created_operators(session_id)
+        if created:
+            logger.info(f"✓ Session {session_id} 配置為非串流實時模式 (Operators: {', '.join(created)})")
+    
+    def _is_wakeword_enabled(self) -> bool:
+        """檢查是否啟用 WakeWord"""
+        try:
+            from src.config.manager import ConfigManager
+            config = ConfigManager()
+            if hasattr(config, 'pipeline') and hasattr(config.pipeline, 'operators'):
+                if hasattr(config.pipeline.operators, 'wakeword'):
+                    return config.pipeline.operators.wakeword.enabled
+        except Exception as e:
+            logger.debug(f"Failed to read WakeWord config: {e}")
+        return False
+    
+    def _get_created_operators(self, session_id: str) -> list:
+        """獲取已創建的 operators 列表"""
+        created = []
+        operator_names = {
+            'format_conversion': 'FormatConversion',
+            'wakeword': 'WakeWord',
+            'vad': 'VAD',
+            'recording': 'Recording'
         }
         
-        # 儲存配置
-        if not hasattr(self, 'session_operator_configs'):
-            self.session_operator_configs = {}
-        self.session_operator_configs[session_id] = operator_config
+        for op_type, name in operator_names.items():
+            if op_type in self.session_operators and session_id in self.session_operators[op_type]:
+                created.append(name)
         
-        # 設定 operator 之間的聯動關係（Phase 2 實現）
-        # VAD 檢測到語音 -> 開始錄音
-        # VAD 檢測到靜音 -> 啟動倒數
-        # 倒數結束 -> 停止錄音並觸發轉譯
-        
-        logger.info(f"Session {session_id} 配置為非串流實時模式")
-        return session_id
+        return created
     
     async def _setup_streaming_mode(self, session_id: str):
-        """串流實時模式：逐塊處理並串流輸出
+        """串流實時模式：逐塊處理並串流輸出"""
         
-        配置：
-        - 啟動所有 operators（VAD, WakeWord, Recording）
-        - 使用較短的靜音閾值快速分段
-        - 支援部分結果串流輸出
-        """
-        # Phase 1.2 基礎實現：創建完整的 operator 配置
+        # 創建 WakeWord Operator
+        await self._create_operator('wakeword', session_id, store=self.store)
         
-        operator_config = {
-            'recording': {
-                'enabled': True,
-                'vad_controlled': True,  # VAD 控制錄製
-                'silence_countdown_duration': 1.0,  # 更快的分段
-                'segment_duration': 10,  # 10 秒自動分段
-                'max_duration': 30,  # 單段最大時長
-                'continuous': False,  # 分段錄製
-                'streaming': True  # 支援串流
-            },
-            'vad': {
-                'enabled': True,
-                'min_silence_duration': 0.5,  # 更短的靜音閾值
-                'min_speech_duration': 0.3,  # 更短的語音閾值
-                'threshold': 0.5,  # VAD 閾值
-                'streaming': True  # 串流模式
-            },
-            'wakeword': {
-                'enabled': True,
-                'models': ['alexa', 'hey_jarvis'],  # 喚醒詞模型
-                'threshold': 0.5,  # 喚醒詞閾值
-                'pre_buffer_seconds': 2.0  # 預錄音秒數
-            }
-        }
+        # 創建 VAD Operator（串流模式使用更短的閾值）
+        vad = await self._create_operator('vad', session_id, store=self.store)
+        if vad:
+            vad.min_silence_duration = 0.5  # 更短的靜音閾值
+            vad.min_speech_duration = 0.3   # 更短的語音閾值
+            vad.threshold = 0.5
         
-        # 儲存配置
-        if not hasattr(self, 'session_operator_configs'):
-            self.session_operator_configs = {}
-        self.session_operator_configs[session_id] = operator_config
+        # 創建 Recording Operator
+        recording = await self._create_operator(
+            'recording',
+            session_id,
+            store=self.store,
+            audio_queue_manager=self.audio_queue_manager
+        )
+        if recording:
+            recording.vad_controlled = True
+            recording.silence_countdown_duration = 1.0  # 更快的分段
+            recording.segment_duration = 10             # 10 秒自動分段
+            recording.max_duration = 30
         
-        # 設定串流模式的聯動關係（Phase 2 實現）
-        # 喚醒詞檢測 -> 啟動 VAD
-        # VAD 檢測到語音 -> 開始錄音
-        # VAD 檢測到靜音 -> 啟動倒數（較短）
-        # 分段完成 -> 觸發部分轉譯
-        # 結果串流輸出
-        
-        logger.info(f"Session {session_id} 配置為串流實時模式")
-        return session_id
+        logger.info(f"✓ Session {session_id} 配置為串流實時模式")
     
-    async def _setup_streaming_callbacks(self, session_id, wakeword, vad, recording):
-        """配置串流模式的回調鏈"""
-        # TODO: Phase 2 實現
-        pass
     
     # ============================================================================
     # FSM 狀態轉換 Effects
@@ -304,174 +373,263 @@ class SessionEffects:
         監聽所有會導致 FSM 狀態變化的 actions，管理相應的 operators。
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type in [
-                wake_triggered.type, 
-                start_recording.type,
-                end_recording.type,
-                start_streaming.type,
-                end_streaming.type,
-                reset_fsm.type
-            ]),
-            ops.flat_map(async_flat_map(self._handle_fsm_transition))
+            ofType(wake_triggered, start_recording, end_recording,
+                   start_asr_streaming, end_asr_streaming, fsm_reset),
+            async_flat_map(self._handle_fsm_transition)
         )
     
     async def _handle_fsm_transition(self, action):
         """處理 FSM 狀態轉換"""
         session_id = action.payload.get("session_id")
-        print(f"Handling FSM transition for session {session_id} with action {action.type}")
-        if not session_id or session_id not in self.session_operators:
+        logger.debug(f"Handling FSM transition for session {session_id} with action {action.type}")
+        
+        # 檢查 session 是否存在於任一 operator 字典中
+        has_operators = any(
+            session_id in operator_dict 
+            for operator_dict in self.session_operators.values()
+        )
+        
+        if not session_id or not has_operators:
             return []
         
-        operators = self.session_operators[session_id]
+        # 獲取該 session 的所有 operators
+        operators = {}
+        for op_type, op_dict in self.session_operators.items():
+            if session_id in op_dict:
+                operators[op_type] = op_dict[session_id]
         
-        # 根據不同的 action 類型啟用/停用相應的 operators
+        # Phase 3.1: 優化的 operator 控制邏輯
         if action.type == wake_triggered.type:
             # 喚醒後啟動 VAD
             if 'vad' in operators:
                 await operators['vad'].start()
+                logger.info(f"✅ VAD started for session {self._format_session_id(session_id)}...")
                 
         elif action.type == start_recording.type:
             # 開始錄音
             if 'recording' in operators:
                 await operators['recording'].start()
+                logger.info(f"🔴 Recording started for session {self._format_session_id(session_id)}...")
+                # 啟動錄音計時器
+                timer = timer_manager.get_timer(session_id)
+                if timer:
+                    await timer.start_recording_timer()
                 
         elif action.type == end_recording.type:
             # 結束錄音
             if 'recording' in operators:
                 await operators['recording'].stop()
+                logger.info(f"⏹️ Recording stopped for session {self._format_session_id(session_id)}...")
+                # 取消錄音計時器
+                timer = timer_manager.get_timer(session_id)
+                if timer:
+                    timer.cancel_timer('recording')
+                # Phase 3.1: 確保錄音數據已保存
+                if self.audio_queue_manager:
+                    queue_size = await self.audio_queue_manager.get_queue_size(session_id)
+                    logger.debug(f"💾 Audio queue size: {queue_size} chunks")
+        
+        elif action.type == start_asr_streaming.type:
+            # 開始串流
+            logger.info(f"📡 Streaming started for session {self._format_session_id(session_id)}...")
+            # 啟動串流計時器
+            timer = timer_manager.get_timer(session_id)
+            if timer:
+                await timer.start_streaming_timer()
                 
-        elif action.type == reset_fsm.type:
-            # 重置所有 operators
-            for operator in operators.values():
+        elif action.type == end_asr_streaming.type:
+            # 結束串流
+            logger.info(f"⏹️ Streaming stopped for session {self._format_session_id(session_id)}...")
+            # 取消串流計時器
+            timer = timer_manager.get_timer(session_id)
+            if timer:
+                timer.cancel_timer('streaming')
+                
+        elif action.type == fsm_reset.type:
+            # Phase 3.1: 改進的重置邏輯
+            logger.info(f"🔄 Resetting all operators for session {self._format_session_id(session_id)}...")
+            for op_type, operator in operators.items():
                 if hasattr(operator, 'reset'):
                     await operator.reset()
+                    logger.debug(f"  - {op_type} operator reset")
+                elif hasattr(operator, 'stop'):
+                    await operator.stop()
+                    logger.debug(f"  - {op_type} operator stopped")
         
         return []
     
     # ============================================================================
-    # Operator 管理 Effects
+    # 音訊處理 Effects  
     # ============================================================================
     
     @create_effect
-    def wake_word_detection_effect(self, action_stream):
-        """喚醒詞檢測 Effect
+    def audio_processing_effect(self, action_stream):
+        """音訊處理 Pipeline Effect
         
-        管理 OpenWakeWord operator 的生命週期。
+        監聽 audio_chunk_received action，將音訊數據通過 operator pipeline 處理。
+        這是音訊處理的核心流程，確保數據按正確順序經過各個 operator。
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type == create_session.type),
-            ops.flat_map(async_flat_map(self._setup_wake_word_operator))
+            ofType(audio_chunk_received),
+            async_flat_map(self._process_audio_through_pipeline)
         )
     
-    async def _setup_wake_word_operator(self, action):
-        """設置喚醒詞 operator"""
-        session_id = action.payload.get("id") or action.payload.get("session_id")
+    async def _process_audio_through_pipeline(self, action):
+        """處理音訊通過 Pipeline
         
-        # Phase 1.2 基礎實現：檢查配置並準備初始化
-        if hasattr(self, 'session_operator_configs') and session_id in self.session_operator_configs:
-            config = self.session_operator_configs[session_id].get('wakeword', {})
-            if config.get('enabled', False):
-                logger.debug(f"Wake word operator enabled for session {session_id}")
-                # Phase 2 將在此處初始化實際的 OpenWakeWordOperator
-                # operator = OpenWakeWordOperator(
-                #     models=config.get('models', ['alexa']),
-                #     threshold=config.get('threshold', 0.5),
-                #     store=self.store
-                # )
-                # await operator.initialize()
-                # self.session_operators['wakeword'][session_id] = operator
-            else:
-                logger.debug(f"Wake word operator disabled for session {session_id}")
+        音訊處理流程：
+        1. 格式轉換 - 統一音訊格式 (PCM, 16kHz, mono)
+        2. WakeWord 檢測 - 在 LISTENING 狀態檢測喚醒詞
+        3. VAD 處理 - 在 RECORDING 狀態檢測語音/靜音
+        4. AudioQueue - 儲存處理後的音訊數據
         
-        return []
-    
-    @create_effect
-    def vad_processing_effect(self, action_stream):
-        """VAD 處理 Effect
-        
-        管理 VAD operator 狀態，觸發錄音開始/結束。
+        注意：新架構中音訊數據由 AudioQueueManager 管理，
+              此 action 只包含元數據（chunk_size, timestamp）
         """
-        return action_stream.pipe(
-            ops.filter(lambda a: a.type == wake_triggered.type),
-            ops.flat_map(async_flat_map(self._setup_vad_operator))
-        )
-    
-    async def _setup_vad_operator(self, action):
-        """設置 VAD operator"""
         session_id = action.payload.get("session_id")
+        audio_data = action.payload.get("data")
+        chunk_size = action.payload.get("chunk_size")
         
-        # Phase 1.2 基礎實現：檢查配置並準備初始化
-        if hasattr(self, 'session_operator_configs') and session_id in self.session_operator_configs:
-            config = self.session_operator_configs[session_id].get('vad', {})
-            if config.get('enabled', False):
-                logger.debug(f"VAD operator enabled for session {session_id}")
-                # Phase 2 將在此處初始化實際的 SileroVADOperator
-                # operator = SileroVADOperator(
-                #     min_silence_duration=config.get('min_silence_duration', 1.8),
-                #     min_speech_duration=config.get('min_speech_duration', 0.5),
-                #     threshold=config.get('threshold', 0.5),
-                #     store=self.store
-                # )
-                # await operator.initialize()
-                # await operator.start()
-                # self.session_operators['vad'][session_id] = operator
-                
-                # 模擬 VAD 啟動成功
-                if self.store:
-                    self.store.dispatch(speech_detected(session_id, confidence=0.95))
-            else:
-                logger.debug(f"VAD operator disabled for session {session_id}")
+        # 新架構：如果只有 chunk_size（元數據），跳過處理
+        if chunk_size is not None and audio_data is None:
+            # 這是新的元數據格式，音訊已經在 AudioQueueManager 中
+            # 不需要警告，這是正常的
+            return []
         
-        return []
+        if not session_id:
+            logger.warning(f"Missing session_id in audio_chunk_received payload")
+            return []
+        
+        # 舊架構相容：如果有實際音訊數據，繼續處理
+        if audio_data is None:
+            # 既沒有 chunk_size 也沒有 data，這才是真的無效
+            logger.warning(f"Invalid audio_chunk_received payload: {action.payload}")
+            return []
+        
+        try:
+            # 獲取當前 session 狀態
+            session_state = self._get_session_state(session_id)
+            if not session_state:
+                logger.debug(f"Session {session_id} not found or not initialized")
+                return []
+            
+            current_fsm_state = session_state.get('fsm_state')
+            logger.debug(f"Processing audio for session {session_id} in state {current_fsm_state}")
+            
+            # 1. 格式轉換 (總是執行)
+            if session_id in self.session_operators.get('format_conversion', {}):
+                try:
+                    converter = self.session_operators['format_conversion'][session_id]
+                    if hasattr(converter, 'process'):
+                        audio_data = await converter.process(audio_data)
+                        logger.debug(f"Audio format converted for session {session_id}")
+                except Exception as e:
+                    logger.error(f"Format conversion failed: {e}")
+            
+            # 2. WakeWord 檢測 (只在 LISTENING 狀態)
+            if current_fsm_state == FSMStateEnum.LISTENING:
+                if session_id in self.session_operators.get('wakeword', {}):
+                    try:
+                        wakeword = self.session_operators['wakeword'][session_id]
+                        if hasattr(wakeword, 'process'):
+                            detection = await wakeword.process(audio_data)
+                            if detection and hasattr(detection, 'confidence'):
+                                if detection.confidence > 0.7:  # 閾值可配置
+                                    # Phase 3.2: 喚醒詞檢測日誌
+                                    logger.info("┌" + "─" * 60 + "┐")
+                                    logger.info(f"│ 🎆 WAKE WORD DETECTED!")
+                                    logger.info(f"│ 🔹 Session: {self._format_session_id(session_id)}...")
+                                    logger.info(f"│ 🎯 Confidence: {detection.confidence:.2f}")
+                                    logger.info(f"│ 🔊 Trigger: {getattr(detection, 'trigger', 'unknown')}")
+                                    logger.info("└" + "─" * 60 + "┘")
+                                    self.store.dispatch(wake_triggered(
+                                        session_id, 
+                                        detection.confidence, 
+                                        getattr(detection, 'trigger', 'unknown')
+                                    ))
+                    except Exception as e:
+                        logger.error(f"WakeWord detection failed: {e}")
+            
+            # 3. VAD 處理 (只在 RECORDING 狀態)
+            elif current_fsm_state == FSMStateEnum.RECORDING:
+                if session_id in self.session_operators.get('vad', {}):
+                    try:
+                        vad = self.session_operators['vad'][session_id]
+                        if hasattr(vad, 'process'):
+                            vad_result = await vad.process(audio_data)
+                            if vad_result:
+                                if getattr(vad_result, 'is_speech', False):
+                                    logger.debug(f"Speech detected for session {session_id}")
+                                    self.store.dispatch(speech_detected(
+                                        session_id, 
+                                        getattr(vad_result, 'confidence', 0.5)
+                                    ))
+                                else:
+                                    silence_duration = getattr(vad_result, 'silence_duration', 0)
+                                    if silence_duration > 0:
+                                        logger.debug(f"Silence detected for session {session_id}: {silence_duration}s")
+                                        self.store.dispatch(silence_detected(
+                                            session_id, 
+                                            silence_duration
+                                        ))
+                    except Exception as e:
+                        logger.error(f"VAD processing failed: {e}")
+            
+            # 4. 存入 AudioQueue (總是執行)
+            if self.audio_queue_manager:
+                try:
+                    await self.audio_queue_manager.push(session_id, audio_data)
+                    logger.debug(f"Audio pushed to queue for session {session_id}: {len(audio_data)} bytes")
+                except Exception as e:
+                    logger.error(f"Failed to push audio to queue: {e}")
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Pipeline processing failed for session {session_id}: {e}")
+            if self.store:
+                self.store.dispatch(session_error(session_id, str(e)))
+            return []
     
-    @create_effect
-    def recording_control_effect(self, action_stream):
-        """錄音控制 Effect
+    def _get_session_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """獲取 session 狀態的輔助方法
         
-        管理錄音 operator 和音訊緩衝處理。
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            Session 狀態字典，如果不存在則返回 None
         """
-        return action_stream.pipe(
-            ops.filter(lambda a: a.type == start_recording.type),
-            ops.flat_map(async_flat_map(self._setup_recording_operator))
-        )
+        if not self.store:
+            return None
+            
+        state = self.store.state
+        sessions_state = state.get('sessions', {})
+        
+        # 處理不同的狀態結構
+        if hasattr(sessions_state, 'get'):
+            all_sessions = sessions_state.get('sessions', {})
+        else:
+            all_sessions = {}
+            
+        if hasattr(all_sessions, 'get'):
+            return all_sessions.get(session_id)
+        
+        return None
     
-    async def _setup_recording_operator(self, action):
-        """設置錄音 operator"""
-        session_id = action.payload.get("session_id")
+    def _get_audio_format(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """獲取 session 的音訊格式
         
-        # Phase 1.2 基礎實現：檢查配置並準備初始化
-        if hasattr(self, 'session_operator_configs') and session_id in self.session_operator_configs:
-            config = self.session_operator_configs[session_id].get('recording', {})
-            if config.get('enabled', False):
-                logger.debug(f"Recording operator enabled for session {session_id}")
-                # Phase 2 將在此處初始化實際的 RecordingOperator
-                # operator = RecordingOperator(
-                #     vad_controlled=config.get('vad_controlled', True),
-                #     silence_countdown_duration=config.get('silence_countdown_duration', 1.8),
-                #     max_duration=config.get('max_duration', 30),
-                #     continuous=config.get('continuous', False),
-                #     store=self.store,
-                #     audio_queue_manager=self.audio_queue_manager
-                # )
-                # await operator.initialize()
-                # await operator.start()
-                # self.session_operators['recording'][session_id] = operator
-                
-                # 啟動音訊隊列的錄音功能
-                if self.audio_queue_manager:
-                    queue = self.audio_queue_manager.get_queue(session_id)
-                    if queue:
-                        include_pre_buffer = config.get('wakeword', {}).get('enabled', False)
-                        pre_buffer_seconds = config.get('wakeword', {}).get('pre_buffer_seconds', 2.0)
-                        queue.start_recording(include_pre_buffer, pre_buffer_seconds)
-                        
-                # 通知錄音已開始
-                if self.store:
-                    self.store.dispatch(recording_started(session_id, trigger="vad"))
-            else:
-                logger.debug(f"Recording operator disabled for session {session_id}")
-        
-        return []
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            音訊格式字典，如果不存在則返回 None
+        """
+        session = self._get_session_state(session_id)
+        if session:
+            return session.get('audio_format')
+        return None
     
     @create_effect
     def countdown_management_effect(self, action_stream):
@@ -481,44 +639,77 @@ class SessionEffects:
         當檢測到靜音時啟動計時器，如果在倒數期間檢測到語音則取消計時器。
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type == silence_detected.type),
+            ofType(silence_detected),
             ops.flat_map(lambda action: self._handle_countdown(action, action_stream))
         )
     
     def _handle_countdown(self, action, action_stream):
-        """處理倒數計時邏輯"""
+        """處理倒數計時邏輯
+        
+        改進版本：
+        1. 增強視覺化日誌輸出
+        2. 確保正確觸發 end_recording（而非 recording_stopped）
+        3. 支援動態倒數時間調整
+        """
         session_id = action.payload.get("session_id")
         duration = action.payload.get("duration", 1.8)  # 預設 1.8 秒
         
-        logger.info(f"Starting countdown for session {session_id}, duration: {duration}s")
+        # 檢查 session_id 是否有效
+        if session_id is None:
+            logger.warning("Received silence_detected action with session_id=None, skipping countdown")
+            return []
+        
+        # 視覺化倒數開始
+        logger.info("┌" + "─" * 60 + "┐")
+        logger.info(f"│ 🔕 SILENCE COUNTDOWN STARTED - Session: {self._format_session_id(session_id)}...")
+        logger.info(f"│ ⏱️  Duration: {duration}s")
+        logger.info("└" + "─" * 60 + "┘")
         
         # Dispatch countdown_started
         if self.store:
             self.store.dispatch(countdown_started(session_id, duration))
         
-        # 創建倒數計時器，但可以被 speech_detected 或 recording_stopped 取消
+        # 創建倒數計時器，但可以被 speech_detected 或 end_recording 取消
         return timer(duration).pipe(
-            ops.map(lambda _: recording_stopped(session_id, "silence_timeout")),
+            ops.map(lambda _: end_recording(session_id, "silence_timeout", duration)),
             ops.take_until(
                 action_stream.pipe(
                     ops.filter(lambda b: 
                         b.payload.get("session_id") == session_id and
                         b.type in [
                             speech_detected.type,  # 檢測到語音，取消倒數
-                            recording_stopped.type,  # 已經停止錄音
-                            reset_fsm.type  # FSM 重置
+                            end_recording.type,  # 已經結束錄音
+                            fsm_reset.type  # FSM 重置
                         ]
                     ),
                     ops.do_action(lambda b: self._log_countdown_cancelled(session_id, b.type))
                 )
-            )
+            ),
+            ops.do_action(lambda a: self._log_countdown_completed(session_id) if a.type == end_recording.type else None)
         )
     
     def _log_countdown_cancelled(self, session_id: str, cancel_reason: str):
-        """記錄倒數取消"""
-        logger.debug(f"Countdown cancelled for session {session_id}, reason: {cancel_reason}")
+        """記錄倒數取消 - 增強視覺化"""
+        reason_emoji = {
+            speech_detected.type: "🗣️ SPEECH DETECTED",
+            end_recording.type: "⏹️ RECORDING ENDED",
+            fsm_reset.type: "🔄 FSM RESET"
+        }.get(cancel_reason, f"❓ {cancel_reason}")
+        
+        logger.info("┌" + "─" * 60 + "┐")
+        logger.info(f"│ ❌ COUNTDOWN CANCELLED - Session: {self._format_session_id(session_id)}...")
+        logger.info(f"│ 📍 Reason: {reason_emoji}")
+        logger.info("└" + "─" * 60 + "┘")
+        
         if self.store:
             self.store.dispatch(countdown_cancelled(session_id))
+    
+    def _log_countdown_completed(self, session_id: str):
+        """記錄倒數完成 - 視覺化日誌"""
+        logger.info("┌" + "─" * 60 + "┐")
+        logger.info(f"│ ✅ COUNTDOWN COMPLETED - Session: {self._format_session_id(session_id)}...")
+        logger.info(f"│ 🔚 Triggering end_recording due to silence timeout")
+        logger.info("└" + "─" * 60 + "┘")
     
     @create_effect
     def transcription_processing_effect(self, action_stream):
@@ -529,8 +720,8 @@ class SessionEffects:
         取代原有的 mock_transcription_result。
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type == begin_transcription.type),
-            ops.flat_map(async_flat_map(self._handle_transcription))
+            ofType(begin_transcription),
+            async_flat_map(self._handle_transcription)
         )
     
     async def _handle_transcription(self, action):
@@ -538,47 +729,88 @@ class SessionEffects:
         session_id = action.payload.get("session_id")
         
         try:
-            # TODO: Phase 3 實現真實的 Whisper provider 調用
-            # 目前保留模擬實現
-            await asyncio.sleep(1.0)  # 模擬轉譯延遲
-            
-            if self.store:
-                self.store.dispatch(transcription_done(
-                    session_id,
-                    f"真實轉譯結果 (session: {session_id})"
-                ))
+            # 嘗試使用真實的 Whisper provider
+            if 'whisper' in self.provider_factories:
+                # 創建 Whisper provider 實例
+                whisper = self.provider_factories['whisper'](store=self.store)
+                
+                # 從音訊隊列獲取錄音數據
+                audio_data = None
+                if self.audio_queue_manager:
+                    audio_data = self.audio_queue_manager.stop_recording(session_id)
+                
+                if audio_data:
+                    # 調用真實的轉譯
+                    result = await whisper.transcribe(audio_data)
+                    if self.store:
+                        self.store.dispatch(transcription_done(session_id, result))
+                else:
+                    logger.warning(f"No audio data available for transcription in session {session_id}")
+                    if self.store:
+                        self.store.dispatch(session_error(session_id, "No audio data available"))
+            else:
+                # 沒有 provider，使用模擬結果
+                await asyncio.sleep(1.0)
+                if self.store:
+                    self.store.dispatch(transcription_done(
+                        session_id,
+                        f"模擬轉譯結果 (session: {session_id})"
+                    ))
             
         except Exception as e:
-            if logger:
-                logger.error(f"Transcription failed for session {session_id}: {e}")
+            logger.error(f"Transcription failed for session {session_id}: {e}")
             if self.store:
                 self.store.dispatch(session_error(session_id, str(e)))
         
         return []
     
     # ============================================================================
-    # 原有的 Effects (保留用於兼容)
+    # Timer 和 Window Effects
     # ============================================================================
     
     @create_effect
     def wake_window_timer(self, action_stream):
         """喚醒視窗計時器 Effect
         
-        當檢測到喚醒詞後，啟動30秒計時器。
-        如果在30秒內沒有開始錄音或串流，則重置 FSM。
+        當檢測到喚醒詞後，啟動計時器。
+        如果在超時內沒有開始錄音或串流，則重置 FSM。
+        超時時間從 FSM 配置中讀取。
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type == wake_triggered.type),
-            ops.flat_map(lambda action: 
-                timer(30.0).pipe(  # 30秒超時
-                    ops.map(lambda _: reset_fsm(action.payload["session_id"])),
-                    ops.take_until(
-                        action_stream.pipe(
-                            ops.filter(lambda b: 
-                                b.type in [start_recording.type, start_streaming.type, reset_fsm.type] and
-                                b.payload.get("session_id") == action.payload["session_id"]
-                            )
-                        )
+            ofType(wake_triggered),
+            ops.flat_map(lambda action: self._handle_wake_window_timeout(action, action_stream))
+        )
+    
+    def _handle_wake_window_timeout(self, action, action_stream):
+        """處理喚醒視窗超時"""
+        session_id = action.payload["session_id"]
+        
+        # 從 Store 獲取 session 資訊
+        state = self.store.state
+        sessions_state = state.get('sessions', {})
+        all_sessions = sessions_state.get('sessions', {}) if hasattr(sessions_state, 'get') else {}
+        session = all_sessions.get(session_id) if hasattr(all_sessions, 'get') else None
+        
+        if not session:
+            return timer(5.0).pipe(  # 預設 5 秒
+                ops.map(lambda _: fsm_reset(session_id))
+            )
+        
+        # 從 FSM 配置獲取超時設定
+        strategy = session.get("strategy", FSMStrategy.NON_STREAMING)
+        config = get_strategy_config(strategy)
+        timeout_ms = config.timeout_configs.get(FSMStateEnum.ACTIVATED, 5000)
+        timeout_sec = timeout_ms / 1000.0
+        
+        logger.debug(f"Wake window timeout for session {session_id}: {timeout_sec}s")
+        
+        return timer(timeout_sec).pipe(
+            ops.map(lambda _: fsm_reset(session_id)),
+            ops.take_until(
+                action_stream.pipe(
+                    ops.filter(lambda b: 
+                        b.type in [start_recording.type, start_asr_streaming.type, fsm_reset.type] and
+                        b.payload.get("session_id") == session_id
                     )
                 )
             )
@@ -591,26 +823,11 @@ class SessionEffects:
         當錄音結束時，自動開始轉譯流程。
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type == end_recording.type),
+            ofType(end_recording),
             ops.delay(0.1),  # 小延遲確保狀態已更新
             ops.map(lambda a: begin_transcription(a.payload["session_id"]))
         )
     
-    @create_effect
-    def mock_transcription_result(self, action_stream):
-        """模擬轉譯結果 Effect
-        
-        為了演示目的，模擬轉譯過程並返回結果。
-        在實際系統中，這應該被真實的 ASR provider Effect 替代。
-        """
-        return action_stream.pipe(
-            ops.filter(lambda a: a.type == begin_transcription.type),
-            ops.delay(1.0),  # 模擬1秒轉譯時間
-            ops.map(lambda a: transcription_done(
-                a.payload["session_id"],
-                f"模擬轉譯結果 (時間: {asyncio.get_event_loop().time():.1f})"
-            ))
-        )
     
     @create_effect(dispatch=False)
     def session_logging(self, action_stream):
@@ -630,20 +847,13 @@ class SessionEffects:
         收集 Session 相關的業務指標。
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type in [
-                wake_triggered.type,
-                transcription_done.type,
-                session_error.type
-            ]),
+            ofType(wake_triggered, transcription_done, session_error),
             ops.do_action(lambda action: self._collect_metrics(action))
         )
     
     def _log_action(self, action):
         """記錄 Action 到日誌"""
-        if logger:
-            logger.info(f"Session Event: {action.type} | Payload: {action.payload}")
-        else:
-            print(f"Session Event: {action.type} | Session: {action.payload.get('session_id', 'N/A')}")
+        logger.info(f"Session Event: {action.type} | Payload: {action.payload}")
     
     def _collect_metrics(self, action):
         """收集業務指標"""
@@ -651,37 +861,48 @@ class SessionEffects:
             # 記錄喚醒詞檢測指標
             confidence = action.payload.get("confidence", 0)
             trigger_type = action.payload.get("trigger", "unknown")
-            if logger:
-                logger.info(f"Wake word detected: {trigger_type} (confidence: {confidence})")
+            logger.info(f"Wake word detected: {trigger_type} (confidence: {confidence})")
         
         elif action.type == transcription_done.type:
             # 記錄轉譯完成指標
             result_length = len(action.payload.get("result", ""))
-            if logger:
-                logger.info(f"Transcription completed: {result_length} characters")
+            logger.info(f"Transcription completed: {result_length} characters")
         
         elif action.type == session_error.type:
             # 記錄錯誤指標
             error = action.payload.get("error", "unknown")
-            if logger:
-                logger.error(f"Session error: {error}")
+            logger.error(f"Session error: {error}")
 
 
 class SessionTimerEffects:
     """Session 計時器相關的 Effects"""
     
+    def __init__(self, store=None):
+        """
+        初始化 SessionTimerEffects
+        
+        Args:
+            store: PyStoreX store 實例
+        """
+        self.store = store
+    
     @create_effect
     def session_timeout(self, action_stream):
         """會話超時 Effect
         
-        長時間未活動的會話將被自動重置。
+        Phase 3.3: 實作狀態超時處理
+        - 長時間未活動的會話將被自動重置
+        - 加入超時警告日誌
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type in [wake_triggered.type, start_recording.type]),
+            ofType(wake_triggered, start_recording),
             ops.group_by(lambda a: a.payload["session_id"]),
             ops.flat_map(lambda group: group.pipe(
                 ops.debounce(300.0),  # 5分鐘無活動
-                ops.map(lambda a: reset_fsm(a.payload["session_id"]))
+                ops.do_action(lambda a: logger.warning(
+                    f"⚠️ Session {a.payload['session_id'][:8]}... inactive for 5 minutes, resetting..."
+                )),
+                ops.map(lambda a: fsm_reset(a.payload["session_id"]))
             ))
         )
     
@@ -690,24 +911,69 @@ class SessionTimerEffects:
         """錄音超時 Effect
         
         錄音時間過長時自動結束錄音。
+        超時時間從 FSM 配置中讀取。
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type in [start_recording.type, start_streaming.type]),
-            ops.flat_map(lambda action:
-                timer(30.0).pipe(  # 30秒錄音超時
-                    ops.map(lambda _: end_recording(
-                        action.payload["session_id"],
-                        "timeout",
-                        30.0
-                    )),
-                    ops.take_until(
-                        action_stream.pipe(
-                            ops.filter(lambda b:
-                                b.type in [end_recording.type, reset_fsm.type] and
-                                b.payload.get("session_id") == action.payload["session_id"]
-                            )
-                        )
-                    )
+            ofType(start_recording, start_asr_streaming),
+            ops.flat_map(lambda action: self._handle_recording_timeout(action, action_stream))
+        )
+    
+    def _handle_recording_timeout(self, action, action_stream):
+        """處理錄音超時
+        
+        Phase 3.3: 實作狀態超時處理
+        """
+        session_id = action.payload["session_id"]
+        is_streaming = action.type == start_asr_streaming.type
+        
+        # 從 Store 獲取 session 資訊
+        state = self.store.state
+        sessions_state = state.get('sessions', {})
+        all_sessions = sessions_state.get('sessions', {}) if hasattr(sessions_state, 'get') else {}
+        session = all_sessions.get(session_id) if hasattr(all_sessions, 'get') else None
+        
+        if not session:
+            timeout_sec = 30.0  # 預設 30 秒
+            logger.warning(f"⚠️ Session {session_id} not found, using default recording timeout")
+        else:
+            # 從 FSM 配置獲取超時設定
+            strategy = session.get("strategy", FSMStrategy.NON_STREAMING)
+            config = get_strategy_config(strategy)
+            
+            # 根據是錄音還是串流選擇對應的超時
+            state_key = FSMStateEnum.STREAMING if is_streaming else FSMStateEnum.RECORDING
+            timeout_ms = config.timeout_configs.get(state_key, 30000)
+            timeout_sec = timeout_ms / 1000.0
+        
+        # Phase 3.3: 增強超時警告日誌
+        logger.warning("┌" + "─" * 60 + "┐")
+        logger.warning(f"│ ⏰ RECORDING TIMEOUT STARTED")
+        logger.warning(f"│ 🔹 Session: {self._format_session_id(session_id)}...")
+        logger.warning(f"│ ⏱️  Duration: {timeout_sec}s")
+        logger.warning(f"│ 🎤 Type: {'Streaming' if is_streaming else 'Recording'}")
+        logger.warning("└" + "─" * 60 + "┘")
+        
+        # 選擇結束動作
+        end_action = end_asr_streaming if is_streaming else end_recording
+        
+        return timer(timeout_sec).pipe(
+            ops.map(lambda _: end_action(
+                session_id,
+                "timeout",
+                timeout_sec
+            )),
+            ops.do_action(lambda a: logger.error(
+                f"❌ RECORDING TIMEOUT TRIGGERED for session {self._format_session_id(session_id)}... after {timeout_sec}s"
+            )),
+            ops.take_until(
+                action_stream.pipe(
+                    ops.filter(lambda b:
+                        b.type in [end_recording.type, end_asr_streaming.type, fsm_reset.type] and
+                        b.payload.get("session_id") == session_id
+                    ),
+                    ops.do_action(lambda b: logger.info(
+                        f"✅ Recording timeout cancelled for session {self._format_session_id(session_id)}... (reason: {b.type})"
+                    ))
                 )
             )
         )

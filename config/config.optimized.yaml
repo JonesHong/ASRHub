@@ -1,7 +1,6 @@
-# ASR Hub 優化配置檔案範例
+# ASR Hub 優化配置檔案
 # 根據 PyStoreX 重構後的架構調整
 # 生成時間: 2025-08-19
-# 將此檔案複製為 config.yaml 並根據您的需求修改設定值
 
 # ===== 系統核心設定 =====
 system:
@@ -13,10 +12,10 @@ system:
 # ===== 日誌設定 =====
 logging:
   path: "./logs"
-  rotation: "100 MB"      # 日誌輪替：可用 "daily", "100 MB", "7 days" 等
-  retention: "30 days"    # 日誌保留期限
+  rotation: "100 MB"
+  retention: "30 days"
   level: "INFO"  # TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL
-  format: "detailed"      # detailed, simple, json
+  format: "detailed"  # detailed, simple, json
 
 # ===== API 設定 =====
 api:
@@ -26,8 +25,6 @@ api:
     host: ${API_HOST:0.0.0.0}
     port: ${API_PORT:8000}
     cors_enabled: true
-    host: ${API_HOST:0.0.0.0}
-    port: ${API_PORT:8000}
     max_connections: 100
     request_timeout: 300  # 秒
     
@@ -39,13 +36,6 @@ api:
     max_message_size: 10485760  # 10 MB
     ping_interval: 30
     
-  # gRPC (保留但預設關閉)
-  grpc:
-    enabled: false
-    host: ${GRPC_HOST:0.0.0.0}
-    port: ${GRPC_PORT:50051}
-    max_receive_message_length: 10485760
-    
   # Socket.IO
   socketio:
     enabled: true
@@ -53,55 +43,59 @@ api:
     port: ${SOCKETIO_PORT:8766}
     cors_allowed_origins: "*"
     
+  # gRPC (保留但預設關閉)
+  grpc:
+    enabled: false
+    host: ${GRPC_HOST:0.0.0.0}
+    port: ${GRPC_PORT:50051}
+    max_receive_message_length: 10485760
+    
   # Redis (保留但預設關閉)
   redis:
     enabled: false
     host: ${REDIS_HOST:localhost}
     port: ${REDIS_PORT:6379}
     db: ${REDIS_DB:0}
-    password: ${REDIS_PASSWORD:}  # 空字串表示無密碼
+    password: ${REDIS_PASSWORD:}
     channel_prefix: "asr_hub:"
 
 # ===== Pipeline 設定 =====
 pipeline:
+  # 音訊基本參數
   default_sample_rate: 16000
   channels: 1  # 單聲道
-  encoding: "int16"  # 音訊編碼格式
+  encoding: "int16"
   buffer_size: 4096
-  max_pipeline_length: 10  # 最大 operator 數量
+  max_pipeline_length: 10
   
-  # Pipeline Operators 配置
+  # Operators 配置
   operators:
     # 喚醒詞偵測
     wakeword:
       enabled: true
-      type: "openWakeWord"  # openWakeWord, asr_keyword
-      # OpenWakeWord 特定配置
+      type: "openWakeWord"
       model_path: "models/hi_kmu_0721.onnx"
       threshold: 0.5
-      debounce_time: 2.0  # 去抖動時間（秒）
-      continuous_detection: true  # 連續偵測模式
-      # 效能設定
-      inference_threads: 1  # 推論執行緒數
-      use_quantized_model: false  # 使用量化模型
+      debounce_time: 2.0
+      continuous_detection: true
+      inference_threads: 1
+      use_quantized_model: false
       
-    # VAD (Voice Activity Detection) 語音活動偵測
+    # VAD (語音活動偵測)
     vad:
       enabled: true
       type: "silero"  # webrtc, silero
-      # Silero VAD 設定
       silero:
         enabled: true
         threshold: 0.5
         min_silence_duration: 0.5
         min_speech_duration: 0.25
         model_path: "models/silero_vad.onnx"
-        model_name: "silero_vad_v4"  # 模型版本
+        model_name: "silero_vad_v4"
         use_gpu: false
         adaptive_threshold: false  # 避免過度敏感
         threshold_window_size: 50
         smoothing_window: 10  # 增大以減少抖動
-      # WebRTC VAD 設定（備選）
       webrtc:
         enabled: false
         aggressiveness: 2  # 0-3
@@ -111,20 +105,20 @@ pipeline:
     # 降噪
     denoise:
       enabled: false
-      type: "rnnoise"  # rnnoise, noisereduce
+      type: "rnnoise"
       strength: 0.7
       
     # 取樣率調整
     sample_rate_adjustment:
       enabled: true
       target_rate: 16000
-      quality: "high"  # low, medium, high
+      quality: "high"
       
     # 格式轉換
     format_conversion:
       enabled: true
-      target_format: "pcm"  # pcm, wav, mp3
-      channels: 1  # 1 (mono) 或 2 (stereo)
+      target_format: "pcm"
+      channels: 1
       bits_per_sample: 16
       
     # 錄音功能
@@ -141,15 +135,15 @@ pipeline:
       # VAD 控制設定
       vad_control:
         enabled: true
-        silence_countdown: 1.8  # 靜音倒數秒數
-        min_recording_duration: 0.5  # 最短錄音時長
-        pre_speech_buffer: 0.3  # 語音前緩衝秒數
-        post_speech_buffer: 0.2  # 語音後緩衝秒數
+        silence_countdown: 1.8
+        min_recording_duration: 0.5
+        pre_speech_buffer: 0.3
+        post_speech_buffer: 0.2
       # 分段錄音
       segmentation:
         enabled: false
-        segment_duration: 30.0  # 每段時長（秒）
-        overlap_duration: 0.5  # 段落重疊時長
+        segment_duration: 30.0
+        overlap_duration: 0.5
       # 元數據
       metadata:
         enabled: true
@@ -177,19 +171,17 @@ providers:
   # Local Whisper
   whisper:
     enabled: true
-    model_size: ${WHISPER_MODEL:base}  # tiny, base, small, medium, large
-    language: "zh"  # 語言代碼，null 表示自動偵測
-    device: ${WHISPER_DEVICE:cpu}  # cpu, cuda, mps
-    compute_type: "float32"  # float32, float16, int8
+    model_size: ${WHISPER_MODEL:base}
+    language: "zh"
+    device: ${WHISPER_DEVICE:cpu}
+    compute_type: "float32"
     beam_size: 5
     best_of: 5
     temperature: 0.0
-    use_faster_whisper: true  # 使用 faster-whisper 引擎
-    initial_prompt: null  # 初始提示詞，可選
-    vad_filter: false  # 是否使用 VAD 過濾
-    # 模型下載路徑
+    use_faster_whisper: true
+    initial_prompt: null
+    vad_filter: false
     model_path: "./models/whisper"
-    
     pool:
       enabled: false
       min_size: 1
@@ -198,7 +190,7 @@ providers:
   # FunASR
   funasr:
     enabled: false
-    model: "paraformer"  # paraformer, conformer
+    model: "paraformer"
     language: "zh"
     device: "cpu"
     model_path: "./models/funasr"
@@ -209,7 +201,7 @@ providers:
     model_path: "./models/vosk/vosk-model-cn-0.22"
     sample_rate: 16000
     
-  # Google Cloud Speech-to-Text
+  # Google Cloud STT
   google_stt:
     enabled: false
     credentials_path: ${GOOGLE_APPLICATION_CREDENTIALS:}
@@ -230,59 +222,38 @@ providers:
 # ===== 喚醒詞設定 =====
 wake_word_detection:
   enabled: true
-  # 系統層監聽器設定
   system_listener:
     enabled: true
-    always_on: true  # 系統層持續監聽
+    always_on: true
     buffer_size: 4096
-    min_resource_mode: true  # 最小資源消耗模式
-  
-  wake_timeout: 3.0  # 喚醒後的超時時間（秒）
-  cooldown: 2.0  # 喚醒後的冷卻時間（秒）
-  
-  # 喚醒詞模型設定
+    min_resource_mode: true
+  wake_timeout: 3.0
+  cooldown: 2.0
   models:
-    # OpenWakeWord 模型
     - type: openWakeWord
       enabled: true
       model_path: "models/hi_kmu_0721.onnx"
-      threshold: 0.5  # 偵測閾值 (0.0 - 1.0)
-      language: "zh-TW"  # 語言代碼
-      # HuggingFace 模型下載設定（當 model_path 不存在時使用）
-      hf_repo_id: "JTBTechnology/kmu_wakeword"  # HuggingFace repo ID
-      hf_filename: "hi_kmu_0721.onnx"  # 模型檔案名稱
-      hf_token: ${HF_TOKEN:}  # HuggingFace token（可選，用於私有模型）
-      # 模型特定設定
-      inference_framework: "onnxruntime"  # onnxruntime, tflite
-      use_gpu: false  # 是否使用 GPU 加速
-      batch_size: 1  # 批次推論大小
-      # 音訊處理設定
-      sample_rate: 16000  # 取樣率
-      window_size: 1280  # 滑動視窗大小（樣本數）
-      score_queue_size: 60  # 評分佇列大小
-      # 效能優化
-      cache_embeddings: true  # 快取嵌入
-      preload_model: true  # 預先載入模型
-      
-    # 可以加入更多模型（未來擴充）
-    # - type: asr_keyword
-    #   enabled: false
-    #   keywords:
-    #     - "你好小明"
-    #     - "Hey Assistant"
-    #   similarity_threshold: 0.8
-    
-  # 喚醒事件設定
+      threshold: 0.5
+      language: "zh-TW"
+      hf_repo_id: "JTBTechnology/kmu_wakeword"
+      hf_filename: "hi_kmu_0721.onnx"
+      hf_token: ${HF_TOKEN:}
+      inference_framework: "onnxruntime"
+      use_gpu: false
+      batch_size: 1
+      sample_rate: 16000
+      window_size: 1280
+      score_queue_size: 60
+      cache_embeddings: true
+      preload_model: true
   wake_events:
-    publish_to_api: true  # 是否推送喚醒事件到 API
-    include_audio_context: false  # 是否包含喚醒時的音訊上下文
-    context_duration: 2.0  # 音訊上下文時間（秒）
-    
-  # 多源喚醒支援（未來擴充）
+    publish_to_api: true
+    include_audio_context: false
+    context_duration: 2.0
   multi_source:
-    ui_wake: false  # UI 喚醒
-    visual_wake: false  # 視覺喚醒
-    gesture_wake: false  # 手勢喚醒
+    ui_wake: false
+    visual_wake: false
+    gesture_wake: false
 
 # ===== 串流設定 =====
 stream:
@@ -291,27 +262,27 @@ stream:
   channels: 1
   
   # 超時設定
-  silence_timeout: 3.0  # 秒，靜音超過此時間後自動停止
-  initial_silence_timeout: 10.0  # 初始靜音超時
-  max_segment_duration: 30.0  # 最大片段持續時間（秒）
-  enable_vad: true  # 是否啟用語音活動偵測
+  silence_timeout: 3.0
+  initial_silence_timeout: 10.0
+  max_segment_duration: 30.0
+  enable_vad: true
   
   # 手動終止
   manual_termination: true
-  termination_phrase: "結束辨識"  # 說出此詞彙時停止辨識
+  termination_phrase: "結束辨識"
   
-  # Busy 模式設定
+  # Busy 模式
   busy_mode:
     enabled: true
-    continue_listening: true  # busy 狀態時是否繼續聆聽
-    buffer_audio: true  # 是否緩存 busy 期間的音訊
-    max_buffer_duration: 30.0  # 最大緩存時長（秒）
+    continue_listening: true
+    buffer_audio: true
+    max_buffer_duration: 30.0
     
-  # 串流緩衝設定
+  # 緩衝設定
   buffer:
     size: 8192
     max_chunks: 1000
-    overflow_strategy: "drop_oldest"  # drop_oldest, drop_newest, block
+    overflow_strategy: "drop_oldest"
 
 # ===== FSM (狀態機) 設定 =====
 fsm:

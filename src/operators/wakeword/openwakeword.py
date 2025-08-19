@@ -13,11 +13,18 @@ import scipy.signal
 from datetime import datetime
 from huggingface_hub import hf_hub_download, HfFolder
 
+# 模組級變數 - 直接導入和實例化
 from src.utils.logger import logger
-from src.pipeline.operators.base import OperatorBase
+from src.operators.base import OperatorBase
 from src.core.exceptions import PipelineError
 from src.config.manager import ConfigManager
-from src.models.audio_format import AudioMetadata, AudioFormat
+from src.audio import AudioMetadata, AudioSampleFormat
+from src.store import get_global_store
+from src.core.audio_queue_manager import get_audio_queue_manager
+
+config_manager = ConfigManager()
+store = get_global_store()
+audio_queue_manager = get_audio_queue_manager()
 
 
 class OpenWakeWordOperator(OperatorBase):
@@ -36,9 +43,12 @@ class OpenWakeWordOperator(OperatorBase):
     def __init__(self):
         """
         初始化 OpenWakeWord Operator
+        使用模組級變數提供統一的依賴項
         """
-        # 從 ConfigManager 讀取配置
-        self.config_manager = ConfigManager()
+        super().__init__()
+        
+        # 使用模組級全域實例（繼承自 OperatorBase）
+        # self.config_manager, self.store, self.audio_queue_manager 已在基類中設定
         config = {
             "enabled": True,
             "model_path": None,
@@ -70,8 +80,6 @@ class OpenWakeWordOperator(OperatorBase):
             self.hf_filename = "hi_kmu_0721.onnx"
             self.hf_token = None
             self.detection_cooldown = 2.0
-        
-        super().__init__()
         
         # 保存配置（內部使用）
         self._config = config
@@ -260,8 +268,17 @@ class OpenWakeWordOperator(OperatorBase):
                                 f"分數: {score:.3f}"
                             )
                             
-                            # 觸發回呼
-                            if self.detection_callback:
+                            # 優先使用 Store dispatch，否則使用回呼（向後相容）
+                            if self.store:
+                                # 直接 dispatch wake_triggered action
+                                from src.store.sessions.sessions_actions import wake_triggered
+                                self.store.dispatch(wake_triggered(
+                                    session_id=kwargs.get("session_id"),
+                                    confidence=float(score),
+                                    trigger=model_name
+                                ))
+                            elif self.detection_callback:
+                                # 保留回呼介面（向後相容）
                                 await self._trigger_callback(detection)
             
             except Exception as e:
@@ -378,7 +395,7 @@ class OpenWakeWordOperator(OperatorBase):
         return AudioMetadata(
             sample_rate=self.config_manager.pipeline.default_sample_rate,  # 從配置讀取
             channels=self.config_manager.pipeline.channels,               # 從配置讀取
-            format=AudioFormat.INT16  # 接受 int16，內部會轉換
+            format=AudioSampleFormat.INT16  # 接受 int16，內部會轉換
         )
     
     def get_output_audio_format(self) -> Optional[AudioMetadata]:
@@ -389,3 +406,52 @@ class OpenWakeWordOperator(OperatorBase):
             None 表示輸出格式與輸入相同
         """
         return None
+    
+    async def process_from_queue(self, session_id: str):
+        """
+        從 AudioQueueManager 處理音訊（串流模式）
+        
+        Args:
+            session_id: Session ID
+        """
+        if not self.audio_queue_manager:
+            logger.warning("WakeWordOperator: No AudioQueueManager configured")
+            return
+        
+        logger.info(f"WakeWordOperator: Starting queue processing for session {session_id}")
+        
+        # 確保佇列存在
+        if session_id not in self.audio_queue_manager.queues:
+            await self.audio_queue_manager.create_queue(session_id)
+        
+        try:
+            while self.enabled:
+                try:
+                    # 從佇列拉取音訊
+                    audio_data = await self.audio_queue_manager.pull(session_id, timeout=0.1)
+                    
+                    if audio_data:
+                        # 創建元數據
+                        metadata = AudioMetadata(
+                            sample_rate=self.sample_rate,
+                            channels=1,
+                            format=AudioSampleFormat.INT16
+                        )
+                        
+                        # 處理音訊並執行喚醒詞檢測
+                        result = await self.process(audio_data, metadata=metadata)
+                        
+                        # 結果已經在 process 方法中通過 callback 或 Store dispatch 處理
+                    else:
+                        # 沒有音訊時短暫等待
+                        await asyncio.sleep(0.01)
+                        
+                except asyncio.TimeoutError:
+                    # 超時是正常的，繼續等待
+                    continue
+                except Exception as e:
+                    logger.error(f"WakeWordOperator queue processing error: {e}")
+                    break
+                    
+        finally:
+            logger.info(f"WakeWordOperator: Stopped queue processing for session {session_id}")

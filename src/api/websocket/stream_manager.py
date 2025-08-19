@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 
 from src.utils.logger import logger
-from src.models.audio import AudioChunk
+from src.audio import AudioChunk
 from src.core.exceptions import StreamError
 
 
@@ -138,7 +138,7 @@ class WebSocketStreamManager:
             buffer.add_chunk(audio_data)
             
             # 創建 AudioChunk 物件
-            from src.models.audio import AudioFormat, AudioEncoding
+            from src.audio import AudioFormat, AudioEncoding
             
             # 轉換字符串為枚舉
             try:
@@ -267,7 +267,7 @@ class WebSocketStreamManager:
         queue = self.stream_queues.get(session_id)
         
         # 導入枚舉類型
-        from src.models.audio import AudioFormat, AudioEncoding
+        from src.audio import AudioFormat, AudioEncoding
         
         # 確保 format 和 encoding 是枚舉類型
         format_enum = buffer.format

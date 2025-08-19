@@ -11,6 +11,9 @@ from src.utils.logger import logger
 from src.core.exceptions import ProviderError, ModelError
 from src.config.manager import ConfigManager
 
+# 模組級變數
+config_manager = ConfigManager()
+
 
 @dataclass
 class TranscriptionResult:
@@ -70,9 +73,6 @@ class ProviderBase(ABC):
         self.name = self.__class__.__name__
         self._initialized = False
         
-        # 初始化 ConfigManager
-        self.config_manager = ConfigManager()
-        
         # 決定 provider 名稱
         if provider_name:
             self.provider_key = provider_name
@@ -82,7 +82,7 @@ class ProviderBase(ABC):
         
         # 獲取對應的配置
         try:
-            provider_config = getattr(self.config_manager.providers, self.provider_key)
+            provider_config = getattr(config_manager.providers, self.provider_key)
             
             # 模型相關配置 - 支援不同 provider 的屬性名稱
             # Whisper 使用 model_size，其他可能使用 model
@@ -107,8 +107,8 @@ class ProviderBase(ABC):
             self.supported_languages = []
             
             # 音訊參數 - 從 stream 配置獲取
-            self.sample_rate = self.config_manager.stream.sample_rate
-            self.channels = self.config_manager.stream.channels
+            self.sample_rate = config_manager.stream.sample_rate
+            self.channels = config_manager.stream.channels
             
         except AttributeError as e:
             logger.error(f"無法獲取 {self.provider_key} 的配置：{e}")

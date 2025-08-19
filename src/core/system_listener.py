@@ -8,13 +8,16 @@ from typing import Optional, Dict, Any, List, Callable
 from datetime import datetime
 import numpy as np
 
-from src.pipeline.operators.wakeword import OpenWakeWordOperator
-from src.stream.audio_stream import AudioStreamProcessor
+from src.operators.wakeword import OpenWakeWordOperator
+# from src.stream.audio_stream import AudioStreamProcessor  # 已移除，改用新的音訊處理器
 from src.store import get_global_store
 from src.store.sessions import sessions_actions
 from src.store.sessions.sessions_state import  FSMStateEnum
 from src.utils.logger import logger
 from src.config.manager import ConfigManager
+
+# 模組級變數
+config_manager = ConfigManager()
 
 
 class SystemListener:
@@ -31,7 +34,6 @@ class SystemListener:
     
     def __init__(self, session_id: Optional[str] = None):
         """初始化系統監聽器"""
-        self.config_manager = ConfigManager()
         
         # PyStoreX 整合
         self.session_id = session_id
@@ -54,8 +56,8 @@ class SystemListener:
         
         # 喚醒超時管理
         # 從配置讀取超時時間
-        if hasattr(self.config_manager, 'wake_word_detection') and self.config_manager.wake_word_detection.enabled:
-            self.wake_timeout = self.config_manager.wake_word_detection.wake_timeout
+        if hasattr(config_manager, 'wake_word_detection') and config_manager.wake_word_detection.enabled:
+            self.wake_timeout = config_manager.wake_word_detection.wake_timeout
         else:
             self.wake_timeout = 30.0  # 預設 30 秒
         self.wake_timeout_task = None
@@ -169,10 +171,10 @@ class SystemListener:
     
     async def _init_audio_stream(self):
         """初始化音訊流"""
-        # 這裡使用簡化的音訊流處理器
-        # 實際實作可能需要更複雜的音訊輸入管理
-        self.audio_stream = AudioStreamProcessor()
-        await self.audio_stream.start()
+        # TODO: 這裡需要實作新的音訊流處理器
+        # 暫時設為 None，待新的音訊處理架構實作
+        self.audio_stream = None
+        logger.warning("音訊流處理器尚未實作，SystemListener 暫時禁用")
     
     def _setup_fsm_callbacks(self):
         """設定 FSM 回呼 (PyStoreX 版本)"""
@@ -189,7 +191,7 @@ class SystemListener:
         try:
             while self.is_running:
                 # 只在 IDLE 狀態且啟用時處理音訊
-                if self._is_idle() and self.is_enabled:
+                if self._is_idle() and self.is_enabled and self.audio_stream:
                     # 讀取音訊資料
                     audio_data = await self.audio_stream.read(1280)
                     

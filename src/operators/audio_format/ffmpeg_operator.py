@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any
 import numpy as np
 
 from .base import AudioFormatOperatorBase
-from src.models.audio_format import AudioMetadata, AudioFormat
+from src.audio import AudioContainerFormat, AudioMetadata, AudioSampleFormat
 from src.core.exceptions import AudioFormatError
 from src.utils.logger import logger
 
@@ -113,8 +113,8 @@ class FFmpegAudioFormatOperator(AudioFormatOperatorBase):
                     raise AudioFormatError(f"FFmpeg 轉換失敗: {error_msg}")
                 
                 # 確保音頻數據長度正確
-                if to_metadata.format in [AudioFormat.INT16, AudioFormat.INT32]:
-                    bytes_per_sample = 2 if to_metadata.format == AudioFormat.INT16 else 4
+                if to_metadata.format in [AudioSampleFormat.INT16, AudioSampleFormat.INT32]:
+                    bytes_per_sample = 2 if to_metadata.format == AudioSampleFormat.INT16 else 4
                     expected_alignment = bytes_per_sample * to_metadata.channels
                     if len(pcm_data) % expected_alignment != 0:
                         padding_needed = expected_alignment - (len(pcm_data) % expected_alignment)
@@ -151,11 +151,11 @@ class FFmpegAudioFormatOperator(AudioFormatOperatorBase):
             audio = audio.set_channels(to_metadata.channels)
             
             # 設置採樣寬度
-            if to_metadata.format == AudioFormat.INT16:
+            if to_metadata.format == AudioSampleFormat.INT16:
                 audio = audio.set_sample_width(2)
-            elif to_metadata.format == AudioFormat.INT32:
+            elif to_metadata.format == AudioSampleFormat.INT32:
                 audio = audio.set_sample_width(4)
-            elif to_metadata.format == AudioFormat.FLOAT32:
+            elif to_metadata.format == AudioSampleFormat.FLOAT32:
                 # pydub 不直接支持 float32，需要特殊處理
                 samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
                 samples = samples / (2 ** (audio.sample_width * 8 - 1))
@@ -201,37 +201,37 @@ class FFmpegAudioFormatOperator(AudioFormatOperatorBase):
         
         return cmd
     
-    def _get_ffmpeg_format(self, audio_format: AudioFormat) -> str:
+    def _get_ffmpeg_format(self, audio_format: AudioSampleFormat) -> str:
         """獲取 FFmpeg 格式名稱"""
         format_map = {
-            AudioFormat.INT16: 's16le',
-            AudioFormat.INT24: 's24le',
-            AudioFormat.INT32: 's32le',
-            AudioFormat.FLOAT32: 'f32le',
+            AudioSampleFormat.INT16: 's16le',
+            AudioSampleFormat.INT24: 's24le',
+            AudioSampleFormat.INT32: 's32le',
+            AudioSampleFormat.FLOAT32: 'f32le',
         }
         return format_map.get(audio_format, 's16le')
     
-    def _get_ffmpeg_codec(self, audio_format: AudioFormat) -> str:
+    def _get_ffmpeg_codec(self, audio_format: AudioSampleFormat) -> str:
         """獲取 FFmpeg 編解碼器名稱"""
         codec_map = {
-            AudioFormat.INT16: 'pcm_s16le',
-            AudioFormat.INT24: 'pcm_s24le',
-            AudioFormat.INT32: 'pcm_s32le',
-            AudioFormat.FLOAT32: 'pcm_f32le',
+            AudioSampleFormat.INT16: 'pcm_s16le',
+            AudioSampleFormat.INT24: 'pcm_s24le',
+            AudioSampleFormat.INT32: 'pcm_s32le',
+            AudioSampleFormat.FLOAT32: 'pcm_f32le',
         }
         return codec_map.get(audio_format, 'pcm_s16le')
     
     def _get_file_extension(self, metadata: AudioMetadata) -> str:
         """根據元數據獲取文件擴展名"""
         # 簡單映射，實際可能需要更複雜的邏輯
-        if metadata.format == AudioFormat.FLOAT32:
+        if metadata.format == AudioSampleFormat.FLOAT32:
             return '.wav'
         return '.pcm'
     
     def _get_format_name(self, metadata: AudioMetadata) -> str:
         """獲取 pydub 格式名稱"""
         # 簡單映射
-        if metadata.format in [AudioFormat.INT16, AudioFormat.INT32]:
+        if metadata.format in [AudioSampleFormat.INT16, AudioSampleFormat.INT32]:
             return 'raw'
         return 'wav'
     

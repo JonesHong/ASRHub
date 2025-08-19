@@ -8,10 +8,14 @@ from typing import Optional, Dict, Any
 from abc import abstractmethod
 import numpy as np
 
-from src.pipeline.operators.base import BufferingOperator
+from src.operators.base import BufferingOperator
 from src.utils.logger import logger
 from src.core.exceptions import PipelineError, AudioFormatError
-from src.models.audio_format import AudioMetadata, AudioFormat
+from src.audio import AudioMetadata, AudioSampleFormat
+from src.config.manager import ConfigManager
+
+# 模組級變數
+config_manager = ConfigManager()
 
 
 class AudioFormatOperatorBase(BufferingOperator):
@@ -28,13 +32,10 @@ class AudioFormatOperatorBase(BufferingOperator):
             operator_id: 操作器識別ID
             target_metadata: 目標音頻格式元數據
         """
-        # 獲取配置
-        from src.config.manager import ConfigManager
-        self.config_manager = ConfigManager()
         
         # 取得 buffer size
         try:
-            buffer_size = self.config_manager.pipeline.buffer_size
+            buffer_size = config_manager.pipeline.buffer_size
         except AttributeError:
             buffer_size = 8192
         
@@ -48,32 +49,32 @@ class AudioFormatOperatorBase(BufferingOperator):
         else:
             # 從配置中取得
             try:
-                if hasattr(self.config_manager.pipeline, 'audio_format'):
-                    af_config = self.config_manager.pipeline.audio_format
+                if hasattr(config_manager.pipeline, 'audio_format'):
+                    af_config = config_manager.pipeline.audio_format
                     self.target_metadata = AudioMetadata(
                         sample_rate=af_config.sample_rate,
                         channels=af_config.channels,
-                        format=AudioFormat(af_config.format)
+                        format=AudioSampleFormat(af_config.format)
                     )
                 else:
                     # 使用 pipeline 配置作為預設值
                     self.target_metadata = AudioMetadata(
-                        sample_rate=self.config_manager.pipeline.default_sample_rate,
-                        channels=self.config_manager.pipeline.channels,
-                        format=AudioFormat.INT16
+                        sample_rate=config_manager.pipeline.default_sample_rate,
+                        channels=config_manager.pipeline.channels,
+                        format=AudioSampleFormat.INT16
                     )
             except AttributeError:
                 # 最後的備用預設值
                 self.target_metadata = AudioMetadata(
                     sample_rate=16000,
                     channels=1,
-                    format=AudioFormat.INT16
+                    format=AudioSampleFormat.INT16
                 )
         
         # 轉換品質設定
         try:
-            if hasattr(self.config_manager.pipeline, 'audio_format') and hasattr(self.config_manager.pipeline.audio_format, 'quality'):
-                self.quality = self.config_manager.pipeline.audio_format.quality
+            if hasattr(config_manager.pipeline, 'audio_format') and hasattr(config_manager.pipeline.audio_format, 'quality'):
+                self.quality = config_manager.pipeline.audio_format.quality
             else:
                 self.quality = 'medium'
         except AttributeError:
@@ -171,15 +172,15 @@ class AudioFormatOperatorBase(BufferingOperator):
         
         # 映射編碼格式
         format_map = {
-            'linear16': AudioFormat.INT16,
-            'linear32': AudioFormat.INT32,
-            'int16': AudioFormat.INT16,
-            'int24': AudioFormat.INT24,
-            'int32': AudioFormat.INT32,
-            'float32': AudioFormat.FLOAT32
+            'linear16': AudioSampleFormat.INT16,
+            'linear32': AudioSampleFormat.INT32,
+            'int16': AudioSampleFormat.INT16,
+            'int24': AudioSampleFormat.INT24,
+            'int32': AudioSampleFormat.INT32,
+            'float32': AudioSampleFormat.FLOAT32
         }
         
-        audio_format = format_map.get(format_str.lower(), AudioFormat.INT16)
+        audio_format = format_map.get(format_str.lower(), AudioSampleFormat.INT16)
         
         return AudioMetadata(
             sample_rate=sample_rate,
@@ -198,7 +199,7 @@ class AudioFormatOperatorBase(BufferingOperator):
     
     def _to_numpy(self, audio_data: bytes, metadata: AudioMetadata) -> np.ndarray:
         """將音頻數據轉換為 numpy array"""
-        if metadata.format == AudioFormat.INT24:
+        if metadata.format == AudioSampleFormat.INT24:
             # 特殊處理 24-bit
             samples = []
             for i in range(0, len(audio_data), 3):
@@ -214,20 +215,20 @@ class AudioFormatOperatorBase(BufferingOperator):
             # 其他格式直接轉換
             return np.frombuffer(audio_data, dtype=metadata.format.numpy_dtype)
     
-    def _from_numpy(self, samples: np.ndarray, format: AudioFormat) -> bytes:
+    def _from_numpy(self, samples: np.ndarray, format: AudioSampleFormat) -> bytes:
         """將 numpy array 轉換為音頻數據"""
-        if format == AudioFormat.INT24:
+        if format == AudioSampleFormat.INT24:
             # 特殊處理 24-bit
             raise NotImplementedError("24-bit output not yet implemented")
         else:
             # 轉換數據類型
-            if format == AudioFormat.FLOAT32:
+            if format == AudioSampleFormat.FLOAT32:
                 # 確保在 -1.0 到 1.0 範圍內
                 samples = np.clip(samples, -1.0, 1.0)
-            elif format == AudioFormat.INT16:
+            elif format == AudioSampleFormat.INT16:
                 # 確保在有效範圍內
                 samples = np.clip(samples, -32768, 32767)
-            elif format == AudioFormat.INT32:
+            elif format == AudioSampleFormat.INT32:
                 # 確保在有效範圍內
                 samples = np.clip(samples, -2147483648, 2147483647)
             
@@ -272,7 +273,7 @@ class AudioFormatOperatorBase(BufferingOperator):
             self.target_metadata = AudioMetadata(
                 sample_rate=target_config.get('sample_rate', self.target_metadata.sample_rate),
                 channels=target_config.get('channels', self.target_metadata.channels),
-                format=AudioFormat(target_config.get('format', self.target_metadata.format.value))
+                format=AudioSampleFormat(target_config.get('format', self.target_metadata.format.value))
             )
             logger.info(
                 f"[{self.operator_id}] 目標格式更新為: "

@@ -1,12 +1,11 @@
-# ASR Hub 優化配置檔案範例
-# 根據 PyStoreX 重構後的架構調整
-# 生成時間: 2025-08-19
-# 將此檔案複製為 config.yaml 並根據您的需求修改設定值
+# ASR Hub 配置檔案範例
+# 將此檔案複製為 base.yaml 並根據您的需求修改設定值
+# 支援環境變數替換: ${VAR_NAME} 或 ${VAR_NAME:default_value}
 
 # ===== 系統核心設定 =====
 system:
   name: "ASR_Hub"
-  version: "0.2.0"  # 重構後版本
+  version: "0.1.0"
   mode: ${APP_ENV:development}  # development, production, testing
   debug: ${DEBUG:true}
 
@@ -20,18 +19,15 @@ logging:
 
 # ===== API 設定 =====
 api:
-  # HTTP SSE (Server-Sent Events)
+  # HTTP SSE (Server-Sent Events) 配置
   http_sse:
-    enabled: true
-    host: ${API_HOST:0.0.0.0}
-    port: ${API_PORT:8000}
     cors_enabled: true
     host: ${API_HOST:0.0.0.0}
     port: ${API_PORT:8000}
     max_connections: 100
     request_timeout: 300  # 秒
     
-  # WebSocket
+  # WebSocket 配置
   websocket:
     enabled: true
     host: ${WS_HOST:0.0.0.0}
@@ -39,21 +35,21 @@ api:
     max_message_size: 10485760  # 10 MB
     ping_interval: 30
     
-  # gRPC (保留但預設關閉)
+  # gRPC 配置
   grpc:
     enabled: false
     host: ${GRPC_HOST:0.0.0.0}
     port: ${GRPC_PORT:50051}
     max_receive_message_length: 10485760
     
-  # Socket.IO
+  # Socket.IO 配置
   socketio:
     enabled: true
     host: ${SOCKETIO_HOST:0.0.0.0}
     port: ${SOCKETIO_PORT:8766}
     cors_allowed_origins: "*"
     
-  # Redis (保留但預設關閉)
+  # Redis 配置
   redis:
     enabled: false
     host: ${REDIS_HOST:localhost}
@@ -98,9 +94,9 @@ pipeline:
         model_path: "models/silero_vad.onnx"
         model_name: "silero_vad_v4"  # 模型版本
         use_gpu: false
-        adaptive_threshold: false  # 避免過度敏感
-        threshold_window_size: 50
-        smoothing_window: 10  # 增大以減少抖動
+        adaptive_threshold: false  # 自適應閾值（關閉以避免過度敏感）
+        threshold_window_size: 50  # 自適應閾值窗口大小
+        smoothing_window: 10  # 平滑窗口大小（增大以減少抖動）
       # WebRTC VAD 設定（備選）
       webrtc:
         enabled: false
@@ -120,6 +116,12 @@ pipeline:
       target_rate: 16000
       quality: "high"  # low, medium, high
       
+    # 人聲分離
+    voice_separation:
+      enabled: false
+      model: "spleeter"
+      stems: 2  # 2 或 4
+      
     # 格式轉換
     format_conversion:
       enabled: true
@@ -131,8 +133,8 @@ pipeline:
     recording:
       enabled: true
       format: "wav"
-      sample_rate: 48000
-      channels: 2
+      sample_rate: 48000 # 取樣率
+      channels: 2  # 1 (mono) 或 2 (stereo)
       max_duration: 60  # seconds
       max_file_size: 100  # MB
       storage:
@@ -159,24 +161,11 @@ pipeline:
 
 # ===== ASR Provider 設定 =====
 providers:
-  default: "whisper"
-  
-  # 通用池化配置模板
-  pool_defaults:
-    min_size: 1
-    max_size: 3
-    idle_timeout: 300.0
-    acquire_timeout: 30.0
-    health_check_interval: 60.0
-    auto_scale:
-      enabled: true
-      scale_up_threshold: 0.8
-      scale_down_threshold: 0.3
-      scale_interval: 60.0
+  default: "whisper"  # 預設使用的 provider
   
   # Local Whisper
   whisper:
-    enabled: true
+    enabled: true  # 啟用以進行端到端測試
     model_size: ${WHISPER_MODEL:base}  # tiny, base, small, medium, large
     language: "zh"  # 語言代碼，null 表示自動偵測
     device: ${WHISPER_DEVICE:cpu}  # cpu, cuda, mps
@@ -190,10 +179,20 @@ providers:
     # 模型下載路徑
     model_path: "./models/whisper"
     
+    # 池化配置 (可選，預設為關閉)
     pool:
-      enabled: false
-      min_size: 1
-      max_size: 3
+      enabled: false   # 暫時關閉池化直到 Whisper 安裝完成
+      min_size: 1     # 最小池大小
+      max_size: 3     # 最大池大小（根據記憶體和 GPU 資源調整）
+      idle_timeout: 300.0  # 空閒實例超時時間（秒）
+      acquire_timeout: 30.0  # 獲取實例超時時間（秒）
+      health_check_interval: 60.0  # 健康檢查間隔（秒）
+      # 動態縮放配置
+      auto_scale:
+        enabled: true
+        scale_up_threshold: 0.8  # 使用率超過 80% 時擴展
+        scale_down_threshold: 0.3  # 使用率低於 30% 時縮減
+        scale_interval: 60.0  # 縮放檢查間隔（秒）
     
   # FunASR
   funasr:
@@ -202,12 +201,22 @@ providers:
     language: "zh"
     device: "cpu"
     model_path: "./models/funasr"
+    # 池化配置 (可選)
+    pool:
+      enabled: false
+      min_size: 1
+      max_size: 3
     
   # Vosk
   vosk:
     enabled: false
     model_path: "./models/vosk/vosk-model-cn-0.22"
     sample_rate: 16000
+    # 池化配置 (可選)
+    pool:
+      enabled: false
+      min_size: 2
+      max_size: 4
     
   # Google Cloud Speech-to-Text
   google_stt:
@@ -245,7 +254,7 @@ wake_word_detection:
     # OpenWakeWord 模型
     - type: openWakeWord
       enabled: true
-      model_path: "models/hi_kmu_0721.onnx"
+      model_path: "models/hi_kmu_0721.onnx"  # ONNX 模型檔案路徑
       threshold: 0.5  # 偵測閾值 (0.0 - 1.0)
       language: "zh-TW"  # 語言代碼
       # HuggingFace 模型下載設定（當 model_path 不存在時使用）
@@ -287,10 +296,10 @@ wake_word_detection:
 # ===== 串流設定 =====
 stream:
   # 音訊參數
-  sample_rate: 16000
-  channels: 1
-  
-  # 超時設定
+  sample_rate: 16000  # 取樣率
+  channels: 1  # 聲道數
+
+  # 靜音偵測設定
   silence_timeout: 3.0  # 秒，靜音超過此時間後自動停止
   initial_silence_timeout: 10.0  # 初始靜音超時
   max_segment_duration: 30.0  # 最大片段持續時間（秒）
@@ -313,34 +322,90 @@ stream:
     max_chunks: 1000
     overflow_strategy: "drop_oldest"  # drop_oldest, drop_newest, block
 
-# ===== FSM (狀態機) 設定 =====
+# ===== 效能設定 =====
+performance:
+  # 執行緒池設定
+  thread_pool:
+    min_workers: 2
+    max_workers: 10
+    
+  # 記憶體限制
+  memory:
+    max_usage_mb: 2048
+    gc_threshold: 0.8  # 觸發 GC 的記憶體使用率
+    
+  # 批次處理
+  batch:
+    enabled: false
+    size: 10
+    timeout: 1.0
+
+# ===== 安全設定 =====
+security:
+  # API 認證
+  auth:
+    enabled: false
+    type: "api_key"  # api_key, jwt, oauth2
+    api_keys: []  # 在 base.yaml 中設定實際的 API keys
+    
+  # 速率限制
+  rate_limit:
+    enabled: true
+    requests_per_minute: 60
+    requests_per_hour: 1000
+    
+  # SSL/TLS
+  ssl:
+    enabled: false
+    cert_file: ${SSL_CERT_FILE:}
+    key_file: ${SSL_KEY_FILE:}
+
+# ===== 監控設定 =====
+monitoring:
+  # Metrics
+  metrics:
+    enabled: false
+    export_interval: 60  # 秒
+    
+  # Health Check
+  health_check:
+    enabled: true
+    endpoint: "/health"
+    check_interval: 30  # 秒
+    
+  # 追蹤
+  tracing:
+    enabled: false
+    service_name: "asr-hub"
+    
+# ===== FSM (Finite State Machine) 設定 =====
 fsm:
   # 通用設定
   default_strategy: "NON_STREAMING"  # BATCH, NON_STREAMING, STREAMING
-  keep_awake_after_reply: true
+  keep_awake_after_reply: true  # TTS 播放後是否保持喚醒狀態
   
-  # 統一的超時配置（毫秒）
+  # 各策略的超時設定（毫秒）
   timeout_configs:
-    # BATCH 模式
+    # BATCH 模式超時設定（批次處理通常不需要超時）
     batch:
-      processing: 60000
+      processing: 60000  # 處理檔案超時（60秒）
       
-    # NON_STREAMING 模式
+    # NON_STREAMING 模式超時設定（如 Whisper）
     non_streaming:
-      activated: 5000
-      recording: 10000
-      transcribing: 5000
-      llm_claim: 5000
-      tts_claim: 5000
-      session_idle: 600000
+      activated: 5000     # 喚醒視窗（5秒）
+      recording: 10000    # 最大錄音時間（10秒）
+      transcribing: 5000  # 轉譯超時（5秒）
+      llm_claim: 5000     # LLM 回應超時（5秒）
+      tts_claim: 5000     # TTS 播放超時（5秒）
+      session_idle: 600000  # 會話閒置超時（10分鐘）
       
-    # STREAMING 模式
+    # STREAMING 模式超時設定（如 Google STT、Vosk）
     streaming:
-      activated: 5000
-      streaming: 30000
-      llm_claim: 5000
-      tts_claim: 5000
-      session_idle: 600000
+      activated: 5000     # 喚醒視窗（5秒）
+      streaming: 30000    # 最大串流時間（30秒）
+      llm_claim: 5000     # LLM 回應超時（5秒）
+      tts_claim: 5000     # TTS 播放超時（5秒）
+      session_idle: 600000  # 會話閒置超時（10分鐘）
   
   # 狀態回復設定
   recovery:
@@ -348,9 +413,9 @@ fsm:
     retry_delay_ms: 1000
     auto_recover_from_error: true
     
-  # 事件優先級設定
+  # 事件優先級設定（可選，使用預設值）
   event_priorities:
-    reset: 100
+    reset: 100         # 最高優先級
     error: 90
     recover: 90
     interrupt_reply: 60
@@ -358,64 +423,26 @@ fsm:
     tts_playback_started: 50
     tts_playback_finished: 40
     timeout: 30
-    default: 0
+    default: 0         # 預設優先級
 
-# ===== 以下區塊已確認未使用，建議移除 =====
-# 如果未來需要這些功能，可以重新加入
-
-# # 效能設定（未使用）
-# performance:
-#   thread_pool:
-#     min_workers: 2
-#     max_workers: 10
-#   memory:
-#     max_usage_mb: 2048
-#     gc_threshold: 0.8
-#   batch:
-#     enabled: false
-#     size: 10
-#     timeout: 1.0
-
-# # 安全設定（未使用）
-# security:
-#   auth:
-#     enabled: false
-#     type: "api_key"
-#     api_keys: []
-#   rate_limit:
-#     enabled: true
-#     requests_per_minute: 60
-#     requests_per_hour: 1000
-#   ssl:
-#     enabled: false
-#     cert_file: ${SSL_CERT_FILE:}
-#     key_file: ${SSL_KEY_FILE:}
-
-# # 監控設定（未使用）
-# monitoring:
-#   metrics:
-#     enabled: false
-#     export_interval: 60
-#   health_check:
-#     enabled: true
-#     endpoint: "/health"
-#     check_interval: 30
-#   tracing:
-#     enabled: false
-#     service_name: "asr-hub"
-
-# # 資料庫設定（未使用）
-# database:
-#   enabled: false
-#   type: "sqlite"
-#   sqlite:
-#     path: "./data/asr_hub.db"
-#   host: ${DB_HOST:localhost}
-#   port: ${DB_PORT:5432}
-#   name: ${DB_NAME:asr_hub}
-#   user: ${DB_USER:postgres}
-#   password: ${DB_PASSWORD:}
-#   pool:
-#     size: 10
-#     max_overflow: 20
-#     timeout: 30
+# ===== 資料庫設定（可選，用於儲存 session 或日誌）=====
+database:
+  enabled: false
+  type: "sqlite"  # sqlite, postgresql, mysql
+  
+  # SQLite 設定
+  sqlite:
+    path: "./data/asr_hub.db"
+    
+  # PostgreSQL/MySQL 設定
+  host: ${DB_HOST:localhost}
+  port: ${DB_PORT:5432}
+  name: ${DB_NAME:asr_hub}
+  user: ${DB_USER:postgres}
+  password: ${DB_PASSWORD:}  # 敏感資料，會自動遮罩
+  
+  # 連接池設定
+  pool:
+    size: 10
+    max_overflow: 20
+    timeout: 30

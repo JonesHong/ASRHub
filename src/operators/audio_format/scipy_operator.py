@@ -9,7 +9,7 @@ from scipy import signal
 from typing import Optional
 
 from .base import AudioFormatOperatorBase
-from src.models.audio_format import AudioMetadata, AudioFormat
+from src.audio import AudioMetadata, AudioSampleFormat
 from src.core.exceptions import AudioFormatError
 from src.utils.logger import logger
 
@@ -124,37 +124,37 @@ class ScipyAudioFormatOperator(AudioFormatOperatorBase):
         return resampled
     
     def _convert_bit_depth(self, samples: np.ndarray, 
-                          from_format: AudioFormat, 
-                          to_format: AudioFormat) -> np.ndarray:
+                          from_format: AudioSampleFormat, 
+                          to_format: AudioSampleFormat) -> np.ndarray:
         """轉換位元深度"""
         if from_format == to_format:
             return samples
         
         # 先正規化到 float32 [-1, 1]
-        if from_format == AudioFormat.INT16:
+        if from_format == AudioSampleFormat.INT16:
             samples_float = samples.astype(np.float32) / 32768.0
-        elif from_format == AudioFormat.INT24:
+        elif from_format == AudioSampleFormat.INT24:
             samples_float = samples.astype(np.float32) / 8388608.0
-        elif from_format == AudioFormat.INT32:
+        elif from_format == AudioSampleFormat.INT32:
             samples_float = samples.astype(np.float32) / 2147483648.0
-        elif from_format == AudioFormat.FLOAT32:
+        elif from_format == AudioSampleFormat.FLOAT32:
             samples_float = samples
         else:
             raise ValueError(f"不支援的輸入格式: {from_format}")
         
         # 轉換到目標格式
-        if to_format == AudioFormat.INT16:
+        if to_format == AudioSampleFormat.INT16:
             # 確保在有效範圍內並轉換
             samples_float = np.clip(samples_float, -1.0, 1.0)
             return (samples_float * 32767).astype(np.int16)
-        elif to_format == AudioFormat.INT24:
+        elif to_format == AudioSampleFormat.INT24:
             # 24-bit 需要特殊處理
             samples_float = np.clip(samples_float, -1.0, 1.0)
             return (samples_float * 8388607).astype(np.int32)
-        elif to_format == AudioFormat.INT32:
+        elif to_format == AudioSampleFormat.INT32:
             samples_float = np.clip(samples_float, -1.0, 1.0)
             return (samples_float * 2147483647).astype(np.int32)
-        elif to_format == AudioFormat.FLOAT32:
+        elif to_format == AudioSampleFormat.FLOAT32:
             return samples_float.astype(np.float32)
         else:
             raise ValueError(f"不支援的輸出格式: {to_format}")

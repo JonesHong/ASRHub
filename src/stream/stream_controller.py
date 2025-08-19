@@ -8,14 +8,16 @@ from typing import Dict, Any, Optional, AsyncGenerator, List, Union
 from datetime import datetime
 from src.utils.logger import logger
 from src.core.exceptions import StreamError, SessionError
-# from src.core.session_manager import SessionManager  # DEPRECATED
 from src.store import get_global_store
 from src.store.sessions import sessions_actions, sessions_selectors
-from src.pipeline.manager import PipelineManager
 from src.providers.manager import ProviderManager
-from src.models.audio import AudioChunk
-from src.models.session import SessionState
+from src.audio import AudioChunk
+from src.store.sessions.sessions_state import FSMStateEnum
 from src.config.manager import ConfigManager
+
+# 模組級變數
+config_manager = ConfigManager()
+store = get_global_store()
 
 
 class StreamController:
@@ -25,26 +27,19 @@ class StreamController:
     """
     
     def __init__(self,
-                 store=None,
-                 pipeline_manager: PipelineManager = None,
                  provider_manager: ProviderManager = None):
         """
         初始化 Stream Controller
-        使用 ConfigManager 獲取配置
+        使用模組級變數
         
         Args:
-            store: PyStoreX store 實例
-            pipeline_manager: Pipeline 管理器
             provider_manager: Provider 管理器
         """
-        self.config_manager = ConfigManager()
-        self.store = store or get_global_store()
-        self.pipeline_manager = pipeline_manager
         self.provider_manager = provider_manager
         
         
         # 串流配置
-        stream_config = self.config_manager.stream
+        stream_config = config_manager.stream
         self.buffer_size = stream_config.buffer.size
         self.silence_timeout = stream_config.silence_timeout
         self.max_segment_duration = stream_config.max_segment_duration
@@ -54,6 +49,15 @@ class StreamController:
         self.active_streams: Dict[str, Dict[str, Any]] = {}
         
         self._initialized = False
+        
+        # 註冊事件處理器（如果需要）
+        self._register_event_handlers()
+    
+    def _register_event_handlers(self):
+        """註冊 PyStoreX 事件處理器"""
+        # 未來可以在這裡註冊事件監聽器
+        # 例如：監聽 session 狀態變化、音訊事件等
+        pass
     
     async def initialize(self):
         """初始化 Stream Controller"""
@@ -63,7 +67,7 @@ class StreamController:
         logger.info("初始化 Stream Controller...")
         
         # 確保相關管理器已初始化
-        if not self.store or not self.pipeline_manager or not self.provider_manager:
+        if not store or not self.provider_manager:
             raise StreamError("相關管理器未正確初始化")
         
         self._initialized = True
@@ -78,7 +82,6 @@ class StreamController:
         Args:
             session_id: Session ID
             **kwargs: 額外參數
-                - pipeline: Pipeline 名稱（預設 "default"）
                 - provider: Provider 名稱（預設使用預設 Provider）
                 - language: 語言代碼
                 - sample_rate: 取樣率
@@ -91,7 +94,7 @@ class StreamController:
             StreamError: 如果啟動失敗
         """
         # 使用 selector 檢查 Session 是否存在
-        state = self.store.get_state() if self.store else None
+        state = store.get_state() if store else None
         session = sessions_selectors.get_session(session_id)(state) if state else None
         if not session:
             raise SessionError(f"Session {session_id} 不存在")
@@ -101,11 +104,7 @@ class StreamController:
             raise StreamError(f"Session {session_id} 已有活動串流")
         
         try:
-            # 獲取 Pipeline 和 Provider
-            pipeline_name = kwargs.get("pipeline", "default")
-            pipeline = self.pipeline_manager.get_pipeline(pipeline_name)
-            if not pipeline:
-                raise StreamError(f"Pipeline '{pipeline_name}' 不存在")
+            # 獲取 Provider
             
             provider_name = kwargs.get("provider")
             provider = self.provider_manager.get_provider(provider_name)
@@ -115,7 +114,6 @@ class StreamController:
             # 建立串流資訊
             stream_info = {
                 "session_id": session_id,
-                "pipeline": pipeline,
                 "provider": provider,
                 "start_time": datetime.now(),
                 "config": {
@@ -130,22 +128,20 @@ class StreamController:
                 "transcription_results": []
             }
             
-            # 更新 Session 狀態
-            self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
+            # 使用 PyStoreX 更新 Session 狀態
+            store.dispatch(sessions_actions.update_session_state(session_id, FSMStateEnum.LISTENING.value))
             
             # 儲存串流資訊
             self.active_streams[session_id] = stream_info
             
             logger.info(
                 f"串流已啟動 - Session: {session_id}, "
-                f"Pipeline: {pipeline_name}, "
                 f"Provider: {provider_name or 'default'}"
             )
             
             return {
                 "session_id": session_id,
                 "stream_id": f"stream_{session_id}_{int(stream_info['start_time'].timestamp())}",
-                "pipeline": pipeline_name,
                 "provider": provider_name or self.provider_manager.default_provider,
                 "config": stream_info["config"]
             }
@@ -179,38 +175,34 @@ class StreamController:
         stream_info = self.active_streams[session_id]
         
         try:
-            # 更新 Session 狀態為 BUSY
-            self.store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
+            # 使用 PyStoreX 更新 Session 狀態為 BUSY
+            store.dispatch(sessions_actions.update_session_state(session_id, FSMStateEnum.BUSY.value))
             
-            # 如果是原始 bytes，必須有完整的配置資訊
+            # 如果是原始 bytes，建立 AudioChunk 物件
             if isinstance(audio_chunk, bytes):
-                # 檢查是否有完整的音訊配置
-                required_config = ["sample_rate", "channels", "format", "encoding", "bits_per_sample"]
-                missing_config = [c for c in required_config if c not in stream_info["config"]]
+                from src.audio import AudioChunk as AC
+                from src.audio import AudioContainerFormat, AudioEncoding
                 
-                if missing_config:
-                    raise StreamError(f"串流配置缺少必要的音訊參數：{', '.join(missing_config)}")
-                
-                from src.models.audio import AudioChunk as AC
+                # 使用預設值或從配置取得
                 audio_chunk = AC(
                     data=audio_chunk,
-                    sample_rate=stream_info["config"]["sample_rate"],
-                    channels=stream_info["config"]["channels"],
-                    format=stream_info["config"]["format"],
-                    encoding=stream_info["config"]["encoding"],
-                    bits_per_sample=stream_info["config"]["bits_per_sample"]
+                    sample_rate=stream_info["config"].get("sample_rate", 16000),
+                    channels=stream_info["config"].get("channels", 1),
+                    format=stream_info["config"].get("format", AudioContainerFormat.PCM),
+                    encoding=stream_info["config"].get("encoding", AudioEncoding.LINEAR16),
+                    bits_per_sample=stream_info["config"].get("bits_per_sample", 16)
                 )
             
             # 記錄音訊格式資訊
-            logger.debug(
-                f"處理音訊片段 - Session: {session_id}, "
-                f"格式: {audio_chunk.sample_rate}Hz, {audio_chunk.channels}ch, "
-                f"{audio_chunk.bits_per_sample}bit, {audio_chunk.format.value}"
-            )
+            if hasattr(audio_chunk, 'sample_rate'):
+                logger.debug(
+                    f"處理音訊片段 - Session: {session_id}, "
+                    f"格式: {audio_chunk.sample_rate}Hz, {audio_chunk.channels}ch, "
+                    f"{audio_chunk.bits_per_sample}bit"
+                )
             
-            # 通過 Pipeline 處理音訊
-            pipeline = stream_info["pipeline"]
-            processed_audio = await pipeline.process(audio_chunk)
+            # 音訊處理由 SessionEffects 管理，這裡直接傳遞
+            processed_audio = audio_chunk.data if hasattr(audio_chunk, 'data') else audio_chunk
             
             if processed_audio:
                 # 添加到緩衝
@@ -236,20 +228,20 @@ class StreamController:
                     # 更新統計
                     stream_info["segment_count"] += 1
                     
-                    # 更新 Session 狀態回 LISTENING
-                    self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
+                    # 使用 PyStoreX 更新 Session 狀態回 LISTENING
+                    store.dispatch(sessions_actions.update_session_state(session_id, FSMStateEnum.LISTENING.value))
                     
                     return result
             
-            # 更新 Session 狀態回 LISTENING
-            self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
+            # 使用 PyStoreX 更新 Session 狀態回 LISTENING
+            store.dispatch(sessions_actions.update_session_state(session_id, FSMStateEnum.LISTENING.value))
             
             return None
             
         except Exception as e:
             logger.error(f"處理音訊片段失敗：{e}")
-            # 恢復 Session 狀態
-            self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
+            # 使用 PyStoreX 恢復 Session 狀態
+            store.dispatch(sessions_actions.update_session_state(session_id, FSMStateEnum.LISTENING.value))
             raise StreamError(f"音訊處理失敗：{str(e)}")
     
     async def process_audio_stream(self,
@@ -278,11 +270,8 @@ class StreamController:
             async def processed_stream():
                 async for chunk in audio_stream:
                     if chunk:
-                        # 通過 Pipeline 處理
-                        processed = await stream_info["pipeline"].process(
-                            chunk,
-                            **stream_info["config"]
-                        )
+                        # 直接使用原始音訊
+                        processed = chunk
                         if processed:
                             yield processed
             
@@ -353,8 +342,8 @@ class StreamController:
                 "transcription_count": len(stream_info["transcription_results"])
             }
             
-            # 更新 Session 狀態
-            self.store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
+            # 使用 PyStoreX 更新 Session 狀態
+            store.dispatch(sessions_actions.update_session_state(session_id, FSMStateEnum.IDLE.value))
             
             # 清理串流資訊
             del self.active_streams[session_id]

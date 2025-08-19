@@ -11,6 +11,9 @@ from src.providers.whisper.provider import WhisperProvider
 from src.providers.provider_pool import ProviderPool
 from src.config.manager import ConfigManager
 
+# 模組級變數
+config_manager = ConfigManager()
+
 
 class ProviderManager:
     """
@@ -21,9 +24,8 @@ class ProviderManager:
     def __init__(self):
         """
         初始化 Provider Manager
-        使用 ConfigManager 獲取配置
+        使用模組級變數
         """
-        self.config_manager = ConfigManager()
         
         # Provider 實例快取
         self.providers: Dict[str, ProviderBase] = {}
@@ -41,7 +43,7 @@ class ProviderManager:
         }
         
         # 預設 Provider
-        self.default_provider = self.config_manager.providers.default
+        self.default_provider = config_manager.providers.default
         
         self._initialized = False
     
@@ -70,7 +72,7 @@ class ProviderManager:
             if available:
                 self.default_provider = available[0]
                 logger.warning(
-                    f"預設 Provider '{self.config_manager.providers.default}' 不可用，"
+                    f"預設 Provider '{config_manager.providers.default}' 不可用，"
                     f"使用 '{self.default_provider}' 作為預設"
                 )
             else:
@@ -82,12 +84,12 @@ class ProviderManager:
     async def _initialize_enabled_providers(self):
         """初始化所有已啟用的 Providers"""
         # Whisper Provider
-        if self.config_manager.providers.whisper.enabled:
+        if config_manager.providers.whisper.enabled:
             # 檢查是否啟用池化
             # yaml2py 會處理 pool 的存在性，如果 YAML 中有定義 pool，就會有該屬性
-            if hasattr(self.config_manager.providers.whisper, 'pool') and \
-               self.config_manager.providers.whisper.pool.enabled:
-                await self._create_provider_pool("whisper", self.config_manager.providers.whisper.pool)
+            if hasattr(config_manager.providers.whisper, 'pool') and \
+               config_manager.providers.whisper.pool.enabled:
+                await self._create_provider_pool("whisper", config_manager.providers.whisper.pool)
             else:
                 await self._create_provider("whisper")
         

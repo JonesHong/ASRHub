@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
 from src.utils.logger import logger
-from src.models.audio import AudioChunk, AudioFormat
+from src.audio import AudioChunk, AudioFormat
 from src.models.transcript import TranscriptSegment, TranscriptResult
 from src.core.exceptions import APIError, ValidationError
 
@@ -292,7 +292,7 @@ class AudioRequestHandler:
         
         audio_format = format_map.get(params["format"], AudioFormat.PCM)
         
-        from src.models.audio import AudioEncoding
+        from src.audio import AudioEncoding
         
         # 根據格式決定編碼（所有格式都可以使用 LINEAR16）
         encoding = AudioEncoding.LINEAR16

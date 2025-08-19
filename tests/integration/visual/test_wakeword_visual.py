@@ -18,14 +18,14 @@ import time
 # 添加 src 到路徑以便導入模組
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../..'))
 
-from src.pipeline.operators.wakeword import OpenWakeWordOperator
+from src.operators.wakeword import OpenWakeWordOperator
 from src.core.system_listener import SystemListener
 from src.store import get_global_store
 from src.store.sessions import sessions_actions
 from src.utils.logger import logger
 from src.config.manager import ConfigManager
 from src.utils.visualization import WakeWordVisualization
-from pystorex.middleware import LoggerMiddleware
+# from pystorex.middleware import LoggerMiddleware
 from src.store.sessions.sessions_selectors import (
     get_session
 )
@@ -90,11 +90,11 @@ class WakeWordIntegrationTester:
             # 初始化 Store 並啟用 LoggerMiddleware
             self.store = get_global_store()
             
-            # 應用 LoggerMiddleware 進行調試（如果尚未應用）
-            if not hasattr(self.store, '_logger_middleware_applied'):
-                self.store.apply_middleware(LoggerMiddleware)
-                self.store._logger_middleware_applied = True
-                logger.info("✓ LoggerMiddleware 已啟用")
+            # # 應用 LoggerMiddleware 進行調試（如果尚未應用）
+            # if not hasattr(self.store, '_logger_middleware_applied'):
+            #     self.store.apply_middleware(LoggerMiddleware)
+            #     self.store._logger_middleware_applied = True
+            #     logger.info("✓ LoggerMiddleware 已啟用")
             
             # 設置狀態監控訂閱
             self._setup_state_monitoring()

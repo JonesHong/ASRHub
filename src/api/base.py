@@ -6,11 +6,14 @@ ASR Hub API 基礎類別
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, AsyncGenerator
 from src.utils.logger import logger
-# from src.core.session_manager import SessionManager  # DEPRECATED
 from src.store import get_global_store
 from src.store.sessions.sessions_selectors import session_exists, get_session
 from src.core.exceptions import APIError
 from src.config.manager import ConfigManager
+
+# 模組級變數
+config_manager = ConfigManager()
+store = get_global_store()
 
 
 class APIResponse:
@@ -53,15 +56,10 @@ class APIBase(ABC):
     所有 API 實作（HTTP SSE、WebSocket、gRPC 等）都需要繼承此類別
     """
     
-    def __init__(self, store=None):
+    def __init__(self):
         """
         初始化 API
-        
-        Args:
-            store: PyStoreX store 實例
         """
-        self.config_manager = ConfigManager()
-        self.store = store or get_global_store()
         self._running = False
     
     @abstractmethod
@@ -139,7 +137,7 @@ class APIBase(ABC):
             是否有效
         """
         # 使用 selector 檢查 session 是否存在
-        state = self.store.get_state() if self.store else None
+        state = store.get_state() if store else None
         return session_exists(session_id)(state) if state else False
     
     def create_error_response(self, error_msg: str, session_id: Optional[str] = None) -> APIResponse:
@@ -189,7 +187,7 @@ class APIBase(ABC):
         Raises:
             APIError: 如果參數無效或缺少必要參數
         """
-        from src.models.audio import AudioFormat, AudioEncoding
+        from src.audio import AudioContainerFormat, AudioEncoding
         
         if not params:
             raise APIError("缺少音訊參數")
@@ -216,9 +214,9 @@ class APIBase(ABC):
         
         # 驗證 format
         try:
-            validated["format"] = AudioFormat(params["format"])
+            validated["format"] = AudioContainerFormat(params["format"])
         except ValueError:
-            valid_formats = [f.value for f in AudioFormat]
+            valid_formats = [f.value for f in AudioContainerFormat]
             raise APIError(f"不支援的音訊格式：{params['format']}，支援的格式：{valid_formats}")
         
         # 驗證 encoding

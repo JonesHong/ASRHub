@@ -99,6 +99,7 @@ class SessionAudioQueue:
         self.queue = asyncio.Queue(maxsize=max_queue_size)
         self.pre_buffer = AudioBuffer(max_size_seconds=5.0)  # 5秒 pre-recording
         self.recording_buffer = []  # 當前錄音緩衝
+        self.wake_word_window = AudioBuffer(max_size_seconds=3.0)  # 3秒喚醒詞窗口
         self.is_recording = False
         self.created_at = datetime.now()
         self.last_activity = datetime.now()
@@ -121,6 +122,9 @@ class SessionAudioQueue:
         
         # 總是推送到 pre-buffer（環形緩衝）
         self.pre_buffer.push(audio_chunk, timestamp)
+        
+        # 推送到喚醒詞窗口（環形緩衝）
+        self.wake_word_window.push(audio_chunk, timestamp)
         
         # 如果正在錄音，也推送到錄音緩衝
         if self.is_recording:
@@ -182,6 +186,15 @@ class SessionAudioQueue:
         logger.info(f"Stopped recording for session {self.session_id}, captured {len(recording_data)} bytes")
         return recording_data
     
+    def get_wake_word_audio(self) -> bytes:
+        """
+        獲取喚醒詞檢測窗口的音訊
+        
+        Returns:
+            最近3秒的音訊數據
+        """
+        return self.wake_word_window.get_recent(3.0)
+    
     def get_stats(self) -> Dict:
         """獲取統計資訊"""
         return {
@@ -190,6 +203,7 @@ class SessionAudioQueue:
             "total_bytes": self.total_bytes,
             "queue_size": self.queue.qsize(),
             "pre_buffer_seconds": self.pre_buffer.size_seconds(),
+            "wake_word_window_seconds": self.wake_word_window.size_seconds(),
             "is_recording": self.is_recording,
             "recording_buffer_size": sum(len(chunk) for chunk in self.recording_buffer),
             "created_at": self.created_at.isoformat(),

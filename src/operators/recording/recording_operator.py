@@ -12,9 +12,19 @@ import wave
 import numpy as np
 from datetime import datetime
 
-from src.pipeline.operators.base import OperatorBase
+from src.operators.base import OperatorBase
 from src.core.exceptions import PipelineError
 from src.utils.logger import logger
+
+# 模組級變數 - 直接導入和實例化
+from src.config.manager import ConfigManager
+from src.store import get_global_store
+from src.core.audio_queue_manager import get_audio_queue_manager
+from src.core.timer_manager import timer_manager
+
+config_manager = ConfigManager()
+store = get_global_store()
+audio_queue_manager = get_audio_queue_manager()
 
 
 
@@ -22,11 +32,14 @@ class RecordingOperator(OperatorBase):
     """音訊錄製和緩衝管理"""
     
     def __init__(self):
+        """
+        初始化 Recording Operator
+        使用模組級變數提供統一的依賴項
+        """
         super().__init__()
         
-        # 從 ConfigManager 獲取配置
-        from src.config.manager import ConfigManager
-        config_manager = ConfigManager()
+        # 使用模組級全域實例（繼承自 OperatorBase）
+        # self.config_manager, self.store, self.audio_queue_manager 已在基類中設定
         
         self.buffer = io.BytesIO()
         self.is_recording = False
@@ -35,7 +48,7 @@ class RecordingOperator(OperatorBase):
         # 嘗試從配置中獲取設定，使用 yaml2py 正確方式
         try:
             # 直接存取屬性，讓 yaml2py 處理預設值
-            recording_config = config_manager.pipeline.operators.recording
+            recording_config = self.config_manager.pipeline.operators.recording
             
             self.max_duration = recording_config.max_duration
             self.format = recording_config.format
@@ -82,9 +95,8 @@ class RecordingOperator(OperatorBase):
         # 固定設定
         self.sample_width = 2  # 16-bit
         
-        # VAD 控制相關狀態
-        self.countdown_timer = None
-        self.is_countdown_active = False
+        # VAD 控制相關狀態 (使用 TimerManager 取代本地計時器)
+        # 移除本地計時器，改由 TimerManager 統一管理
         
         # 分段相關狀態
         self.current_segment = 0
@@ -151,7 +163,13 @@ class RecordingOperator(OperatorBase):
         if not self.validate_audio_params(audio_data):
             return None
         
+        # 獲取 session_id
+        session_id = kwargs.get('session_id', self.recording_session_id)
+        
         try:
+            # 如果有 AudioQueueManager，音訊會自動進入佇列
+            # 這裡我們只處理錄音邏輯
+            
             # 如果正在錄音，將音訊加入緩衝區
             if self.is_recording:
                 self.buffer.write(audio_data)
@@ -202,13 +220,38 @@ class RecordingOperator(OperatorBase):
         self.current_segment = 0
         self.segments = []
         
-        # 如果有預語音緩衝，先寫入
-        if self.pre_speech_buffer_duration > 0:
-            pre_buffer_data = self.pre_speech_buffer.getvalue()
-            if pre_buffer_data:
-                self.buffer.write(pre_buffer_data)
-                self.total_bytes_recorded += len(pre_buffer_data)
-                logger.debug(f"已加入預語音緩衝: {len(pre_buffer_data)} bytes")
+        # 如果有 AudioQueueManager，獲取 pre-recording
+        if self.audio_queue_manager and session_id:
+            try:
+                # 檢查佇列是否存在
+                if session_id in self.audio_queue_manager.queues:
+                    queue = self.audio_queue_manager.queues[session_id]
+                    # 獲取 pre-recording（例如最後 0.5 秒）
+                    pre_recording = queue.get_pre_recording(seconds=self.pre_speech_buffer_duration)
+                    if pre_recording:
+                        self.buffer.write(pre_recording)
+                        self.total_bytes_recorded += len(pre_recording)
+                        logger.debug(f"從 AudioQueueManager 獲取 pre-recording: {len(pre_recording)} bytes")
+                    # 開始佇列錄音
+                    await queue.start_recording()
+            except Exception as e:
+                logger.warning(f"無法從 AudioQueueManager 獲取 pre-recording: {e}")
+        else:
+            # 如果沒有 AudioQueueManager，使用本地預語音緩衝
+            if self.pre_speech_buffer_duration > 0:
+                pre_buffer_data = self.pre_speech_buffer.getvalue()
+                if pre_buffer_data:
+                    self.buffer.write(pre_buffer_data)
+                    self.total_bytes_recorded += len(pre_buffer_data)
+                    logger.debug(f"已加入本地預語音緩衝: {len(pre_buffer_data)} bytes")
+        
+        # 優先使用 Store dispatch，否則保持原有邏輯
+        if self.store:
+            from src.store.sessions.sessions_actions import recording_started
+            self.store.dispatch(recording_started(
+                session_id=self.recording_session_id,
+                timestamp=self.start_time
+            ))
     
     async def stop_recording(self, session_id: str = None) -> bytes:
         """
@@ -235,6 +278,18 @@ class RecordingOperator(OperatorBase):
         self.is_recording = False
         duration = time.time() - self.start_time if self.start_time else 0
         
+        # 如果有 AudioQueueManager，停止佇列錄音
+        if self.audio_queue_manager and self.recording_session_id:
+            try:
+                if self.recording_session_id in self.audio_queue_manager.queues:
+                    queue = self.audio_queue_manager.queues[self.recording_session_id]
+                    queue_recording = await queue.stop_recording()
+                    if queue_recording:
+                        # 合併佇列錄音與本地緩衝
+                        logger.debug(f"從 AudioQueueManager 獲取錄音: {len(queue_recording)} bytes")
+            except Exception as e:
+                logger.warning(f"無法從 AudioQueueManager 停止錄音: {e}")
+        
         # 獲取錄製的音訊
         audio_data = self.buffer.getvalue()
         
@@ -243,8 +298,17 @@ class RecordingOperator(OperatorBase):
             file_path = await self._save_recording(audio_data)
             logger.info(f"錄音完成: 時長 {duration:.2f}s, 大小 {len(audio_data)} bytes")
             
-            # 觸發完成回調
-            if self.recording_complete_callback:
+            # 優先使用 Store dispatch
+            if self.store:
+                from src.store.sessions.sessions_actions import recording_stopped
+                self.store.dispatch(recording_stopped(
+                    session_id=self.recording_session_id,
+                    duration=duration,
+                    audio_data=audio_data,
+                    reason="manual_stop"
+                ))
+            elif self.recording_complete_callback:
+                # 保留回呼介面（向後相容）
                 await self.recording_complete_callback({
                     'session_id': self.recording_session_id,
                     'duration': duration,
@@ -258,10 +322,7 @@ class RecordingOperator(OperatorBase):
         self.start_time = None
         self.recording_session_id = None
         
-        # 取消倒數計時器
-        if self.countdown_timer and not self.countdown_timer.done():
-            self.countdown_timer.cancel()
-            self.is_countdown_active = False
+        # TimerManager 會自動管理計時器，不需要手動取消
         
         return audio_data
     
@@ -305,37 +366,37 @@ class RecordingOperator(OperatorBase):
         if not self.vad_controlled or not self.is_recording:
             return
         
+        # 使用 TimerManager 管理的 timer
+        timer = timer_manager.get_timer(self.recording_session_id)
+        if not timer:
+            logger.warning(f"No timer found for session: {self.recording_session_id}")
+            return
+        
         if vad_result.get('speech_detected', False):
-            # 檢測到語音，取消倒數計時
-            await self._cancel_countdown()
+            # 檢測到語音，通知 timer
+            await timer.on_speech_detected()
+            
+            # 如果有 Store，dispatch 事件
+            if self.store:
+                from src.store.sessions.sessions_actions import countdown_cancelled
+                self.store.dispatch(countdown_cancelled(
+                    session_id=self.recording_session_id,
+                    reason="speech_detected"
+                ))
         else:
-            # 檢測到靜音，開始或繼續倒數
-            await self._start_countdown()
+            # 檢測到靜音，通知 timer
+            await timer.on_silence_detected()
+            
+            # 如果有 Store，dispatch 事件
+            if self.store:
+                from src.store.sessions.sessions_actions import countdown_started
+                self.store.dispatch(countdown_started(
+                    session_id=self.recording_session_id,
+                    duration=self.silence_countdown_duration
+                ))
     
-    async def _start_countdown(self):
-        """開始靜音倒數計時"""
-        if not self.is_countdown_active:
-            self.is_countdown_active = True
-            self.countdown_timer = asyncio.create_task(self._countdown_task())
-            logger.debug(f"開始靜音倒數計時 ({self.silence_countdown_duration}s)")
-    
-    async def _countdown_task(self):
-        """倒數計時任務"""
-        try:
-            await asyncio.sleep(self.silence_countdown_duration)
-            # 倒數結束，停止錄音
-            await self.stop_recording()
-            logger.info(f"靜音 {self.silence_countdown_duration}s，自動停止錄音")
-        except asyncio.CancelledError:
-            # 倒數被取消（檢測到語音）
-            logger.debug("倒數計時被取消")
-    
-    async def _cancel_countdown(self):
-        """取消倒數計時"""
-        if self.countdown_timer and not self.countdown_timer.done():
-            self.countdown_timer.cancel()
-            self.is_countdown_active = False
-            logger.debug("取消倒數計時")
+    # 移除本地倒數計時方法，改由 TimerManager 統一管理
+    # _start_countdown, _countdown_task, _cancel_countdown 已移至 TimerService
     
     def _update_pre_speech_buffer(self, audio_data: bytes):
         """更新預語音緩衝區"""
@@ -443,6 +504,52 @@ class RecordingOperator(OperatorBase):
         self.recording_complete_callback = recording_complete_callback
         self.segment_complete_callback = segment_complete_callback
     
+    async def process_from_queue(self, session_id: str):
+        """
+        從 AudioQueueManager 處理音訊（串流模式）
+        
+        Args:
+            session_id: Session ID
+        """
+        if not self.audio_queue_manager:
+            logger.warning("RecordingOperator: No AudioQueueManager configured")
+            return
+        
+        logger.info(f"RecordingOperator: Starting queue processing for session {session_id}")
+        
+        # 確保佇列存在
+        if session_id not in self.audio_queue_manager.queues:
+            await self.audio_queue_manager.create_queue(session_id)
+        
+        # 開始錄音
+        await self.start_recording(session_id)
+        
+        try:
+            while self.is_recording and self.enabled:
+                try:
+                    # 從佇列拉取音訊
+                    audio_data = await self.audio_queue_manager.pull(session_id, timeout=0.1)
+                    
+                    if audio_data:
+                        # 處理音訊
+                        await self.process(audio_data, session_id=session_id)
+                    else:
+                        # 沒有音訊時短暫等待
+                        await asyncio.sleep(0.01)
+                        
+                except asyncio.TimeoutError:
+                    # 超時是正常的，繼續等待
+                    continue
+                except Exception as e:
+                    logger.error(f"RecordingOperator queue processing error: {e}")
+                    break
+                    
+        finally:
+            # 停止錄音
+            if self.is_recording:
+                await self.stop_recording(session_id)
+            logger.info(f"RecordingOperator: Stopped queue processing for session {session_id}")
+    
     def get_recording_info(self) -> Dict[str, Any]:
         """
         獲取當前錄音資訊
@@ -457,7 +564,6 @@ class RecordingOperator(OperatorBase):
             'bytes_recorded': self.total_bytes_recorded,
             'current_segment': self.current_segment,
             'segments_count': len(self.segments),
-            'countdown_active': self.is_countdown_active,
             'storage_type': self.storage_type
         }
         

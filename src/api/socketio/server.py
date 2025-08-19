@@ -13,14 +13,12 @@ from datetime import datetime
 
 from src.api.base import APIBase, APIResponse
 from src.utils.logger import logger
-# from src.core.session_manager import SessionManager  # DEPRECATED
 from src.store import get_global_store
 from src.store.sessions import sessions_actions, sessions_selectors
 from src.core.exceptions import APIError
 from src.api.socketio.stream_manager import SocketIOStreamManager
-from src.pipeline.manager import PipelineManager
 from src.providers.manager import ProviderManager
-from src.models.audio import AudioChunk, AudioFormat
+from src.audio import AudioChunk, AudioContainerFormat
 from src.config.manager import ConfigManager
 
 
@@ -30,25 +28,21 @@ class SocketIOServer(APIBase):
     支援事件驅動通訊、房間管理和廣播功能
     """
     
-    def __init__(self, store=None,
-                 pipeline_manager: Optional[PipelineManager] = None,
-                 provider_manager: Optional[ProviderManager] = None):
+    def __init__(self, provider_manager: Optional[ProviderManager] = None):
         """
         初始化 Socket.io 服務器
         使用 ConfigManager 獲取配置
         
         Args:
-            store: PyStoreX store 實例
-            pipeline_manager: Pipeline 管理器
             provider_manager: Provider 管理器
         """
-        # 傳遞 store 給父類
-        super().__init__(store)
+        # 初始化父類
+        super().__init__()
         
         # 從 ConfigManager 獲取配置
-        sio_config = self.config_manager.api.socketio
+        config_manager = ConfigManager()
+        sio_config = config_manager.api.socketio
         
-        self.pipeline_manager = pipeline_manager
         self.provider_manager = provider_manager
         self.host = sio_config.host
         self.port = sio_config.port
@@ -267,7 +261,8 @@ class SocketIOServer(APIBase):
             response = await self.handle_control_command(
                 command=command,
                 session_id=connection.session_id,
-                params=params
+                params=params,
+                connection=connection
             )
             
             # 發送回應
@@ -343,15 +338,15 @@ class SocketIOServer(APIBase):
                 asyncio.create_task(self._process_audio_stream(connection))
                 
             # 創建 AudioChunk（包含完整的音訊元數據）
-            from src.models.audio_factory import AudioChunkFactory
+            from src.audio.processor import AudioProcessor
             
             # 從 stream_manager 獲取已驗證的參數
             stream_info = self.stream_manager.get_stream_info(connection.session_id)
             if stream_info and stream_info.get('audio_params'):
                 params = stream_info['audio_params']
                 
-                # 使用工廠創建 AudioChunk
-                audio_chunk = AudioChunkFactory.create_from_validated_params(
+                # 使用處理器創建 AudioChunk
+                audio_chunk = AudioProcessor.create_audio_chunk_from_params(
                     audio_data=audio_bytes,
                     params=params,
                     source_type="socketio"
@@ -656,8 +651,8 @@ class SocketIOServer(APIBase):
                 # 先將 WebM 轉換為 PCM
                 logger.info("開始轉換 WebM 音訊到 PCM 格式")
                 try:
-                    from src.utils.audio_converter import convert_webm_to_pcm
-                    pcm_data = convert_webm_to_pcm(audio_data)
+                    from src.audio.converter import AudioConverter
+                    pcm_data = AudioConverter.convert_webm_to_pcm(audio_data)
                     logger.info(f"音訊轉換成功: {len(audio_data)} bytes WebM -> {len(pcm_data)} bytes PCM")
                 except Exception as e:
                     logger.error(f"音訊轉換失敗: {e}")
@@ -675,26 +670,18 @@ class SocketIOServer(APIBase):
                     return
                 
                 # 建立 AudioChunk 物件
-                from src.models.audio import AudioChunk, AudioFormat, AudioEncoding
+                from src.audio import AudioChunk, AudioContainerFormat, AudioEncoding
                 audio = AudioChunk(
                     data=pcm_data,
                     sample_rate=self.config_manager.pipeline.default_sample_rate,  # 從配置讀取
                     channels=self.config_manager.pipeline.channels,               # 從配置讀取
-                    format=AudioFormat.PCM,  # 轉換後的格式
+                    format=AudioContainerFormat.PCM,  # 轉換後的格式
                     encoding=AudioEncoding.LINEAR16,  # PCM 使用 LINEAR16 編碼
                     bits_per_sample=16  # 16 位元深度
                 )
                 
-                # 透過 Pipeline 處理音訊（如果有）
+                # Pipeline 功能已移除，直接使用 pcm_data
                 processed_audio_data = pcm_data
-                if self.pipeline_manager:
-                    # 獲取預設 pipeline
-                    pipeline = self.pipeline_manager.get_pipeline("default")
-                    if pipeline:
-                        # 處理音訊
-                        processed_result = await pipeline.process(audio.data)
-                        if processed_result:
-                            processed_audio_data = processed_result
                 
                 # 使用 ProviderManager 的 transcribe 方法（支援池化）
                 provider_name = self.provider_manager.default_provider
@@ -751,7 +738,8 @@ class SocketIOServer(APIBase):
     async def handle_control_command(self, 
                                    command: str, 
                                    session_id: str, 
-                                   params: Optional[Dict[str, Any]] = None) -> APIResponse:
+                                   params: Optional[Dict[str, Any]] = None,
+                                   connection: Optional['SocketIOConnection'] = None) -> APIResponse:
         """
         處理控制指令
         
@@ -770,9 +758,26 @@ class SocketIOServer(APIBase):
             
             if command == "start":
                 if not session:
-                    # 使用 Store dispatch 創建 session
+                    # 使用 Store dispatch 創建 session (不傳遞 audio_format)
                     self.store.dispatch(sessions_actions.create_session(session_id))
-                self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
+                
+                # 檢查是否有音訊配置
+                audio_format = None
+                # 從參數或連線取得音訊格式
+                if params and "audio_format" in params:
+                    audio_format = params["audio_format"]
+                elif connection and hasattr(connection, 'audio_config') and connection.audio_config:
+                    # 從連線的 audio_config 轉換為 audio_format
+                    audio_format = {
+                        "sample_rate": connection.audio_config["sample_rate"],
+                        "channels": connection.audio_config["channels"],
+                        "encoding": connection.audio_config["encoding"].value if hasattr(connection.audio_config["encoding"], 'value') else connection.audio_config["encoding"],
+                        "bits_per_sample": connection.audio_config["bits_per_sample"]
+                    }
+                
+                # 使用 start_listening action 傳遞 audio_format
+                self.store.dispatch(sessions_actions.start_listening(session_id, audio_format))
+                
                 return self.create_success_response(
                     {"status": "started", "session_id": session_id},
                     session_id

@@ -15,9 +15,8 @@ from typing import Dict, Any, Optional
 # 添加 src 到路徑
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from src.pipeline.operators.wakeword import OpenWakeWordOperator
+from src.operators.wakeword import OpenWakeWordOperator
 from src.core.system_listener import SystemListener
-# from src.core.session_manager import SessionManager  # DEPRECATED
 from src.utils.logger import logger
 
 
@@ -38,7 +37,6 @@ class WakeWordMonitor:
         # 組件
         self.wakeword_operator = None
         self.system_listener = None
-        # self.session_manager = None  # DEPRECATED - no longer needed
         
         # 統計
         self.stats = {
@@ -57,8 +55,6 @@ class WakeWordMonitor:
         print("🚀 啟動喚醒詞監控器...")
         
         try:
-            # 初始化組件
-            # self.session_manager = SessionManager()  # DEPRECATED - no longer needed
             
             # 初始化喚醒詞偵測器
             self.wakeword_operator = OpenWakeWordOperator()

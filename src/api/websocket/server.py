@@ -13,15 +13,13 @@ from datetime import datetime
 
 from src.api.base import APIBase, APIResponse
 from src.utils.logger import logger
-# from src.core.session_manager import SessionManager  # DEPRECATED
 from src.store import get_global_store
 from src.store.sessions import sessions_actions, sessions_selectors
 from src.core.exceptions import APIError
 from src.api.websocket.stream_manager import WebSocketStreamManager
-from src.pipeline.manager import PipelineManager
 from src.providers.manager import ProviderManager
-from src.models.audio import AudioChunk, AudioFormat
-from src.utils.audio_converter import convert_webm_to_pcm
+from src.audio import AudioChunk, AudioContainerFormat
+from src.audio.converter import AudioConverter
 from src.config.manager import ConfigManager
 
 
@@ -31,30 +29,26 @@ class WebSocketServer(APIBase):
     支援即時雙向通訊和音訊串流處理
     """
     
-    def __init__(self, store=None,
-                 pipeline_manager: Optional[PipelineManager] = None,
-                 provider_manager: Optional[ProviderManager] = None):
+    def __init__(self, provider_manager: Optional[ProviderManager] = None):
         """
         初始化 WebSocket 服務器
         使用 ConfigManager 獲取配置
         
         Args:
-            store: PyStoreX store 實例
-            pipeline_manager: Pipeline 管理器
             provider_manager: Provider 管理器
         """
-        # 傳遞 store 給父類
-        super().__init__(store)
+        # 初始化父類
+        super().__init__()
         
         # 從 ConfigManager 獲取配置
-        ws_config = self.config_manager.api.websocket
+        config_manager = ConfigManager()
+        ws_config = config_manager.api.websocket
         
         self.host = ws_config.host
         self.port = ws_config.port
         self.server = None
         self.connections: Dict[str, WebSocketConnection] = {}
         self.stream_manager = WebSocketStreamManager()
-        self.pipeline_manager = pipeline_manager
         self.provider_manager = provider_manager
         
     async def start(self):
@@ -202,7 +196,8 @@ class WebSocketServer(APIBase):
         response = await self.handle_control_command(
             command=command,
             session_id=connection.session_id,
-            params=params
+            params=params,
+            connection=connection
         )
         
         # 使用 MessageBuilder 建立回應
@@ -311,7 +306,8 @@ class WebSocketServer(APIBase):
     async def handle_control_command(self, 
                                    command: str, 
                                    session_id: str, 
-                                   params: Optional[Dict[str, Any]] = None) -> APIResponse:
+                                   params: Optional[Dict[str, Any]] = None,
+                                   connection: Optional['WebSocketConnection'] = None) -> APIResponse:
         """
         處理控制指令
         
@@ -330,9 +326,26 @@ class WebSocketServer(APIBase):
             
             if command == "start":
                 if not session:
-                    # 使用 Store dispatch 創建 session
+                    # 使用 Store dispatch 創建 session (不傳遞 audio_format)
                     self.store.dispatch(sessions_actions.create_session(session_id))
-                self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
+                
+                # 檢查是否有音訊配置
+                audio_format = None
+                # 從參數或連線取得音訊格式
+                if params and "audio_format" in params:
+                    audio_format = params["audio_format"]
+                elif connection and hasattr(connection, 'audio_config') and connection.audio_config:
+                    # 從連線的 audio_config 轉換為 audio_format
+                    audio_format = {
+                        "sample_rate": connection.audio_config["sample_rate"],
+                        "channels": connection.audio_config["channels"],
+                        "encoding": connection.audio_config["encoding"].value if hasattr(connection.audio_config["encoding"], 'value') else connection.audio_config["encoding"],
+                        "bits_per_sample": connection.audio_config["bits_per_sample"]
+                    }
+                
+                # 使用 start_listening action 傳遞 audio_format
+                self.store.dispatch(sessions_actions.start_listening(session_id, audio_format))
+                
                 return self.create_success_response(
                     {"status": "started", "session_id": session_id},
                     session_id
@@ -639,7 +652,7 @@ class WebSocketServer(APIBase):
                 # 先將 WebM 轉換為 PCM
                 logger.info("開始轉換 WebM 音訊到 PCM 格式")
                 try:
-                    pcm_data = convert_webm_to_pcm(audio_data)
+                    pcm_data = AudioConverter.convert_webm_to_pcm(audio_data)
                     logger.info(f"音訊轉換成功: {len(audio_data)} bytes WebM -> {len(pcm_data)} bytes PCM")
                 except Exception as e:
                     logger.error(f"音訊轉換失敗: {e}")
@@ -661,19 +674,13 @@ class WebSocketServer(APIBase):
                     data=pcm_data,
                     sample_rate=audio_config["sample_rate"],
                     channels=audio_config["channels"],
-                    format=AudioFormat.PCM,  # 轉換後的格式
+                    format=AudioContainerFormat.PCM,  # 轉換後的格式
                     encoding=audio_config["encoding"],
                     bits_per_sample=audio_config["bits_per_sample"]
                 )
                 
-                # 透過 Pipeline 處理音訊（如果有）
+                # Pipeline 功能已移除，直接使用 pcm_data
                 processed_audio_data = pcm_data
-                if self.pipeline_manager:
-                    # 獲取預設 pipeline
-                    pipeline = self.pipeline_manager.get_pipeline("default")
-                    if pipeline:
-                        # 處理音訊
-                        processed_audio_data = await pipeline.process(audio.data)
                 
                 # 使用 ProviderManager 的 transcribe 方法（支援池化）
                 provider_name = self.provider_manager.default_provider

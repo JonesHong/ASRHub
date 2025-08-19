@@ -15,11 +15,9 @@ warnings.filterwarnings('ignore',
 from src.config.manager import ConfigManager
 from src.utils.logger import logger
 from src.utils.logger import setup_global_exception_handler
-# from src.core.session_manager import SessionManager  # DEPRECATED
 from src.store import get_global_store, configure_global_store
 from src.store.sessions import sessions_actions
 from src.store.sessions.sessions_state import SessionState, FSMStateEnum
-from src.pipeline.manager import PipelineManager
 from src.providers.manager import ProviderManager
 from src.stream.stream_controller import StreamController
 from src.api.http_sse.server import SSEServer
@@ -60,7 +58,6 @@ class ASRHub:
         
         # 核心元件
         self.store = None  # PyStoreX store 取代 SessionManager
-        self.pipeline_manager = None
         self.provider_manager = None
         self.stream_controller = None
         self.api_servers = {}
@@ -160,27 +157,23 @@ class ASRHub:
         logger.info("開始初始化子系統...")
         
         try:
-            # 初始化 PyStoreX Store (取代 SessionManager)
-            logger.debug("初始化 PyStoreX Store...")
-            self.store = configure_global_store(            )
-            # TODO: 配置 store 的 max_sessions 和其他參數
-            
-            # 初始化 Pipeline Manager
-            logger.debug("初始化 Pipeline Manager...")
-            self.pipeline_manager = PipelineManager()
-            await self.pipeline_manager.initialize()
-            
             # 初始化 Provider Manager
             logger.debug("初始化 Provider Manager...")
             self.provider_manager = ProviderManager()
             await self.provider_manager.initialize()
             
+            # 然後初始化 PyStoreX Store，傳入管理器
+            logger.debug("初始化 PyStoreX Store...")
+            from src.store.initialize import initialize_asr_hub_store
+            self.store = await initialize_asr_hub_store(
+                provider_manager=self.provider_manager,
+                max_sessions=1000  # TODO: 從配置讀取
+            )
+            
             # 初始化 Stream Controller
             logger.debug("初始化 Stream Controller...")
             self.stream_controller = StreamController(
-                self.store,  # 使用 PyStoreX store
-                self.pipeline_manager,
-                self.provider_manager
+                provider_manager=self.provider_manager
             )
             
             # 初始化 API Servers
@@ -198,24 +191,20 @@ class ASRHub:
         # HTTP SSE Server (always enabled)
         if True:  # SSE 總是啟用
             logger.debug("初始化 HTTP SSE Server...")
-            self.api_servers["http_sse"] = SSEServer(self.store, self.provider_manager, self.pipeline_manager)
+            self.api_servers["http_sse"] = SSEServer(provider_manager=self.provider_manager)
         
         # WebSocket Server
         if self.api_config.websocket.enabled:
             logger.debug("初始化 WebSocket Server...")
             self.api_servers["websocket"] = WebSocketServer(
-                self.store,  # 使用 PyStoreX store
-                self.pipeline_manager,
-                self.provider_manager
+                provider_manager=self.provider_manager
             )
         
         # Socket.IO Server
         if self.api_config.socketio.enabled:
             logger.debug("初始化 Socket.IO Server...")
             self.api_servers["socketio"] = SocketIOServer(
-                self.store,  # 使用 PyStoreX store
-                self.pipeline_manager,
-                self.provider_manager
+                provider_manager=self.provider_manager
             )
         
         # TODO: 初始化其他 API servers (gRPC, Redis)
@@ -267,8 +256,6 @@ class ASRHub:
             await self.stream_controller.cleanup()
         if self.provider_manager:
             await self.provider_manager.cleanup()
-        if self.pipeline_manager:
-            await self.pipeline_manager.cleanup()
         
         logger.success("ASR Hub 服務已停止")
     
@@ -280,6 +267,74 @@ class ASRHub:
                 await asyncio.sleep(1)
         except KeyboardInterrupt:
             pass
+    
+    async def process_audio(self, session_id: str, audio_data: bytes, timestamp: Optional[float] = None):
+        """
+        處理音訊數據的主要入口
+        
+        Args:
+            session_id: Session ID
+            audio_data: 音訊數據
+            timestamp: 時間戳記
+        """
+        if not self._initialized:
+            logger.error("ASRHub 尚未初始化")
+            return
+        
+        if timestamp is None:
+            import time
+            timestamp = time.time()
+        
+        # 透過 Store dispatch action 來處理音訊
+        self.store.dispatch(sessions_actions.audio_chunk_received(
+            session_id,
+            audio_data,
+            timestamp
+        ))
+    
+    async def create_session(self, session_id: str, mode: str = "non_streaming", client_info: Optional[Dict] = None):
+        """
+        創建新的 ASR session
+        
+        Args:
+            session_id: Session ID
+            mode: Session 模式 (batch, non_streaming, streaming)
+            client_info: 客戶端資訊
+        """
+        if not self._initialized:
+            logger.error("ASRHub 尚未初始化")
+            return
+        
+        from src.store.sessions.sessions_state import FSMStrategy
+        
+        # 轉換 mode 到 FSMStrategy
+        strategy_map = {
+            "batch": FSMStrategy.BATCH,
+            "non_streaming": FSMStrategy.NON_STREAMING, 
+            "streaming": FSMStrategy.STREAMING
+        }
+        strategy = strategy_map.get(mode, FSMStrategy.NON_STREAMING)
+        
+        # Dispatch create_session action
+        # create_session 只接受 session_id 和 strategy
+        self.store.dispatch(sessions_actions.create_session(
+            session_id,
+            strategy
+        ))
+    
+    async def destroy_session(self, session_id: str):
+        """
+        銷毀 ASR session
+        
+        Args:
+            session_id: Session ID
+        """
+        if not self._initialized:
+            logger.error("ASRHub 尚未初始化")
+            return
+        
+        # Dispatch destroy_session action
+        self.store.dispatch(sessions_actions.destroy_session(session_id))
     
     def get_status(self) -> Dict[str, Any]:
         """
