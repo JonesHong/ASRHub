@@ -134,10 +134,11 @@ class StreamController:
             # 儲存串流資訊
             self.active_streams[session_id] = stream_info
             
-            logger.info(
-                f"串流已啟動 - Session: {session_id}, "
-                f"Provider: {provider_name or 'default'}"
-            )
+            logger.block("Stream Started", [
+                f"Session: {session_id}",
+                f"Provider: {provider_name or self.provider_manager.default_provider}",
+                f"Config: {stream_info['config']}"
+            ])
             
             return {
                 "session_id": session_id,
@@ -348,11 +349,12 @@ class StreamController:
             # 清理串流資訊
             del self.active_streams[session_id]
             
-            logger.info(
-                f"串流已停止 - Session: {session_id}, "
-                f"持續時間: {duration:.2f}秒, "
-                f"片段數: {stream_info['segment_count']}"
-            )
+            logger.block("Stream Stopped", [
+                f"Session: {session_id}",
+                f"持續時間: {duration:.2f}秒",
+                f"片段數: {stream_info['segment_count']}",
+                f"轉譯結果數: {len(stream_info['transcription_results'])}"
+            ])
             
             return stats
             

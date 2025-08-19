@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASR Hub - 通訊協議測試</title>
+    <title>ASR Hub - 協議測試中心</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -38,7 +38,6 @@
             animation: recording 1.5s infinite;
         }
         
-        /* Placeholder text for results */
         #results:empty::before {
             content: attr(data-placeholder);
             color: #9ca3af;
@@ -48,17 +47,14 @@
             color: #6b7280;
         }
         
-        /* Disabled button styles for dark mode */
         .dark button:disabled {
             opacity: 0.5;
         }
         
-        /* Audio player dark mode styles */
         .dark audio {
             filter: invert(0.8);
         }
         
-        /* File info styling */
         #fileInfo.has-file {
             color: #059669;
             font-weight: 500;
@@ -68,7 +64,6 @@
             color: #10b981;
         }
         
-        /* Results content styling */
         #results.has-content {
             color: #1f2937;
         }
@@ -77,7 +72,7 @@
             color: #f3f4f6;
         }
         
-        /* Dynamic status colors using data attributes - with !important for priority */
+        /* Dynamic status colors using data attributes */
         .status-dynamic[data-status="ready"] {
             color: #4b5563 !important;
         }
@@ -126,6 +121,35 @@
         .dark .status-dynamic[data-status="connecting"] {
             color: #9ca3af !important;
         }
+        
+        /* Event flow visualization */
+        .event-flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 10px;
+            color: white;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        
+        .event-flow .event {
+            padding: 5px 10px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 5px;
+            white-space: nowrap;
+        }
+        
+        .event-flow .arrow {
+            font-size: 18px;
+        }
+        
+        .dark .event-flow {
+            background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+        }
     </style>
 </head>
 <body class="bg-gray-50 dark:bg-gray-900 min-h-screen transition-colors duration-300">
@@ -134,15 +158,35 @@
             <i class="fas fa-arrow-left mr-2"></i> 返回測試中心
         </a>
         
-        <h1 class="text-3xl font-bold text-gray-800 dark:text-gray-200 mb-8">通訊協議測試</h1>
+        <h1 class="text-3xl font-bold text-gray-800 dark:text-gray-200 mb-4">ASR Hub 協議測試中心</h1>
+        
+        <!-- Event Flow Visualization -->
+        <div class="event-flow">
+            <span class="event">upload_file</span>
+            <span class="arrow">→</span>
+            <span class="event">upload_file_done</span>
+            <span class="arrow">→</span>
+            <span class="event">transcription_done</span>
+        </div>
+        
+        <!-- Architecture Info -->
+        <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
+            <div class="flex items-start">
+                <i class="fas fa-info-circle text-blue-500 mt-1 mr-3"></i>
+                <div class="text-sm text-blue-800 dark:text-blue-200">
+                    <strong>純事件驅動架構</strong><br>
+                    此版本使用 PyStoreX 事件驅動架構，所有操作都通過 action 分發，由 SessionEffects 自動處理業務邏輯。
+                </div>
+            </div>
+        </div>
         
         <!-- Protocol Selector -->
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 mb-6">
             <label for="protocol" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">選擇通訊協議：</label>
             <select id="protocol" class="w-full md:w-auto px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200">
-                <option value="websocket">WebSocket</option>
-                <option value="socketio">Socket.io</option>
-                <option value="http_sse">HTTP API</option>
+                <option value="websocket">WebSocket (事件驅動)</option>
+                <option value="socketio">Socket.io (事件驅動)</option>
+                <option value="http_sse">HTTP SSE (事件驅動)</option>
             </select>
         </div>
 
@@ -201,7 +245,7 @@
         <!-- Logs Panel -->
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
             <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-3">
-                <i class="fas fa-terminal text-gray-600 dark:text-gray-400 mr-2"></i>連線日誌
+                <i class="fas fa-terminal text-gray-600 dark:text-gray-400 mr-2"></i>事件日誌
             </h3>
             <div id="logs" class="h-48 overflow-y-auto p-3 bg-gray-100 dark:bg-gray-900 rounded-lg text-sm font-mono text-gray-800 dark:text-gray-200"></div>
         </div>

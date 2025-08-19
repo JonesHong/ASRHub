@@ -108,9 +108,9 @@ class TranscriptResult:
     
     # 基本資訊
     text: str                                      # 完整轉譯文字
-    segments: List[TranscriptSegment]              # 轉譯片段列表
-    language: str                                  # 語言代碼
     confidence: float                              # 整體信心分數
+    language: str                                  # 語言代碼
+    segments: List[TranscriptSegment] = field(default_factory=list)  # 轉譯片段列表
     
     # 時間資訊
     start_time: float = 0.0                        # 開始時間
@@ -150,6 +150,42 @@ class TranscriptResult:
                     for seg in self.segments
                 )
                 self.confidence = weighted_confidence / total_duration
+    
+    @classmethod
+    def from_simple_result(cls, 
+                          text: str,
+                          confidence: float,
+                          language: Optional[str] = None,
+                          start_time: Optional[float] = None,
+                          end_time: Optional[float] = None,
+                          words: Optional[List[Dict]] = None,
+                          metadata: Optional[Dict] = None) -> 'TranscriptResult':
+        """
+        從簡單的轉譯結果創建完整的 TranscriptResult
+        用於兼容舊的 TranscriptionResult 接口
+        """
+        # 創建基本的轉譯片段
+        if text.strip():
+            segment = TranscriptSegment(
+                text=text,
+                start_time=start_time or 0.0,
+                end_time=end_time or 0.0,
+                confidence=confidence,
+                words=words
+            )
+            segments = [segment]
+        else:
+            segments = []
+        
+        return cls(
+            text=text,
+            confidence=confidence,
+            language=language or "unknown",
+            segments=segments,
+            start_time=start_time or 0.0,
+            end_time=end_time or 0.0,
+            metadata=metadata or {}
+        )
     
     def get_duration(self) -> float:
         """獲取轉譯涵蓋的時長"""

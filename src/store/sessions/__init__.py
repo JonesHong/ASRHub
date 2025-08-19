@@ -32,12 +32,16 @@ from .sessions_actions import (
     # 音訊處理
     audio_chunk_received,
     clear_audio_buffer,
+    audio_metadata,
     speech_detected,
-    silence_detected,
+    silence_started,
     
     # 錯誤處理
     session_error,
-    clear_session_error
+    clear_error,
+    
+    # 新增的純事件驅動 actions
+    clear_transcript
 )
 
 # Reducer
@@ -56,6 +60,7 @@ from .sessions_selectors import (
     get_active_session,
     get_session_fsm_state,
     get_session_transcription,
+    get_session_transcript,  # 新增的轉譯結果 selector
     get_session_error,
     get_session_audio_buffer_size,
     
@@ -112,9 +117,9 @@ __all__ = [
     "audio_chunk_received",
     "clear_audio_buffer",
     "speech_detected",
-    "silence_detected",
+    "silence_started",
     "session_error",
-    "clear_session_error",
+    "clear_error",
     
     # Reducer
     "sessions_reducer",
@@ -128,6 +133,7 @@ __all__ = [
     "get_active_session",
     "get_session_fsm_state",
     "get_session_transcription",
+    "get_session_transcript",
     "get_session_error",
     "get_session_audio_buffer_size",
     "get_active_sessions",

@@ -16,6 +16,9 @@ from src.utils.logger import logger
 from src.store import get_global_store
 from src.store.sessions import sessions_actions, sessions_selectors
 from src.core.exceptions import APIError
+
+# 模組級變數
+store = get_global_store()
 from src.api.socketio.stream_manager import SocketIOStreamManager
 from src.providers.manager import ProviderManager
 from src.audio import AudioChunk, AudioContainerFormat
@@ -67,6 +70,9 @@ class SocketIOServer(APIBase):
         # 串流管理器
         self.stream_manager = SocketIOStreamManager()
         
+        # 添加分塊序號追蹤 (用於批次上傳)
+        self.chunk_sequences: Dict[str, int] = {}
+        
         # 設定命名空間
         self.namespace = "/asr"
         
@@ -111,10 +117,15 @@ class SocketIOServer(APIBase):
             """處理 ping"""
             await self.sio.emit('pong', namespace=self.namespace, to=sid)
             
+        @self.sio.event(namespace=self.namespace)
+        async def action(sid, data):
+            """處理 PyStoreX action 事件"""
+            await self._handle_action_event(sid, data)
+            
     async def start(self):
         """啟動 Socket.io 服務器"""
         try:
-            self._running = True
+            logger.info(f"正在啟動 Socket.IO 服務器在 {self.host}:{self.port}...")
             
             # 建立 web runner
             self.runner = web.AppRunner(self.app)
@@ -124,10 +135,24 @@ class SocketIOServer(APIBase):
             self.site = web.TCPSite(self.runner, self.host, self.port)
             await self.site.start()
             
-            logger.info(f"Socket.io server started on {self.host}:{self.port}")
+            # 只有在成功啟動後才設置 _running
+            self._running = True
+            logger.success(f"✅ Socket.IO 服務器成功啟動在 {self.host}:{self.port}")
             
+            # 啟動 PyStoreX 事件監聽任務
+            asyncio.create_task(self._listen_store_events())
+            logger.debug("PyStoreX 事件監聽任務已啟動")
+            
+        except OSError as e:
+            if e.errno == 48:  # Address already in use
+                logger.error(f"❌ Port {self.port} 已被佔用，Socket.IO 服務器無法啟動")
+            else:
+                logger.error(f"❌ Socket.IO 服務器啟動失敗 (OSError): {e}")
+            self._running = False
+            raise
         except Exception as e:
-            logger.error(f"Failed to start Socket.io server: {e}")
+            logger.error(f"❌ Socket.IO 服務器啟動失敗: {e}")
+            self._running = False
             raise
             
     async def stop(self):
@@ -287,6 +312,121 @@ class SocketIOServer(APIBase):
             logger.error(f"Error handling control event: {e}")
             await self._emit_error(sid, str(e))
             
+    async def _handle_action_event(self, sid: str, data: Dict[str, Any]):
+        """
+        處理 PyStoreX action 事件
+        
+        Args:
+            sid: Socket ID
+            data: Action 資料
+        """
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            
+            # 取得 action 內容
+            action = data.get("action") if "action" in data else data
+            action_type = action.get("type")
+            payload = action.get("payload", {})
+            
+            logger.info(f"Socket.IO: Handling action {action_type}")
+            
+            # 處理不同的 action 類型
+            if action_type == "[Session] Create":
+                # 創建新的 session
+                session_id = payload.get("session_id") or str(uuid.uuid4())
+                connection.session_id = session_id
+                
+                # 獲取策略，支援 'batch' 或 FSMStrategy 枚舉值
+                strategy = payload.get("strategy", "non_streaming")
+                # 確保策略值符合後端期望的格式
+                if strategy == "batch":
+                    from src.store.sessions.sessions_state import FSMStrategy
+                    strategy = FSMStrategy.BATCH
+                elif strategy == "streaming":
+                    from src.store.sessions.sessions_state import FSMStrategy
+                    strategy = FSMStrategy.STREAMING
+                else:
+                    from src.store.sessions.sessions_state import FSMStrategy
+                    strategy = FSMStrategy.NON_STREAMING
+                
+                # 自動加入 session 房間
+                await self._join_session_room(sid, session_id)
+                
+                # 分發到 store，包含策略參數
+                store.dispatch(sessions_actions.create_session(session_id, strategy=strategy))
+                
+                # 發送確認
+                await self.sio.emit(
+                    'action',
+                    {
+                        'type': '[Session] Session Created',
+                        'payload': {'session_id': session_id},
+                        'timestamp': datetime.now().isoformat()
+                    },
+                    namespace=self.namespace,
+                    to=sid
+                )
+                
+            elif action_type == "[Session] Start Listening":
+                # 開始監聽
+                session_id = payload.get("session_id") or connection.session_id
+                if session_id:
+                    store.dispatch(sessions_actions.start_listening(session_id))
+                    await self._broadcast_status_to_room(session_id)
+                    
+            elif action_type == "[Session] Chunk Upload Start":
+                # 開始批次上傳
+                session_id = payload.get("session_id") or connection.session_id
+                if session_id:
+                    # 重置分塊序號
+                    self.chunk_sequences[session_id] = 0
+                    # 分發到 store
+                    store.dispatch(sessions_actions.chunk_upload_start(session_id))
+                    logger.info(f"Socket.IO: Started chunk upload for session {session_id}")
+                    
+            elif action_type == "[Session] Chunk Upload Done":
+                # 完成批次上傳，觸發轉譯
+                session_id = payload.get("session_id") or connection.session_id
+                if session_id:
+                    # 分發到 store，這會觸發 SessionEffects 處理
+                    store.dispatch(sessions_actions.chunk_upload_done(session_id))
+                    logger.info(f"Socket.IO: Completed chunk upload for session {session_id}, triggering transcription")
+                    
+                    # 發送確認
+                    await self.sio.emit(
+                        'action',
+                        {
+                            'type': '[Session] Processing',
+                            'payload': {'session_id': session_id},
+                            'timestamp': datetime.now().isoformat()
+                        },
+                        namespace=self.namespace,
+                        to=sid
+                    )
+                    
+            elif action_type == "[Session] Upload File":
+                # 舊的 upload file action（向後兼容）
+                session_id = payload.get("session_id") or connection.session_id
+                if session_id:
+                    store.dispatch(sessions_actions.upload_file(session_id))
+                    
+            elif action_type == "[Session] Upload File Done":
+                # 舊的 upload file done action（向後兼容）
+                session_id = payload.get("session_id") or connection.session_id
+                if session_id:
+                    store.dispatch(sessions_actions.upload_file_done(session_id))
+                    
+            else:
+                logger.warning(f"Unknown action type: {action_type}")
+                
+        except Exception as e:
+            logger.error(f"Error handling action event: {e}")
+            await self._emit_error(sid, str(e))
+    
     async def _handle_audio_chunk_event(self, sid: str, data: Dict[str, Any]):
         """
         處理音訊資料事件
@@ -302,15 +442,25 @@ class SocketIOServer(APIBase):
                 
             connection = self.connections[sid]
             
-            if not connection.session_id:
-                await self._emit_error(sid, "No active session")
+            # 允許從 data 中獲取 session_id (批次上傳模式)
+            session_id = data.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._emit_error(sid, "No session ID provided")
                 return
                 
+            # 更新 connection 的 session_id
+            if not connection.session_id:
+                connection.session_id = session_id
+                
             # 使用 selector 檢查 session 狀態
-            state = self.store.get_state() if self.store else None
-            session = sessions_selectors.get_session(connection.session_id)(state) if state else None
-            if not session or session.get("state", "IDLE") != "LISTENING":
-                await self._emit_error(sid, "Session not in LISTENING state")
+            state = store.state if store else None
+            session = sessions_selectors.get_session(session_id)(state) if state else None
+            
+            # 批次上傳模式不需要檢查 LISTENING 狀態
+            # 因為 chunk_upload_start 已經準備好接收資料
+            if not session:
+                await self._emit_error(sid, f"Session {session_id} not found")
                 return
                 
             # 處理音訊資料
@@ -324,42 +474,72 @@ class SocketIOServer(APIBase):
                 audio_bytes = audio_data
                 
             # 建立串流（如果不存在）
-            if connection.session_id not in self.stream_manager.stream_buffers:
-                # 檢查連線是否有音訊配置
-                if not hasattr(connection, 'audio_config') or connection.audio_config is None:
-                    logger.error(f"Socket.io 連線 {sid} 沒有音訊配置")
-                    await self._emit_error(sid, "缺少音訊參數")
-                    return
-                    
-                # 使用連線的音訊配置
-                self.stream_manager.create_stream(connection.session_id, connection.audio_config)
+            if session_id not in self.stream_manager.stream_buffers:
+                # 批次上傳模式：不需要音訊配置，使用預設值
+                # 音訊配置會在後續的 metadata 或實際處理時確定
+                default_audio_config = {
+                    "sample_rate": 16000,
+                    "channels": 1,
+                    "encoding": "linear16",  # 使用小寫以匹配 AudioEncoding 枚舉
+                    "bits_per_sample": 16
+                }
                 
-                # 啟動處理任務
-                asyncio.create_task(self._process_audio_stream(connection))
+                # 如果連線有音訊配置，使用它；否則使用預設值
+                audio_config = getattr(connection, 'audio_config', None) or default_audio_config
                 
-            # 創建 AudioChunk（包含完整的音訊元數據）
-            from src.audio.processor import AudioProcessor
+                # 使用音訊配置
+                self.stream_manager.create_stream(session_id, audio_config)
+                
+                # 批次上傳模式不啟動處理任務，等待 chunk_upload_done
+                # 只有在非批次模式才啟動處理任務
+                if not data.get("batch_mode", False):
+                    asyncio.create_task(self._process_audio_stream(connection))
+                
+            # 獲取 chunk_id（如果有的話）
+            chunk_id = data.get("chunk_id")
             
-            # 從 stream_manager 獲取已驗證的參數
-            stream_info = self.stream_manager.get_stream_info(connection.session_id)
-            if stream_info and stream_info.get('audio_params'):
-                params = stream_info['audio_params']
-                
-                # 使用處理器創建 AudioChunk
-                audio_chunk = AudioProcessor.create_audio_chunk_from_params(
-                    audio_data=audio_bytes,
-                    params=params,
-                    source_type="socketio"
-                )
-                
-                # 添加到串流（傳送 bytes，AudioChunk 僅用於驗證）
-                add_success = self.stream_manager.add_audio_chunk(connection.session_id, audio_bytes)
-            else:
-                # 向後相容：如果沒有參數，使用原始 bytes
-                add_success = self.stream_manager.add_audio_chunk(connection.session_id, audio_bytes)
+            # 驗證分塊序號 (類似 WebSocket 實現)
+            if chunk_id is not None:
+                if session_id not in self.chunk_sequences:
+                    self.chunk_sequences[session_id] = 0
+                expected_id = self.chunk_sequences.get(session_id, 0)
+                if chunk_id != expected_id:
+                    logger.warning(
+                        f"🚨 Chunk sequence mismatch for session {session_id}: "
+                        f"expected {expected_id}, got {chunk_id}. This may cause format detection issues."
+                    )
+                    # 更新期望序號以繼續處理（容錯機制）
+                    self.chunk_sequences[session_id] = chunk_id + 1
+                else:
+                    logger.info(f"Socket.IO: ✅ Chunk {chunk_id} received in correct order for session {session_id}")
+                    self.chunk_sequences[session_id] = chunk_id + 1
+            
+            # 直接添加音訊數據到串流管理器
+            # stream_manager 會在內部創建正確的 AudioChunk
+            add_success = self.stream_manager.add_audio_chunk(session_id, audio_bytes, chunk_id)
                 
             # 添加到串流
             if add_success:
+                # 批次上傳模式：同時推送到 AudioQueueManager
+                # 這樣 SessionEffects 在 chunk_upload_done 時才能獲取到數據
+                from src.core.audio_queue_manager import get_audio_queue_manager
+                audio_queue_manager = get_audio_queue_manager()
+                
+                # 確保 AudioQueueManager 有這個 session 的隊列
+                queue = audio_queue_manager.get_queue(session_id)
+                if not queue:
+                    await audio_queue_manager.create_queue(session_id)
+                    logger.debug(f"Created audio queue for session {session_id}")
+                
+                # 推送音訊數據到 AudioQueueManager
+                await audio_queue_manager.push(session_id, audio_bytes)
+                logger.debug(f"Pushed {len(audio_bytes)} bytes to AudioQueueManager for session {session_id}")
+                
+                # 分發 audio_chunk_received action (類似 WebSocket 實現)
+                chunk_size = len(audio_bytes)
+                store.dispatch(sessions_actions.audio_chunk_received(session_id, chunk_size))
+                logger.info(f"Socket.IO: 📦 Received audio chunk {chunk_id}, size={chunk_size} bytes, session={session_id}")
+                
                 # 發送確認
                 await self.sio.emit(
                     'audio_received',
@@ -373,7 +553,7 @@ class SocketIOServer(APIBase):
                 )
                 
                 # 檢查背壓
-                if self.stream_manager.implement_backpressure(connection.session_id):
+                if self.stream_manager.implement_backpressure(session_id):
                     await self.sio.emit(
                         'backpressure',
                         {'message': 'Audio buffer near capacity'},
@@ -416,14 +596,14 @@ class SocketIOServer(APIBase):
             )
             
             # 使用 selector 發送當前狀態
-            state = self.store.get_state() if self.store else None
+            state = store.state if store else None
             session = sessions_selectors.get_session(session_id)(state) if state else None
             if session:
                 await self.sio.emit(
                     'status_update',
                     {
                         'session_id': session_id,
-                        'state': session.get("state", "IDLE"),
+                        'state': session.get("fsm_state", "IDLE"),  # 修復字段名稱不匹配
                         'timestamp': datetime.now().isoformat()
                     },
                     namespace=self.namespace,
@@ -509,6 +689,148 @@ class SocketIOServer(APIBase):
             
         logger.info(f"Socket {sid} left room {room_name}")
         
+    async def _listen_store_events(self):
+        """
+        監聽 PyStoreX store 事件
+        """
+        if not store:
+            logger.warning("No store available for event listening")
+            return
+            
+        last_state = {}
+        
+        while self._running:
+            try:
+                current_state = store.state if store else {}
+                
+                # 檢查 sessions 狀態變化
+                if 'sessions' in current_state:
+                    current_sessions = current_state['sessions'].get('sessions', {})
+                    last_sessions = last_state.get('sessions', {}).get('sessions', {})
+                    
+                    # 檢查每個 session 的狀態變化
+                    for session_id, session_data in current_sessions.items():
+                        last_session = last_sessions.get(session_id, {})
+                        
+                        # 檢查轉譯結果（修復字段名稱不匹配問題）
+                        current_transcription = session_data.get('transcription')
+                        last_transcription = last_session.get('transcription')
+                        if current_transcription != last_transcription:
+                            logger.block("Transcription Result Detected", [
+                                f"🔔 Session: {session_id[:8]}...",
+                                f"📝 Result: {str(current_transcription)[:50]}...",
+                                f"🚀 Broadcasting to room..."
+                            ])
+                            if current_transcription:
+                                # 廣播轉譯結果到房間
+                                await self._broadcast_transcription_result(session_id, current_transcription)
+                                
+                        # 檢查狀態變化（修復字段名稱不匹配問題 - 使用 fsm_state）
+                        if session_data.get('fsm_state') != last_session.get('fsm_state'):
+                            logger.debug(f"State change detected for session {session_id}: {last_session.get('fsm_state')} -> {session_data.get('fsm_state')}")
+                            await self._broadcast_status_to_room(session_id)
+                            
+                last_state = current_state
+                await asyncio.sleep(0.1)  # 每 100ms 檢查一次
+                
+            except Exception as e:
+                logger.error(f"Error in store event listener: {e}")
+                await asyncio.sleep(1)
+    
+    async def _broadcast_transcription_result(self, session_id: str, result: Any):
+        """
+        廣播轉譯結果到房間
+        
+        Args:
+            session_id: Session ID
+            result: 轉譯結果
+        """
+        room_name = f"session_{session_id}"
+        
+        # 將 immutables.Map 轉換為可序列化的 dict
+        serializable_result = self._convert_immutable_to_dict(result)
+        
+        # 發送轉譯完成事件
+        await self.sio.emit(
+            'action',
+            {
+                'type': '[Session] Transcription Done',
+                'payload': {
+                    'session_id': session_id,
+                    'result': serializable_result if isinstance(serializable_result, dict) else {'text': str(serializable_result)},
+                    'timestamp': datetime.now().isoformat()
+                }
+            },
+            namespace=self.namespace,
+            room=room_name
+        )
+        
+        # 向後兼容：也發送 final_result 事件
+        if isinstance(serializable_result, dict):
+            text = serializable_result.get('text', '')
+        else:
+            text = str(serializable_result)
+            
+        await self.sio.emit(
+            'final_result',
+            {
+                'text': text,
+                'is_final': True,
+                'confidence': 0.95,
+                'timestamp': datetime.now().isoformat()
+            },
+            namespace=self.namespace,
+            room=room_name
+        )
+        
+        logger.info(f"Socket.IO: Broadcasted transcription result for session {session_id}")
+    
+    def _convert_immutable_to_dict(self, obj):
+        """
+        遞歸地將所有不可變物件轉換為可序列化的 Python 物件
+        
+        Args:
+            obj: 要轉換的物件（可能包含 immutables.Map、immutables.List 等）
+            
+        Returns:
+            完全可序列化的 Python 物件
+        """
+        # 處理 immutables.Map
+        if hasattr(obj, 'items') and hasattr(obj, '__class__') and 'Map' in str(obj.__class__):
+            return {key: self._convert_immutable_to_dict(value) for key, value in obj.items()}
+        
+        # 處理 immutables.List 或其他序列類型
+        elif hasattr(obj, '__iter__') and hasattr(obj, '__class__') and ('List' in str(obj.__class__) or 'Vector' in str(obj.__class__)):
+            return [self._convert_immutable_to_dict(item) for item in obj]
+        
+        # 處理 tuple (可能來自 immutable 轉換)
+        elif isinstance(obj, tuple):
+            return [self._convert_immutable_to_dict(item) for item in obj]
+        
+        # 處理標準 dict
+        elif isinstance(obj, dict):
+            return {key: self._convert_immutable_to_dict(value) for key, value in obj.items()}
+        
+        # 處理標準 list
+        elif isinstance(obj, list):
+            return [self._convert_immutable_to_dict(item) for item in obj]
+        
+        # 處理其他有 to_dict 方法的物件
+        elif hasattr(obj, 'to_dict') and callable(getattr(obj, 'to_dict')):
+            return self._convert_immutable_to_dict(obj.to_dict())
+        
+        # 處理日期時間物件
+        elif hasattr(obj, 'isoformat'):
+            return obj.isoformat()
+        
+        # 處理 Enum
+        elif hasattr(obj, 'value'):
+            return obj.value
+        
+        # 原始類型直接返回
+        else:
+            return obj
+    
     async def _broadcast_status_to_room(self, session_id: str):
         """
         廣播狀態到房間
@@ -517,7 +839,7 @@ class SocketIOServer(APIBase):
             session_id: Session ID
         """
         # 使用 selector 獲取 session
-        state = self.store.get_state() if self.store else None
+        state = store.state if store else None
         session = sessions_selectors.get_session(session_id)(state) if state else None
         if not session:
             return
@@ -528,7 +850,7 @@ class SocketIOServer(APIBase):
             'status_update',
             {
                 'session_id': session_id,
-                'state': session.get("state", "IDLE"),
+                'state': session.get("fsm_state", "IDLE"),  # 修復字段名稱不匹配
                 'timestamp': datetime.now().isoformat()
             },
             namespace=self.namespace,
@@ -753,13 +1075,13 @@ class SocketIOServer(APIBase):
         """
         try:
             # 使用 selector 獲取 session
-            state = self.store.get_state() if self.store else None
+            state = store.state if store else None
             session = sessions_selectors.get_session(session_id)(state) if state else None
             
             if command == "start":
                 if not session:
                     # 使用 Store dispatch 創建 session (不傳遞 audio_format)
-                    self.store.dispatch(sessions_actions.create_session(session_id))
+                    store.dispatch(sessions_actions.create_session(session_id))
                 
                 # 檢查是否有音訊配置
                 audio_format = None
@@ -776,7 +1098,7 @@ class SocketIOServer(APIBase):
                     }
                 
                 # 使用 start_listening action 傳遞 audio_format
-                self.store.dispatch(sessions_actions.start_listening(session_id, audio_format))
+                store.dispatch(sessions_actions.start_listening(session_id, audio_format))
                 
                 return self.create_success_response(
                     {"status": "started", "session_id": session_id},
@@ -785,7 +1107,7 @@ class SocketIOServer(APIBase):
                 
             elif command == "stop":
                 if session:
-                    self.store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
+                    store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
                     # 停止音訊串流
                     self.stream_manager.stop_stream(session_id)
                 return self.create_success_response(
@@ -796,7 +1118,7 @@ class SocketIOServer(APIBase):
             elif command == "status":
                 status = {
                     "session_id": session_id,
-                    "state": session.get("state", "IDLE") if session else "NO_SESSION",
+                    "state": session.get("fsm_state", "IDLE") if session else "NO_SESSION",  # 修復字段名稱不匹配
                     "exists": session is not None,
                     "stream_active": self.stream_manager.is_stream_active(session_id)
                 }
@@ -804,7 +1126,7 @@ class SocketIOServer(APIBase):
                 
             elif command == "busy_start":
                 if session:
-                    self.store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
+                    store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
                 return self.create_success_response(
                     {"status": "busy_started", "session_id": session_id},
                     session_id
@@ -812,7 +1134,7 @@ class SocketIOServer(APIBase):
                 
             elif command == "busy_end":
                 if session:
-                    self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
+                    store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                 return self.create_success_response(
                     {"status": "busy_ended", "session_id": session_id},
                     session_id

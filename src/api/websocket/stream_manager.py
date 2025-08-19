@@ -138,13 +138,13 @@ class WebSocketStreamManager:
             buffer.add_chunk(audio_data)
             
             # 創建 AudioChunk 物件
-            from src.audio import AudioFormat, AudioEncoding
+            from src.audio import AudioContainerFormat, AudioEncoding
             
             # 轉換字符串為枚舉
             try:
-                format_enum = AudioFormat(buffer.format)
+                format_enum = AudioContainerFormat(buffer.format)
             except ValueError:
-                format_enum = AudioFormat.PCM
+                format_enum = AudioContainerFormat.PCM
                 
             try:
                 encoding_enum = AudioEncoding(buffer.encoding)
@@ -267,12 +267,12 @@ class WebSocketStreamManager:
         queue = self.stream_queues.get(session_id)
         
         # 導入枚舉類型
-        from src.audio import AudioFormat, AudioEncoding
+        from src.audio import AudioContainerFormat, AudioEncoding
         
         # 確保 format 和 encoding 是枚舉類型
         format_enum = buffer.format
         if isinstance(format_enum, str):
-            format_enum = AudioFormat(format_enum)
+            format_enum = AudioContainerFormat(format_enum)
             
         encoding_enum = buffer.encoding
         if isinstance(encoding_enum, str):

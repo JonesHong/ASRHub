@@ -15,36 +15,30 @@ from src.config.manager import ConfigManager
 config_manager = ConfigManager()
 
 
-@dataclass
-class TranscriptionResult:
-    """轉譯結果資料類別"""
-    text: str                          # 轉譯文字
-    confidence: float                  # 信心分數 (0.0-1.0)
-    language: Optional[str] = None     # 語言代碼
-    start_time: Optional[float] = None # 開始時間（秒）
-    end_time: Optional[float] = None   # 結束時間（秒）
-    words: Optional[List[Dict]] = None # 詞級別資訊
-    metadata: Optional[Dict] = None    # 額外元資料
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """轉換為字典格式"""
-        result = {
-            "text": self.text,
-            "confidence": self.confidence
-        }
-        
-        if self.language:
-            result["language"] = self.language
-        if self.start_time is not None:
-            result["start_time"] = self.start_time
-        if self.end_time is not None:
-            result["end_time"] = self.end_time
-        if self.words:
-            result["words"] = self.words
-        if self.metadata:
-            result["metadata"] = self.metadata
-            
-        return result
+# 重新導出統一的 TranscriptResult 作為 TranscriptionResult
+from src.models.transcript import TranscriptResult as TranscriptionResult
+
+# 兼容性函數 - 創建 TranscriptionResult 的便捷方法
+def create_transcription_result(text: str,
+                              confidence: float,
+                              language: Optional[str] = None,
+                              start_time: Optional[float] = None,
+                              end_time: Optional[float] = None,
+                              words: Optional[List[Dict]] = None,
+                              metadata: Optional[Dict] = None) -> TranscriptionResult:
+    """
+    創建 TranscriptionResult 的兼容性函數
+    使用統一的 TranscriptResult 類但保持原有的接口
+    """
+    return TranscriptionResult.from_simple_result(
+        text=text,
+        confidence=confidence,
+        language=language,
+        start_time=start_time,
+        end_time=end_time,
+        words=words,
+        metadata=metadata
+    )
 
 
 @dataclass

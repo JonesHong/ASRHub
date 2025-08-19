@@ -146,14 +146,35 @@ class SocketIOStreamManager:
                     )
                 self.chunk_sequences[session_id] = chunk_id + 1
             
-            # 創建 AudioChunk 物件
-            audio_chunk = AudioChunk(
-                data=audio_data,
+            # 創建 AudioChunk 物件（使用新的 AudioMetadata 結構）
+            from src.audio import AudioMetadata, AudioSampleFormat, AudioContainerFormat, AudioEncoding
+            
+            # 轉換編碼格式為枚舉
+            encoding_enum = AudioEncoding.LINEAR16  # 默認值
+            if buffer.encoding.lower() == 'linear16':
+                encoding_enum = AudioEncoding.LINEAR16
+            elif buffer.encoding.lower() == 'linear32':
+                encoding_enum = AudioEncoding.LINEAR32
+            elif buffer.encoding.lower() == 'mulaw':
+                encoding_enum = AudioEncoding.MULAW
+            elif buffer.encoding.lower() == 'alaw':
+                encoding_enum = AudioEncoding.ALAW
+            elif buffer.encoding.lower() == 'float32':
+                encoding_enum = AudioEncoding.FLOAT32
+            
+            # 創建 metadata
+            metadata = AudioMetadata(
                 sample_rate=buffer.sample_rate,
                 channels=buffer.channels,
-                format=buffer.format,
-                encoding=buffer.encoding,
-                bits_per_sample=buffer.bits_per_sample,
+                format=AudioSampleFormat.INT16,  # 假設 16-bit PCM
+                container_format=AudioContainerFormat.PCM,  # 假設 PCM 容器
+                encoding=encoding_enum
+            )
+            
+            # 創建 AudioChunk
+            audio_chunk = AudioChunk(
+                data=audio_data,
+                metadata=metadata,
                 timestamp=time.time()
             )
             
@@ -267,12 +288,12 @@ class SocketIOStreamManager:
         queue = self.stream_queues.get(session_id)
         
         # 導入枚舉類型
-        from src.audio import AudioFormat, AudioEncoding
+        from src.audio import AudioContainerFormat, AudioEncoding
         
         # 確保 format 和 encoding 是枚舉類型
         format_enum = buffer.format
         if isinstance(format_enum, str):
-            format_enum = AudioFormat(format_enum)
+            format_enum = AudioContainerFormat(format_enum)
             
         encoding_enum = buffer.encoding
         if isinstance(encoding_enum, str):

@@ -131,9 +131,10 @@ def kill_processes_by_name(process_names: List[str]):
 
 def main():
     """主函數"""
-    logger.info("=" * 50)
-    logger.info("開始停止 ASR Hub 服務")
-    logger.info("=" * 50)
+    logger.block("Stopping ASR Hub", [
+        "ASR Hub 停止中...",
+        "將終止所有使用配置端口的進程"
+    ])
     
     # 從 ConfigManager 提取端口
     ports = extract_ports_from_config()
@@ -171,10 +172,10 @@ def main():
         "src.core.asr_hub"
     ]
     kill_processes_by_name(related_processes)
-    
-    logger.info("=" * 50)
-    logger.info("ASR Hub 服務停止完成")
-    logger.info("=" * 50)
+    logger.block("ASR Hub Stopped", [
+        "ASR Hub 停止完成",
+        "所有相關進程已被終止"
+    ])
 
 
 if __name__ == "__main__":

@@ -221,11 +221,11 @@ class VADIntegrationTester:
                     
                     if fsm_changed or vad_changed:
                         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                        logger.info(
-                            f"[{timestamp}] Session {self.test_session_id} state changed:\n"
-                            f"  FSM State: {prev_session.get('fsm_state')} → {curr_session.get('fsm_state')}\n"
-                            f"  VAD State: {prev_session.get('vad_state')} → {curr_session.get('vad_state')}"
-                        )
+                        logger.block("Session State Change", [
+                            f"Session ID: {curr_session.get('session_id', 'unknown')[:8]}...",
+                            f"FSM State: {prev_session.get('fsm_state')} → {curr_session.get('fsm_state')}",
+                            f"VAD State: {prev_session.get('vad_state')} → {curr_session.get('vad_state')}"
+                        ])
     
     def _on_action_dispatched(self, action):
         """處理 action dispatch 事件"""

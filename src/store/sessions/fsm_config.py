@@ -137,9 +137,29 @@ BATCH_MODE_CONFIG = FSMStrategyConfig(
     strategy=FSMStrategy.BATCH,
     initial_state=FSMStateEnum.IDLE,
     transitions=[
-        StateTransition(  # 真正改變狀態
+        StateTransition(  # File upload 直接到處理狀態
             from_state=FSMStateEnum.IDLE,
             event=FSMEvent.UPLOAD_FILE,
+            to_state=FSMStateEnum.PROCESSING,
+        ),
+        StateTransition(  # Chunk upload 開始，保持在 IDLE 接收數據
+            from_state=FSMStateEnum.IDLE,
+            event=FSMEvent.CHUNK_UPLOAD_START,
+            to_state=FSMStateEnum.IDLE,
+        ),
+        StateTransition(  # Chunk upload 完成，開始處理
+            from_state=FSMStateEnum.IDLE,
+            event=FSMEvent.CHUNK_UPLOAD_DONE,
+            to_state=FSMStateEnum.PROCESSING,
+        ),
+        StateTransition(  # 開始轉譯（批次模式下保持在 PROCESSING）
+            from_state=FSMStateEnum.PROCESSING,
+            event=FSMEvent.BEGIN_TRANSCRIPTION,
+            to_state=FSMStateEnum.PROCESSING,
+        ),
+        StateTransition(  # IDLE 狀態也可以直接開始轉譯
+            from_state=FSMStateEnum.IDLE,
+            event=FSMEvent.BEGIN_TRANSCRIPTION,
             to_state=FSMStateEnum.PROCESSING,
         ),
         StateTransition(  # 完成整批流程回到待機
@@ -151,6 +171,8 @@ BATCH_MODE_CONFIG = FSMStrategyConfig(
     allowed_events={
         FSMEvent.UPLOAD_FILE,
         FSMEvent.UPLOAD_FILE_DONE,  # 允許，但可能不改變狀態
+        FSMEvent.CHUNK_UPLOAD_START,
+        FSMEvent.CHUNK_UPLOAD_DONE,
         FSMEvent.BEGIN_TRANSCRIPTION,  # 允許，但可能不改變狀態
         FSMEvent.TRANSCRIPTION_DONE,
         FSMEvent.ERROR,

@@ -256,6 +256,21 @@ def get_sessions_with_errors():
 
 
 # ============================================================================
+# 轉譯結果 Selector
+# ============================================================================
+
+def get_session_transcript(session_id: str):
+    """獲取 session 的轉譯結果（最後一次的轉譯）"""
+    return create_selector(
+        get_all_sessions,
+        result_fn=lambda sessions: (
+            sessions.get(session_id, {}).get("transcription")
+            if sessions.get(session_id) else None
+        )
+    )
+
+
+# ============================================================================
 # 新增的 Selectors (取代 SessionManager 功能)
 # ============================================================================
 

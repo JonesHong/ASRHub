@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
 from src.utils.logger import logger
-from src.audio import AudioChunk, AudioFormat
+from src.audio import AudioChunk, AudioContainerFormat
 from src.models.transcript import TranscriptSegment, TranscriptResult
 from src.core.exceptions import APIError, ValidationError
 
@@ -282,15 +282,15 @@ class AudioRequestHandler:
         """
         # 映射格式
         format_map = {
-            "pcm": AudioFormat.PCM,
-            "wav": AudioFormat.WAV,
-            "mp3": AudioFormat.MP3,
-            "flac": AudioFormat.FLAC,
-            "ogg": AudioFormat.OGG,
-            "webm": AudioFormat.WEBM
+            "pcm": AudioContainerFormat.PCM,
+            "wav": AudioContainerFormat.WAV,
+            "mp3": AudioContainerFormat.MP3,
+            "flac": AudioContainerFormat.FLAC,
+            "ogg": AudioContainerFormat.OGG,
+            "webm": AudioContainerFormat.WEBM
         }
         
-        audio_format = format_map.get(params["format"], AudioFormat.PCM)
+        audio_format = format_map.get(params["format"], AudioContainerFormat.PCM)
         
         from src.audio import AudioEncoding
         

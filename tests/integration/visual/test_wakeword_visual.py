@@ -182,12 +182,13 @@ class WakeWordIntegrationTester:
             
             if curr_session and isinstance(curr_session, dict):
                 timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                logger.info(
-                    f"[{timestamp}] Session {self.test_session_id} updated:\n"
-                    f"  FSM State: {curr_session.get('fsm_state')}\n"
-                    f"  Mode: {curr_session.get('mode')}\n"
-                    f"  Audio Buffer Size: {len(curr_session.get('audio_buffer', []))}"
-                )
+                logger.block("Session Update", [
+                    f"Session ID: {curr_session.get('session_id', 'unknown')[:8]}...",
+                    f"FSM State: {curr_session.get('fsm_state', 'unknown')}",
+                    f"Mode: {curr_session.get('mode', 'unknown')}",
+                    f"Recording State: {curr_session.get('recording_state', 'unknown')}",
+                    f"Audio Buffer Size: {len(curr_session.get('audio_buffer', []))}"
+                ])
     
     def _on_action_dispatched(self, action):
         """處理 action dispatch 事件"""
@@ -215,10 +216,11 @@ class WakeWordIntegrationTester:
         ]
         
         if action.type in important_actions:
-            logger.info(
-                f"🎯 [{timestamp}] Action: {action.type}\n"
-                f"   Payload: {action.payload}"
-            )
+            logger.block("Action Dispatched", [
+                f"Timestamp: {timestamp}",
+                f"Action Type: {action.type}",
+                f"Payload: {action.payload}"
+            ])
     
     async def _create_test_session(self):
         """創建測試用的 session"""

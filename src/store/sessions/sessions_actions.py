@@ -134,6 +134,20 @@ end_asr_streaming = create_action(
     }
 )
 
+chunk_upload_start = create_action(
+    enum2action_name(FSMEvent.CHUNK_UPLOAD_START),
+    lambda session_id: {
+        "session_id": session_id
+    }
+)
+
+chunk_upload_done = create_action(
+    enum2action_name(FSMEvent.CHUNK_UPLOAD_DONE),
+    lambda session_id: {
+        "session_id": session_id
+    }
+)
+
 # LLM/TTS 事件 (Inbound)
 llm_reply_started = create_action(
     enum2action_name(FSMEvent.LLM_REPLY_STARTED),
@@ -211,6 +225,14 @@ audio_chunk_received = create_action(
         "session_id": session_id,
         "chunk_size": chunk_size,  # 只傳遞大小，不傳遞實際音訊數據
         "timestamp": timestamp
+    }
+)
+
+audio_metadata = create_action(
+    "[Session] Audio Metadata",
+    lambda session_id, audio_metadata: {
+        "session_id": session_id,
+        "audio_metadata": audio_metadata
     }
 )
 
@@ -394,4 +416,26 @@ request_partial_transcription = create_action(
         "session_id": session_id,
         "audio_segment": audio_segment
     }
+)
+
+# ============================================================================
+# 純事件驅動架構新增 Actions
+# ============================================================================
+
+clear_transcript = create_action(
+    "[Session] Clear Transcript",
+    lambda session_id: {"session_id": session_id}
+)
+
+session_error = create_action(
+    "[Session] Session Error",
+    lambda session_id, error_message: {
+        "session_id": session_id,
+        "error_message": error_message
+    }
+)
+
+fsm_reset = create_action(
+    "[Session] FSM Reset",
+    lambda session_id: {"session_id": session_id}
 )

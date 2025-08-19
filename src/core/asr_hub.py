@@ -72,9 +72,7 @@ class ASRHub:
     def _show_startup_message(self):
         """使用 pretty-loguru 顯示啟動訊息"""
         # ASCII 藝術標題 - 使用簡單的日誌訊息替代
-        logger.info("="*80)
-        logger.info("    ASR HUB    ")
-        logger.info("="*80)
+        logger.ascii_header("ASR HUB")
         
         # 系統資訊區塊
         system_info = [
@@ -109,9 +107,10 @@ class ASRHub:
         )
         
         # 使用 info 顯示版本和描述資訊
-        logger.info(f"📍 版本：v{self.version}")
-        logger.info(f"📋 描述：Unified Speech Recognition Middleware")
-        logger.info("=" * 60)
+        logger.block("ASR Hub Info", [
+            f"📍 版本：v{self.version}",
+            f"📋 描述：Unified Speech Recognition Middleware"
+        ])
         
         # 使用視覺化區塊顯示系統配置
         api_status = {
@@ -170,6 +169,11 @@ class ASRHub:
                 max_sessions=1000  # TODO: 從配置讀取
             )
             
+            # 設置 ProviderManager 到 SessionEffects
+            from src.store.sessions.sessions_effects import set_provider_manager
+            set_provider_manager(self.provider_manager)
+            logger.info("✅ ProviderManager 已設置到 SessionEffects")
+            
             # 初始化 Stream Controller
             logger.debug("初始化 Stream Controller...")
             self.stream_controller = StreamController(
@@ -188,26 +192,37 @@ class ASRHub:
     
     async def _initialize_api_servers(self):
         """初始化 API 伺服器"""
+        logger.info("開始初始化 API 伺服器...")
+        
         # HTTP SSE Server (always enabled)
         if True:  # SSE 總是啟用
-            logger.debug("初始化 HTTP SSE Server...")
+            logger.info("初始化 HTTP SSE Server...")
             self.api_servers["http_sse"] = SSEServer(provider_manager=self.provider_manager)
+            logger.debug(f"HTTP SSE Server 已創建 (port: {self.api_config.http_sse.port})")
         
         # WebSocket Server
         if self.api_config.websocket.enabled:
-            logger.debug("初始化 WebSocket Server...")
+            logger.info("初始化 WebSocket Server...")
             self.api_servers["websocket"] = WebSocketServer(
                 provider_manager=self.provider_manager
             )
+            logger.debug(f"WebSocket Server 已創建 (port: {self.api_config.websocket.port})")
+        else:
+            logger.warning("WebSocket Server 已停用")
         
         # Socket.IO Server
         if self.api_config.socketio.enabled:
-            logger.debug("初始化 Socket.IO Server...")
+            logger.info("初始化 Socket.IO Server...")
             self.api_servers["socketio"] = SocketIOServer(
                 provider_manager=self.provider_manager
             )
+            logger.debug(f"Socket.IO Server 已創建 (port: {self.api_config.socketio.port})")
+        else:
+            logger.warning("Socket.IO Server 已停用")
         
         # TODO: 初始化其他 API servers (gRPC, Redis)
+        
+        logger.success(f"API 伺服器初始化完成，共 {len(self.api_servers)} 個服務")
     
     async def start(self):
         """啟動 ASR Hub 服務"""
@@ -288,7 +303,7 @@ class ASRHub:
         # 透過 Store dispatch action 來處理音訊
         self.store.dispatch(sessions_actions.audio_chunk_received(
             session_id,
-            audio_data,
+            len(audio_data),  # 傳遞音訊大小而不是音訊數據
             timestamp
         ))
     

@@ -16,6 +16,9 @@ from src.utils.logger import logger
 from src.store import get_global_store
 from src.store.sessions import sessions_actions, sessions_selectors
 from src.core.exceptions import APIError
+
+# 模組級變數
+store = get_global_store()
 from src.api.websocket.stream_manager import WebSocketStreamManager
 from src.providers.manager import ProviderManager
 from src.audio import AudioChunk, AudioContainerFormat
@@ -50,27 +53,49 @@ class WebSocketServer(APIBase):
         self.connections: Dict[str, WebSocketConnection] = {}
         self.stream_manager = WebSocketStreamManager()
         self.provider_manager = provider_manager
+        # 添加分塊序號追蹤 (類似 SocketIO 實現)
+        self.chunk_sequences: Dict[str, int] = {}
         
     async def start(self):
         """啟動 WebSocket 服務器"""
         try:
-            self._running = True
-            # 為兼容新版 websockets，創建一個包裝函數
-            async def connection_handler(websocket):
-                await self.handle_connection(websocket, "/")
+            logger.info(f"正在啟動 WebSocket 服務器在 {self.host}:{self.port}...")
             
+            # websockets 15.x 版本只需要一個參數
+            async def connection_handler(websocket):
+                # 從 websocket 對象獲取 path
+                path = websocket.path if hasattr(websocket, 'path') else '/'
+                await self.handle_connection(websocket, path)
+            
+            # 嘗試啟動服務器
             self.server = await websockets.serve(
                 connection_handler,
                 self.host,
                 self.port
             )
-            logger.info(f"WebSocket server started on {self.host}:{self.port}")
+            
+            # 只有在成功啟動後才設置 _running
+            self._running = True
+            logger.success(f"✅ WebSocket 服務器成功啟動在 {self.host}:{self.port}")
             
             # 啟動心跳檢查任務
-            asyncio.create_task(self._heartbeat_task())
+            heartbeat_task = asyncio.create_task(self._heartbeat_task())
+            logger.debug("心跳檢查任務已啟動")
             
+            # 啟動 PyStoreX 事件監聽任務
+            store_listener_task = asyncio.create_task(self._listen_store_events())
+            logger.debug("PyStoreX 事件監聽任務已啟動")
+            
+        except OSError as e:
+            if e.errno == 48:  # Address already in use
+                logger.error(f"❌ Port {self.port} 已被佔用，WebSocket 服務器無法啟動")
+            else:
+                logger.error(f"❌ WebSocket 服務器啟動失敗 (OSError): {e}")
+            self._running = False
+            raise
         except Exception as e:
-            logger.error(f"Failed to start WebSocket server: {e}")
+            logger.error(f"❌ WebSocket 服務器啟動失敗: {e}")
+            self._running = False
             raise
     
     async def stop(self):
@@ -111,13 +136,25 @@ class WebSocketServer(APIBase):
         self.connections[connection_id] = connection
         logger.info(f"New WebSocket connection: {connection_id}")
         
+        # 強制輸出到 stderr 和檔案
+        import sys
+        sys.stderr.write(f"[WS DEBUG] Connection established: {connection_id}\n")
+        sys.stderr.flush()
+        
+        # 寫入到檔案以確保訊息有被記錄
+        with open("/tmp/websocket_debug.log", "a") as f:
+            f.write(f"{datetime.now().isoformat()} - WebSocket connection: {connection_id}\n")
+            f.flush()
+        
         try:
             # 發送歡迎訊息
             from src.api.websocket.handlers import MessageBuilder
             await self._send_message(connection, MessageBuilder.build_welcome(connection_id))
             
             # 處理訊息
+            logger.info(f"WebSocket {connection_id}: Starting message loop")
             async for message in websocket:
+                # logger.info(f"WebSocket {connection_id}: Received raw message, type={type(message)}, length={len(message) if message else 0}")
                 await self._handle_message(connection, message)
                 
         except websockets.exceptions.ConnectionClosed:
@@ -152,14 +189,29 @@ class WebSocketServer(APIBase):
                 return
                 
             message_type = data.get("type")
+            # logger.info(f"WebSocket: Received message with type '{message_type}'")
             
-            if message_type == "audio_config":
-                # 處理音訊配置訊息
+            # 檢查是否為 PyStoreX action（以 "[" 開頭的 type）
+            if message_type and message_type.startswith("["):
+                # 這是 PyStoreX action，直接處理為 action
+                # logger.info(f"WebSocket: Detected PyStoreX action, routing to _handle_action_message")
+                await self._handle_action_message(connection, data)
+            elif message_type == "action":
+                # 處理 PyStoreX action (新的事件驅動架構)
+                # logger.info(f"WebSocket: Routing to _handle_action_message")
+                await self._handle_action_message(connection, data)
+            elif message_type == "audio_chunk":
+                # 處理音訊塊上傳
+                # logger.info(f"WebSocket: Routing to _handle_audio_chunk_message")
+                await self._handle_audio_chunk_message(connection, data)
+            elif message_type == "audio_config":
+                # 處理音訊配置訊息 (向後兼容)
                 await self._handle_audio_config(connection, data)
             elif message_type == "control":
+                # 處理控制訊息 (向後兼容)
                 await self._handle_control_message(connection, data)
             elif message_type == "audio":
-                # 處理 JSON 格式的音訊資料
+                # 處理 JSON 格式的音訊資料 (向後兼容)
                 await self._handle_audio_json(connection, data)
             elif message_type == "ping":
                 await self._send_message(connection, {"type": "pong"})
@@ -228,7 +280,7 @@ class WebSocketServer(APIBase):
             
         try:
             # 使用 selector 檢查 session 狀態
-            state = self.store.get_state() if self.store else None
+            state = store.state if store else None
             session = sessions_selectors.get_session(connection.session_id)(state) if state else None
             if not session or session.get("state", "IDLE") != "LISTENING":
                 await self._send_error(connection, "Session not in LISTENING state")
@@ -271,9 +323,298 @@ class WebSocketServer(APIBase):
             logger.error(f"Error handling audio data: {e}")
             await self._send_error(connection, str(e))
     
+    async def _handle_action_message(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """
+        處理 PyStoreX action 訊息（新的事件驅動架構）
+        
+        Args:
+            connection: WebSocket 連線
+            data: 包含 action 的訊息
+        """
+        # 支援兩種格式：
+        # 1. 直接的 action 格式：{type: "[Session] Create", payload: {...}}
+        # 2. 包裝的 action 格式：{action: {type: "[Session] Create", payload: {...}}}
+        
+        if "action" in data:
+            # 包裝格式
+            action = data.get("action")
+            if not action:
+                await self._send_error(connection, "No action provided")
+                return
+            action_type = action.get("type")
+            payload = action.get("payload", {})
+        else:
+            # 直接格式（前端使用的格式）
+            action_type = data.get("type")
+            payload = data.get("payload", {})
+        
+        logger.info(f"處理 Action: {action_type}")
+        
+        try:
+            # 獲取 global store
+            store = get_global_store()
+            if not store:
+                await self._send_error(connection, "Store not initialized")
+                return
+                
+            # 根據 action 類型分發到 PyStoreX store
+            if action_type == "[Session] Create":
+                session_id = payload.get("session_id")
+                strategy = payload.get("strategy", "BATCH")
+                connection.session_id = session_id
+                store.dispatch(sessions_actions.create_session(session_id, strategy))
+                # 發送成功回應
+                await self._send_message(connection, {
+                    "type": "action",
+                    "action": {
+                        "type": "[Session] Created",
+                        "payload": {"session_id": session_id}
+                    }
+                })
+                
+            elif action_type == "[Session] Upload File":
+                session_id = payload.get("session_id")
+                if session_id:
+                    connection.session_id = session_id  # 確保連線有 session_id
+                    # 分發 upload_file action，這會觸發 SessionEffects 處理
+                    store.dispatch(sessions_actions.upload_file(session_id))
+                    # 發送開始處理的確認
+                    await self._send_message(connection, {
+                        "type": "action",
+                        "action": {
+                            "type": "[Session] Begin Transcription",
+                            "payload": {"session_id": session_id}
+                        }
+                    })
+                    
+            elif action_type == "[Session] Start Recording":
+                session_id = payload.get("session_id")
+                strategy = payload.get("strategy", "NON_STREAMING")
+                if session_id:
+                    store.dispatch(sessions_actions.start_recording(session_id, strategy))
+                    
+            elif action_type == "[Session] End Recording":
+                session_id = payload.get("session_id")
+                trigger = payload.get("trigger", "manual")
+                duration = payload.get("duration", 0)
+                if session_id:
+                    store.dispatch(sessions_actions.end_recording(session_id, trigger, duration))
+                    
+            elif action_type == "[Session] Chunk Upload Start":
+                session_id = payload.get("session_id")
+                if session_id:
+                    connection.session_id = session_id  # 確保連線有 session_id
+                    # 分發 chunk_upload_start action
+                    store.dispatch(sessions_actions.chunk_upload_start(session_id))
+                    # 發送確認
+                    await self._send_message(connection, {
+                        "type": "action",
+                        "action": {
+                            "type": "[Session] Chunk Upload Started",
+                            "payload": {"session_id": session_id}
+                        }
+                    })
+                    
+            elif action_type == "[Session] Chunk Upload Done":
+                session_id = payload.get("session_id")
+                if session_id:
+                    connection.session_id = session_id  # 確保連線有 session_id
+                    # 分發 chunk_upload_done action，這會觸發 SessionEffects 處理
+                    store.dispatch(sessions_actions.chunk_upload_done(session_id))
+                    # 發送開始處理的確認
+                    await self._send_message(connection, {
+                        "type": "action",
+                        "action": {
+                            "type": "[Session] Begin Transcription",
+                            "payload": {"session_id": session_id}
+                        }
+                    })
+                    
+            elif action_type == "[Session] Destroy":
+                session_id = payload.get("session_id")
+                if session_id:
+                    # 分發 destroy_session action
+                    store.dispatch(sessions_actions.destroy_session(session_id))
+                    # 發送確認
+                    await self._send_message(connection, {
+                        "type": "action",
+                        "action": {
+                            "type": "[Session] Destroyed",
+                            "payload": {"session_id": session_id}
+                        }
+                    })
+                    
+            else:
+                logger.warning(f"未處理的 Action 類型: {action_type}")
+                
+        except Exception as e:
+            logger.error(f"處理 Action 時發生錯誤: {e}")
+            await self._send_error(connection, str(e))
+    
+    async def _handle_audio_chunk_message(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """
+        處理音訊塊上傳訊息
+        
+        Args:
+            connection: WebSocket 連線
+            data: 包含音訊塊的訊息
+        """
+        # logger.info(f"WebSocket: _handle_audio_chunk_message called with data keys: {list(data.keys())}")
+        session_id = data.get("session_id")
+        # logger.info(f"WebSocket: processing audio chunk for session_id={session_id}")
+        if not session_id:
+            await self._send_error(connection, "No session_id provided")
+            return
+            
+        # 設置連線的 session_id
+        if not connection.session_id:
+            connection.session_id = session_id
+            # 初始化該 session 的分塊序號
+            if session_id not in self.chunk_sequences:
+                self.chunk_sequences[session_id] = 0
+            
+        # 驗證分塊序號 (類似 SocketIO 實現)
+        chunk_id = data.get("chunk_id")
+        if chunk_id is not None:
+            expected_id = self.chunk_sequences.get(session_id, 0)
+            if chunk_id != expected_id:
+                logger.warning(
+                    f"🚨 Chunk sequence mismatch for session {session_id}: "
+                    f"expected {expected_id}, got {chunk_id}. This may cause format detection issues."
+                )
+                # 更新期望序號以繼續處理（容錯機制）
+                self.chunk_sequences[session_id] = chunk_id + 1
+            else:
+                logger.debug(f"✅ Chunk {chunk_id} received in correct order for session {session_id}")
+                self.chunk_sequences[session_id] = chunk_id + 1
+            
+        # 解碼 base64 音訊資料
+        import base64
+        audio_base64 = data.get("audio")
+        if not audio_base64:
+            await self._send_error(connection, "No audio data provided")
+            return
+        
+        try:
+            # logger.info(f"WebSocket: Decoding base64 audio data, length={len(audio_base64)}")
+            audio_bytes = base64.b64decode(audio_base64)
+            # logger.info(f"WebSocket: Decoded {len(audio_bytes)} bytes of audio data")
+            
+            # 將音訊推送到 AudioQueueManager
+            # 檢測批次模式：如果有多個音訊塊或檔案大小較大，使用批次模式
+            is_batch_mode = data.get("is_batch", False) or data.get("total_chunks", 1) > 1 or len(audio_bytes) > 32768  # 32KB 以上視為批次
+            
+            # logger.info(f"WebSocket: About to import get_audio_queue_manager")
+            from src.core.audio_queue_manager import get_audio_queue_manager
+            # logger.info(f"WebSocket: About to call get_audio_queue_manager()")
+            audio_queue_manager = get_audio_queue_manager()
+            # logger.info(f"WebSocket: Got audio_queue_manager, about to push audio for session {session_id}, batch_mode={is_batch_mode}")
+            await audio_queue_manager.push(session_id, audio_bytes, batch_mode=is_batch_mode)
+            # logger.info(f"WebSocket: Successfully pushed audio to AudioQueueManager for session {session_id}")
+            
+            # 分發 audio_chunk_received action
+            chunk_size = len(audio_bytes)
+            # logger.info(f"WebSocket: About to dispatch audio_chunk_received action, chunk_size={chunk_size}")
+            store.dispatch(sessions_actions.audio_chunk_received(session_id, chunk_size))
+            # logger.info(f"WebSocket: Successfully dispatched audio_chunk_received action")
+            
+            # 發送確認
+            await self._send_message(connection, {
+                "type": "audio_received",  
+                "size": chunk_size,
+                "chunk_id": data.get("chunk_id")
+            })
+            
+        except Exception as e:
+            logger.error(f"處理音訊塊時發生錯誤: {e}")
+            logger.error(f"Exception type: {type(e)}")
+            logger.error(f"Exception details: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            await self._send_error(connection, str(e))
+    
+    async def _listen_store_events(self):
+        """
+        監聽 PyStoreX store 的事件並廣播給相關的 WebSocket 客戶端
+        """
+        logger.info("開始監聽 PyStoreX store 事件")
+        
+        while self._running:
+            try:
+                # 訂閱 store 的狀態變化
+                # 注意：這裡需要根據實際的 PyStoreX API 調整
+                # 暫時使用輪詢方式檢查狀態變化
+                await asyncio.sleep(0.1)  # 100ms 檢查一次
+                
+                # 檢查每個連線的 session 狀態
+                for conn_id, connection in list(self.connections.items()):
+                    if connection.session_id:
+                        # 獲取 session 狀態
+                        state = store.state if store else None
+                        session = sessions_selectors.get_session(connection.session_id)(state) if state else None
+                        
+                        if session:
+                            # 檢查是否有新的轉譯結果 (存儲在 transcription 欄位)
+                            transcription = session.get("transcription")
+                            if transcription:
+                                # 如果有轉譯結果且尚未發送
+                                if not hasattr(connection, '_last_transcription_sent'):
+                                    connection._last_transcription_sent = None
+                                    
+                                # 比較整個轉譯結果對象
+                                if transcription != connection._last_transcription_sent:
+                                    # 發送 TRANSCRIPTION_DONE action
+                                    await self._send_message(connection, {
+                                        "type": "action",
+                                        "action": {
+                                            "type": "[Session] Transcription Done",
+                                            "payload": {
+                                                "session_id": connection.session_id,
+                                                "result": transcription
+                                            }
+                                        }
+                                    })
+                                    connection._last_transcription_sent = transcription
+                                    # 修復屬性訪問 - transcription 現在是字典格式
+                                    if isinstance(transcription, dict):
+                                        text_preview = transcription.get('text', '')
+                                        # 檢查是否為空結果並提供用戶友好信息
+                                        if not text_preview.strip():
+                                            metadata = transcription.get('metadata', {})
+                                            empty_reason = metadata.get('empty_result_reason', 'unknown')
+                                            logger.info(f"發送空轉譯結果給連線 {conn_id}: 原因={empty_reason}")
+                                        else:
+                                            logger.info(f"發送轉譯結果給連線 {conn_id}: {text_preview[:50]}...")
+                                    else:
+                                        logger.info(f"發送轉譯結果給連線 {conn_id}: {str(transcription)[:50]}...")
+                            
+                            # 檢查其他狀態變化
+                            current_state = session.get("state")
+                            if not hasattr(connection, '_last_state'):
+                                connection._last_state = None
+                                
+                            if current_state != connection._last_state:
+                                # 發送狀態更新
+                                await self._send_message(connection, {
+                                    "type": "event",
+                                    "event": {
+                                        "type": "state_changed",
+                                        "state": current_state,
+                                        "session_id": connection.session_id
+                                    }
+                                })
+                                connection._last_state = current_state
+                                logger.debug(f"狀態變更: {connection._last_state} -> {current_state}")
+                                
+            except Exception as e:
+                logger.error(f"監聽 store 事件時發生錯誤: {e}")
+                await asyncio.sleep(1)  # 錯誤後等待1秒再繼續
+        
+        logger.info("停止監聽 PyStoreX store 事件")
+    
     async def _handle_audio_json(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
         """
-        處理 JSON 格式的音訊資料
+        處理 JSON 格式的音訊資料（向後兼容）
         
         Args:
             connection: WebSocket 連線
@@ -321,13 +662,13 @@ class WebSocketServer(APIBase):
         """
         try:
             # 使用 selector 獲取 session
-            state = self.store.get_state() if self.store else None
+            state = store.state if store else None
             session = sessions_selectors.get_session(session_id)(state) if state else None
             
             if command == "start":
                 if not session:
                     # 使用 Store dispatch 創建 session (不傳遞 audio_format)
-                    self.store.dispatch(sessions_actions.create_session(session_id))
+                    store.dispatch(sessions_actions.create_session(session_id))
                 
                 # 檢查是否有音訊配置
                 audio_format = None
@@ -344,7 +685,7 @@ class WebSocketServer(APIBase):
                     }
                 
                 # 使用 start_listening action 傳遞 audio_format
-                self.store.dispatch(sessions_actions.start_listening(session_id, audio_format))
+                store.dispatch(sessions_actions.start_listening(session_id, audio_format))
                 
                 return self.create_success_response(
                     {"status": "started", "session_id": session_id},
@@ -353,7 +694,7 @@ class WebSocketServer(APIBase):
                 
             elif command == "stop":
                 if session:
-                    self.store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
+                    store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
                     # 停止音訊串流
                     self.stream_manager.stop_stream(session_id)
                 return self.create_success_response(
@@ -371,7 +712,7 @@ class WebSocketServer(APIBase):
                 
             elif command == "busy_start":
                 if session:
-                    self.store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
+                    store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
                 return self.create_success_response(
                     {"status": "busy_started", "session_id": session_id},
                     session_id
@@ -379,7 +720,7 @@ class WebSocketServer(APIBase):
                 
             elif command == "busy_end":
                 if session:
-                    self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
+                    store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                 return self.create_success_response(
                     {"status": "busy_ended", "session_id": session_id},
                     session_id
@@ -430,6 +771,52 @@ class WebSocketServer(APIBase):
         # 這個方法將在後續整合 Pipeline 和 Provider 時實作
         yield self.create_error_response("Not implemented yet", session_id)
         
+    def _convert_immutable_to_dict(self, obj):
+        """
+        遞歸地將所有不可變物件轉換為可序列化的 Python 物件
+        
+        Args:
+            obj: 要轉換的物件（可能包含 immutables.Map、immutables.List 等）
+            
+        Returns:
+            完全可序列化的 Python 物件
+        """
+        # 處理 immutables.Map
+        if hasattr(obj, 'items') and hasattr(obj, '__class__') and 'Map' in str(obj.__class__):
+            return {key: self._convert_immutable_to_dict(value) for key, value in obj.items()}
+        
+        # 處理 immutables.List 或其他序列類型
+        elif hasattr(obj, '__iter__') and hasattr(obj, '__class__') and ('List' in str(obj.__class__) or 'Vector' in str(obj.__class__)):
+            return [self._convert_immutable_to_dict(item) for item in obj]
+        
+        # 處理 tuple (可能來自 immutable 轉換)
+        elif isinstance(obj, tuple):
+            return [self._convert_immutable_to_dict(item) for item in obj]
+        
+        # 處理標準 dict
+        elif isinstance(obj, dict):
+            return {key: self._convert_immutable_to_dict(value) for key, value in obj.items()}
+        
+        # 處理標準 list
+        elif isinstance(obj, list):
+            return [self._convert_immutable_to_dict(item) for item in obj]
+        
+        # 處理其他有 to_dict 方法的物件
+        elif hasattr(obj, 'to_dict') and callable(getattr(obj, 'to_dict')):
+            return self._convert_immutable_to_dict(obj.to_dict())
+        
+        # 處理日期時間物件
+        elif hasattr(obj, 'isoformat'):
+            return obj.isoformat()
+        
+        # 處理 Enum
+        elif hasattr(obj, 'value'):
+            return obj.value
+        
+        # 原始類型直接返回
+        else:
+            return obj
+
     async def _send_message(self, connection: 'WebSocketConnection', message: Dict[str, Any]):
         """
         發送訊息到客戶端
@@ -439,9 +826,15 @@ class WebSocketServer(APIBase):
             message: 訊息內容
         """
         try:
-            await connection.websocket.send(json.dumps(message))
+            # 使用自定義的遞歸轉換器處理所有不可變物件
+            message_dict = self._convert_immutable_to_dict(message)
+            await connection.websocket.send(json.dumps(message_dict))
         except Exception as e:
             logger.error(f"Error sending message: {e}")
+            logger.error(f"Message type: {type(message)}")
+            logger.error(f"Message content: {str(message)[:200]}...")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             
     async def _handle_audio_config(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
         """
@@ -516,7 +909,7 @@ class WebSocketServer(APIBase):
             return
             
         # 使用 selector 獲取 session
-        state = self.store.get_state() if self.store else None
+        state = store.state if store else None
         session = sessions_selectors.get_session(connection.session_id)(state) if state else None
         if not session:
             return
@@ -551,6 +944,10 @@ class WebSocketServer(APIBase):
             # 清理音訊串流
             if connection.session_id:
                 self.stream_manager.cleanup_stream(connection.session_id)
+                # 清理分塊序號追蹤
+                if connection.session_id in self.chunk_sequences:
+                    del self.chunk_sequences[connection.session_id]
+                    logger.debug(f"Cleaned up chunk sequence tracking for session {connection.session_id}")
                 
             # 關閉 WebSocket
             await connection.websocket.close()
@@ -727,3 +1124,5 @@ class WebSocketConnection:
         self.connected_at = connected_at
         self.last_activity = connected_at
         self.audio_config = None  # 儲存音訊配置
+        self._last_state = None  # 追蹤上次發送的狀態
+        self._last_transcription_sent = None  # 追蹤上次發送的轉譯結果

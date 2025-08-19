@@ -17,6 +17,8 @@ class FSMEvent(str, Enum):
     START_LISTENING = "start_listening"
     UPLOAD_FILE = "upload_file"
     UPLOAD_FILE_DONE = "upload_file_done"
+    CHUNK_UPLOAD_START = "chunk_upload_start"
+    CHUNK_UPLOAD_DONE = "chunk_upload_done"
     WAKE_TRIGGERED = "wake_triggered"
     START_RECORDING = "start_recording"
     END_RECORDING = "end_recording"
@@ -75,6 +77,30 @@ class AudioFormat(TypedDict):
     bits_per_sample: int
 
 
+class AudioMetadata(TypedDict):
+    """音訊 metadata 定義"""
+    filename: str
+    mimeType: str
+    fileSize: int
+    duration: float
+    sampleRate: int
+    channels: int
+    bitRate: int
+    codec: str
+    detectedFormat: str
+    needsConversion: bool
+    conversionSuggestions: List[str]
+
+class ConversionStrategy(TypedDict):
+    """音訊轉換策略定義"""
+    needsConversion: bool
+    targetSampleRate: int
+    targetChannels: int
+    targetFormat: str
+    conversionSteps: List[str]
+    estimatedProcessingTime: float
+    priority: str  # "high", "medium", "low"
+
 class SessionState(TypedDict):
     """單個會話狀態"""
     id: str
@@ -88,6 +114,8 @@ class SessionState(TypedDict):
     audio_chunks_count: int    # 累計接收的音訊塊數
     last_audio_timestamp: Optional[float]  # 最後接收音訊的時間戳
     audio_format: Optional[AudioFormat]  # 音訊格式資訊
+    audio_metadata: Optional[AudioMetadata]  # 前端發送的音訊 metadata
+    conversion_strategy: Optional[ConversionStrategy]  # 轉換策略
     transcription: Optional[str]
     error: Optional[str]
     created_at: float

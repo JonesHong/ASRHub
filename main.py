@@ -28,13 +28,11 @@ async def main():
     # logger 已經在頂部導入
     
     try:
-        logger.info("=" * 50)
-        logger.info("ASR Hub 啟動中...")
-        logger.info("=" * 50)
-        
-        # 配置檔路徑
         config_path = PROJECT_ROOT / "config" / "config.yaml"
-        
+        logger.block("ASR Hub", [
+            "ASR Hub 啟動中...",
+            f"配置檔路徑: {config_path}"
+        ])
         # 建立 ASR Hub 實例
         asr_hub = ASRHub(config_path=str(config_path))
         
@@ -42,7 +40,7 @@ async def main():
         await asr_hub.start()
         
         logger.success("ASR Hub 啟動完成！")
-        logger.info("HTTP SSE Server 運行在 http://localhost:8080")
+        logger.info(f"HTTP SSE Server 運行在 http://localhost:{asr_hub.config.api.http_sse.port}")
         logger.info("按 Ctrl+C 停止服務")
         
         # 保持運行

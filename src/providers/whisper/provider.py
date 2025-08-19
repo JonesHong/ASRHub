@@ -9,7 +9,7 @@ import os
 from typing import Dict, Any, Optional, List, AsyncGenerator
 import numpy as np
 from datetime import datetime
-from src.providers.base import ProviderBase, TranscriptionResult, StreamingResult
+from src.providers.base import ProviderBase, TranscriptionResult, StreamingResult, create_transcription_result
 from src.utils.logger import logger
 from src.core.exceptions import ProviderError, ModelError, AudioFormatError
 from src.models.transcript import TranscriptSegment, Word
@@ -168,10 +168,8 @@ class WhisperProvider(ProviderBase):
         session_id = kwargs.get('session_id')
         if store and session_id:
             from src.store.sessions.sessions_actions import begin_transcription
-            store.dispatch(begin_transcription(
-                session_id=session_id,
-                timestamp=start_time
-            ))
+            # begin_transcription 只接受 session_id 參數
+            store.dispatch(begin_transcription(session_id))
         
         try:
             # 將音訊轉換為 numpy 陣列
@@ -210,13 +208,20 @@ class WhisperProvider(ProviderBase):
             # 如果有 Store，dispatch 轉譯完成事件
             if store and session_id:
                 from src.store.sessions.sessions_actions import transcription_done
-                store.dispatch(transcription_done(
-                    session_id=session_id,
-                    text=result.text,
-                    language=result.language,
-                    confidence=result.confidence,
-                    segments=result.segments if hasattr(result, 'segments') else None
-                ))
+                from datetime import datetime
+                
+                # 建構 result 字典，符合 transcription_done 的預期格式
+                result_dict = {
+                    "text": result.text,
+                    "language": result.language,
+                    "confidence": result.confidence,
+                    "timestamp": datetime.now().isoformat(),
+                    "source": "whisper",
+                    "segments": result.segments if hasattr(result, 'segments') else None
+                }
+                
+                # 使用位置參數調用 transcription_done
+                store.dispatch(transcription_done(session_id, result_dict))
             
             return result
             
@@ -274,16 +279,30 @@ class WhisperProvider(ProviderBase):
             transcript_segments.append(seg)
             full_text.append(segment.text.strip())
         
-        # 建立完整結果
-        result = TranscriptionResult(
-            text=" ".join(full_text),
-            language=info.language if hasattr(info, 'language') else (language or "unknown"),
-            confidence=np.mean([seg.confidence for seg in transcript_segments]) if transcript_segments else 0.0,
-            metadata={
+        # 檢查轉譯結果是否為空
+        full_text_str = " ".join(full_text).strip()
+        if not full_text_str:
+            logger.warning("Whisper (memory) returned empty transcription - possible silent audio or poor quality")
+            # 為空結果添加有意義的元數據
+            metadata = {
+                "provider": "whisper",
+                "model": f"whisper-{self.model_size}",
+                "segments": [seg.to_dict() for seg in transcript_segments],
+                "empty_result_reason": "no_speech_detected"
+            }
+        else:
+            metadata = {
                 "provider": "whisper",
                 "model": f"whisper-{self.model_size}",
                 "segments": [seg.to_dict() for seg in transcript_segments]
             }
+
+        # 建立完整結果
+        result = create_transcription_result(
+            text=full_text_str,
+            language=info.language if hasattr(info, 'language') else (language or "unknown"),
+            confidence=np.mean([seg.confidence for seg in transcript_segments]) if transcript_segments else 0.0,
+            metadata=metadata
         )
         
         return result
@@ -342,13 +361,15 @@ class WhisperProvider(ProviderBase):
             transcript_segments.append(seg)
         
         # 建立完整結果
-        result = TranscriptionResult(
+        result = create_transcription_result(
             text=result_dict["text"].strip(),
-            segments=transcript_segments,
             language=result_dict.get("language", language or "unknown"),
             confidence=0.9,
-            provider="whisper",
-            model=f"whisper-{self.model_size}"
+            metadata={
+                "provider": "whisper",
+                "model": f"whisper-{self.model_size}",
+                "segments": [seg.to_dict() for seg in transcript_segments]
+            }
         )
         
         return result
@@ -537,16 +558,30 @@ class WhisperProvider(ProviderBase):
             transcript_segments.append(seg)
             full_text.append(segment.text.strip())
         
-        # 建立完整結果
-        result = TranscriptionResult(
-            text=" ".join(full_text),
-            language=info.language if hasattr(info, 'language') else (language or "unknown"),
-            confidence=np.mean([seg.confidence for seg in transcript_segments]) if transcript_segments else 0.0,
-            metadata={
+        # 檢查轉譯結果是否為空
+        full_text_str = " ".join(full_text).strip()
+        if not full_text_str:
+            logger.warning("Whisper (file) returned empty transcription - possible silent audio or poor quality")
+            # 為空結果添加有意義的元數據
+            metadata = {
+                "provider": "whisper",
+                "model": f"whisper-{self.model_size}",
+                "segments": [seg.to_dict() for seg in transcript_segments],
+                "empty_result_reason": "no_speech_detected"
+            }
+        else:
+            metadata = {
                 "provider": "whisper",
                 "model": f"whisper-{self.model_size}",
                 "segments": [seg.to_dict() for seg in transcript_segments]
             }
+
+        # 建立完整結果
+        result = create_transcription_result(
+            text=full_text_str,
+            language=info.language if hasattr(info, 'language') else (language or "unknown"),
+            confidence=np.mean([seg.confidence for seg in transcript_segments]) if transcript_segments else 0.0,
+            metadata=metadata
         )
         
         # 設定音訊時長（從最後一個 segment 的結束時間）

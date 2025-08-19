@@ -35,8 +35,9 @@ def create_operator_factories() -> Dict[str, Callable]:
         return SileroVADOperator()
     
     # Recording
-    def create_recording():
+    def create_recording(**kwargs):
         from src.operators.recording.recording_operator import RecordingOperator
+        # RecordingOperator 不需要這些參數，忽略它們
         return RecordingOperator()
     
     # Format Conversion

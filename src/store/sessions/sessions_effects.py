@@ -8,6 +8,7 @@ Sessions 域的 Effects 實現
 import asyncio
 from typing import Dict, Optional, Any
 from weakref import WeakValueDictionary
+from datetime import datetime
 from pystorex import create_effect,ofType
 from reactivex import timer
 from reactivex import operators as ops
@@ -20,13 +21,28 @@ from src.core.timer_manager import timer_manager
 from .fsm_config import get_strategy_config
 from .sessions_state import FSMStateEnum, FSMStrategy
 from .sessions_actions import (
-    create_session, destroy_session, session_created, session_destroyed,
+    create_session, destroy_session,
     wake_triggered, start_recording, start_asr_streaming, fsm_reset,
     session_error, transcription_done, begin_transcription, end_recording,
-    audio_chunk_received, speech_detected, silence_detected,
-    recording_started, countdown_started, countdown_cancelled,
-    mode_switched, switch_mode, end_asr_streaming
+    audio_chunk_received, speech_detected, silence_started, audio_metadata,
+    recording_status_changed, countdown_started, countdown_cancelled,
+    mode_switched, switch_mode, end_asr_streaming,
+    upload_file, upload_file_done, chunk_upload_start, chunk_upload_done
 )
+from src.audio.models import AudioSampleFormat
+
+# 模組級變數 - Provider Manager
+provider_manager = None
+
+def set_provider_manager(manager):
+    """設置模組級 ProviderManager 實例
+    
+    Args:
+        manager: ProviderManager 實例
+    """
+    global provider_manager
+    provider_manager = manager
+    logger.info("SessionEffects: ProviderManager 已設置")
 
 
 class SessionEffects:
@@ -83,6 +99,10 @@ class SessionEffects:
             'vad',               # 3. VAD 處理
             'recording'          # 4. 錄音管理
         ]
+        
+        # 步驟 5：添加去重機制 - 記錄最後處理的轉譯時間戳
+        self._last_transcription_timestamp = {}  # session_id -> timestamp
+        self._transcription_processing = set()  # 正在處理的 session_id 集合
     
     def _format_session_id(self, session_id: str) -> str:
         """安全格式化 session_id 用於日誌顯示"""
@@ -109,7 +129,7 @@ class SessionEffects:
     async def _handle_create_session(self, action):
         """處理 session 創建邏輯"""
         payload = action.payload
-        session_id = payload["id"]
+        session_id = payload.get("session_id") or payload.get("id")
         
         # 從 strategy 取得策略
         strategy = payload.get("strategy", FSMStrategy.NON_STREAMING)
@@ -136,9 +156,8 @@ class SessionEffects:
             await timer_manager.create_timer(session_id)
             logger.info(f"Timer created for session: {session_id}")
             
-            # Dispatch session_created action
-            if self.store:
-                self.store.dispatch(session_created(session_id))
+            # Session creation complete
+            logger.info(f"Session {session_id} successfully created")
             
             return []
             
@@ -162,7 +181,7 @@ class SessionEffects:
     
     async def _handle_destroy_session(self, action):
         """處理 session 銷毀邏輯"""
-        session_id = action.payload["id"]
+        session_id = action.payload.get("session_id") or action.payload.get("id")
         logger.info(f"Destroying session {session_id}")
         
         try:
@@ -188,9 +207,8 @@ class SessionEffects:
             # 清理模式記錄
             self.session_strategies.pop(session_id, None)
             
-            # Dispatch session_destroyed action
-            if self.store:
-                self.store.dispatch(session_destroyed(session_id))
+            # Session destruction complete
+            logger.info(f"Session {session_id} successfully destroyed")
             
             return []
             
@@ -536,11 +554,12 @@ class SessionEffects:
                             if detection and hasattr(detection, 'confidence'):
                                 if detection.confidence > 0.7:  # 閾值可配置
                                     # Phase 3.2: 喚醒詞檢測日誌
-                                    logger.info("┌" + "─" * 60 + "┐")
-                                    logger.info(f"│ 🎆 WAKE WORD DETECTED!")
-                                    logger.info(f"│ 🔹 Session: {self._format_session_id(session_id)}...")
-                                    logger.info(f"│ 🎯 Confidence: {detection.confidence:.2f}")
-                                    logger.info(f"│ 🔊 Trigger: {getattr(detection, 'trigger', 'unknown')}")
+                                    logger.block("Wake Word Detected", [
+                                        f"🎆 WAKE WORD DETECTED!",
+                                        f"🔹 Session: {self._format_session_id(session_id)}...",
+                                        f"🎯 Confidence: {detection.confidence:.2f}",
+                                        f"🔊 Trigger: {getattr(detection, 'trigger', 'unknown')}"
+                                    ])
                                     logger.info("└" + "─" * 60 + "┘")
                                     self.store.dispatch(wake_triggered(
                                         session_id, 
@@ -568,7 +587,7 @@ class SessionEffects:
                                     silence_duration = getattr(vad_result, 'silence_duration', 0)
                                     if silence_duration > 0:
                                         logger.debug(f"Silence detected for session {session_id}: {silence_duration}s")
-                                        self.store.dispatch(silence_detected(
+                                        self.store.dispatch(silence_started(
                                             session_id, 
                                             silence_duration
                                         ))
@@ -590,6 +609,117 @@ class SessionEffects:
             if self.store:
                 self.store.dispatch(session_error(session_id, str(e)))
             return []
+    
+    # ============================================================================
+    # 音訊 Metadata 處理 Effects
+    # ============================================================================
+    
+    @create_effect
+    def audio_metadata_effect(self, action_stream):
+        """音訊 Metadata 處理 Effect
+        
+        監聽 audio_metadata action，處理前端發送的音訊 metadata：
+        1. 驗證 metadata 完整性
+        2. 預先配置 format conversion operator
+        3. 發送確認響應
+        """
+        return action_stream.pipe(
+            ofType(audio_metadata),
+            async_flat_map(self._handle_audio_metadata)
+        )
+    
+    async def _handle_audio_metadata(self, action):
+        """處理音訊 metadata
+        
+        根據前端發送的音訊 metadata：
+        1. 預先配置轉換參數
+        2. 準備轉換 operator
+        3. 記錄轉換策略
+        """
+        session_id = action.payload.get("session_id")
+        received_metadata = action.payload.get("audio_metadata")
+        
+        logger.info(f"🎵 處理音訊 metadata - Session: {self._format_session_id(session_id)}")
+        
+        try:
+            # 獲取 session 狀態以取得轉換策略
+            session_state = self._get_session_state(session_id)
+            if not session_state:
+                logger.warning(f"Session {session_id} not found in audio metadata effect")
+                return []
+            
+            # 轉換策略應該已經在 reducer 中創建
+            conversion_strategy = session_state.get('conversion_strategy')
+            if not conversion_strategy:
+                logger.warning(f"No conversion strategy found for session {session_id}")
+                return []
+            
+            # 預先配置 format conversion operator
+            await self._preconfigure_format_converter(session_id, conversion_strategy)
+            
+            # 記錄處理完成
+            logger.info("┌" + "─" * 70 + "┐")
+            logger.info(f"│ ✅ METADATA PROCESSING COMPLETE")
+            logger.info(f"│ 🔹 Session: {self._format_session_id(session_id)}...")
+            logger.info(f"│ 🎯 Ready for: {conversion_strategy.get('targetFormat', 'unknown')}")
+            logger.info(f"│ ⚡ Priority: {conversion_strategy.get('priority', 'unknown')}")
+            logger.info("└" + "─" * 70 + "┘")
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Audio metadata processing failed for session {session_id}: {e}")
+            if self.store:
+                self.store.dispatch(session_error(session_id, str(e)))
+            return []
+    
+    async def _preconfigure_format_converter(self, session_id: str, conversion_strategy: Dict[str, Any]):
+        """預先配置格式轉換 operator
+        
+        根據轉換策略預先設置 format conversion operator 參數
+        
+        Args:
+            session_id: Session ID
+            conversion_strategy: 轉換策略
+        """
+        try:
+            # 檢查是否已存在 format converter
+            if session_id in self.session_operators.get('format_conversion', {}):
+                converter = self.session_operators['format_conversion'][session_id]
+                logger.debug(f"Updating existing format converter for session {session_id}")
+            else:
+                # 創建新的 converter
+                converter = await self._create_operator(
+                    'format_conversion',
+                    session_id,
+                    target_format=conversion_strategy.get('targetFormat', 'pcm_float32'),
+                    sample_rate=conversion_strategy.get('targetSampleRate', 16000),
+                    channels=conversion_strategy.get('targetChannels', 1)
+                )
+                
+                if not converter:
+                    logger.warning(f"Failed to create format converter for session {session_id}")
+                    return
+            
+            # 如果 converter 有配置方法，應用轉換策略
+            if hasattr(converter, 'configure'):
+                await converter.configure(
+                    target_sample_rate=conversion_strategy.get('targetSampleRate', 16000),
+                    target_channels=conversion_strategy.get('targetChannels', 1),
+                    target_format=conversion_strategy.get('targetFormat', 'pcm_float32'),
+                    conversion_steps=conversion_strategy.get('conversionSteps', []),
+                    priority=conversion_strategy.get('priority', 'medium')
+                )
+                logger.info(f"✅ Format converter configured for session {session_id}")
+            
+            # 如果 converter 有預熱方法，預先載入必要資源
+            if hasattr(converter, 'warm_up'):
+                await converter.warm_up()
+                logger.debug(f"Format converter warmed up for session {session_id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to preconfigure format converter for session {session_id}: {e}")
+            raise
     
     def _get_session_state(self, session_id: str) -> Optional[Dict[str, Any]]:
         """獲取 session 狀態的輔助方法
@@ -639,7 +769,7 @@ class SessionEffects:
         當檢測到靜音時啟動計時器，如果在倒數期間檢測到語音則取消計時器。
         """
         return action_stream.pipe(
-            ofType(silence_detected),
+            ofType(silence_started),
             ops.flat_map(lambda action: self._handle_countdown(action, action_stream))
         )
     
@@ -656,15 +786,15 @@ class SessionEffects:
         
         # 檢查 session_id 是否有效
         if session_id is None:
-            logger.warning("Received silence_detected action with session_id=None, skipping countdown")
+            logger.warning("Received silence_started action with session_id=None, skipping countdown")
             return []
         
         # 視覺化倒數開始
-        logger.info("┌" + "─" * 60 + "┐")
-        logger.info(f"│ 🔕 SILENCE COUNTDOWN STARTED - Session: {self._format_session_id(session_id)}...")
-        logger.info(f"│ ⏱️  Duration: {duration}s")
-        logger.info("└" + "─" * 60 + "┘")
-        
+        logger.block("Silence Countdown",[
+            f"🔕 SILENCE COUNTDOWN STARTED - Session: {self._format_session_id(session_id)}...",
+            f"⏱️  Duration: {duration}s"
+        ])
+
         # Dispatch countdown_started
         if self.store:
             self.store.dispatch(countdown_started(session_id, duration))
@@ -695,21 +825,19 @@ class SessionEffects:
             end_recording.type: "⏹️ RECORDING ENDED",
             fsm_reset.type: "🔄 FSM RESET"
         }.get(cancel_reason, f"❓ {cancel_reason}")
-        
-        logger.info("┌" + "─" * 60 + "┐")
-        logger.info(f"│ ❌ COUNTDOWN CANCELLED - Session: {self._format_session_id(session_id)}...")
-        logger.info(f"│ 📍 Reason: {reason_emoji}")
-        logger.info("└" + "─" * 60 + "┘")
-        
+        logger.block("Silence Countdown Cancelled", [
+            f"❌ COUNTDOWN CANCELLED - Session: {self._format_session_id(session_id)}...",
+            f"📍 Reason: {reason_emoji}"
+        ])
         if self.store:
             self.store.dispatch(countdown_cancelled(session_id))
     
     def _log_countdown_completed(self, session_id: str):
         """記錄倒數完成 - 視覺化日誌"""
-        logger.info("┌" + "─" * 60 + "┐")
-        logger.info(f"│ ✅ COUNTDOWN COMPLETED - Session: {self._format_session_id(session_id)}...")
-        logger.info(f"│ 🔚 Triggering end_recording due to silence timeout")
-        logger.info("└" + "─" * 60 + "┘")
+        logger.block("Silence Countdown Completed", [
+            f"✅ COUNTDOWN COMPLETED - Session: {self._format_session_id(session_id)}...",
+            "🔚 Triggering end_recording due to silence timeout"
+        ])
     
     @create_effect
     def transcription_processing_effect(self, action_stream):
@@ -728,22 +856,132 @@ class SessionEffects:
         """處理轉譯請求"""
         session_id = action.payload.get("session_id")
         
+        # 步驟 5：去重機制 - 檢查是否已經在處理這個 session 的轉譯
+        if session_id in self._transcription_processing:
+            logger.warning(f"⚠️ Transcription already in progress for session {self._format_session_id(session_id)}, skipping duplicate request")
+            return []
+        
+        # 標記為正在處理
+        self._transcription_processing.add(session_id)
+        
         try:
             # 嘗試使用真實的 Whisper provider
             if 'whisper' in self.provider_factories:
-                # 創建 Whisper provider 實例
-                whisper = self.provider_factories['whisper'](store=self.store)
+                # 創建 Whisper provider 實例（create_whisper 不接受參數）
+                whisper = self.provider_factories['whisper']()
                 
-                # 從音訊隊列獲取錄音數據
+                # 初始化 provider
+                await whisper.initialize()
+                
+                # 從音訊隊列獲取音訊數據
+                # 對於 BATCH 策略（chunk upload），使用 get_all_audio 來獲取 pre_buffer 中的數據
+                # 對於其他策略，使用 stop_recording 來獲取 recording_buffer 中的數據
                 audio_data = None
                 if self.audio_queue_manager:
-                    audio_data = self.audio_queue_manager.stop_recording(session_id)
+                    # 檢查 session 的策略
+                    from .sessions_selectors import get_session
+                    session = None
+                    if self.store:
+                        get_session_selector = get_session(session_id)
+                        session = get_session_selector(self.store.state)
+                    
+                    logger.info(f"Retrieved session for {session_id}: {session}")
+                    
+                    # 根據策略選擇正確的方法
+                    from ..sessions.sessions_state import FSMStrategy
+                    strategy = session.get('strategy') if session else None
+                    logger.info(f"Session {session_id} strategy: {strategy}, type: {type(strategy)}")
+                    
+                    # Check if it's a BATCH strategy (handle both string and enum)
+                    is_batch = (
+                        strategy == FSMStrategy.BATCH or 
+                        strategy == 'batch' or
+                        (hasattr(strategy, 'value') and strategy.value == 'batch')
+                    )
+                    
+                    if is_batch:
+                        logger.info(f"Using get_all_audio for BATCH strategy session {session_id}")
+                        audio_data = self.audio_queue_manager.get_all_audio(session_id)
+                    else:
+                        logger.info(f"Using stop_recording for non-BATCH session {session_id}")
+                        audio_data = self.audio_queue_manager.stop_recording(session_id)
                 
                 if audio_data:
+                    # 步驟 3：智能音訊格式檢測和處理
+                    try:
+                        from src.utils.audio_format_detector import detect_and_prepare_audio_for_whisper
+                        
+                        logger.info(f"🔍 開始音訊格式分析 - Session: {self._format_session_id(session_id)}")
+                        logger.info(f"📊 原始音訊大小: {len(audio_data)} bytes")
+                        
+                        # 使用高级检测和处理
+                        processed_audio, processing_info = detect_and_prepare_audio_for_whisper(audio_data)
+                        
+                        # 记录处理信息
+                        format_info = processing_info['detected_format']
+                        logger.info(f"🎵 檢測結果: {format_info['format']} "
+                                  f"({format_info.get('encoding', 'unknown')}) "
+                                  f"- 信心度: {format_info['confidence']:.2f}")
+                        
+                        # 檢查是否需要嘗試解壓縮（低信心度時的強制嘗試）
+                        if format_info.get('needs_decompression_attempt', False):
+                            logger.warning(f"🚨 格式檢測信心度低 ({format_info.get('confidence', 0.3):.2f})，強制嘗試解壓縮")
+                            # 強制執行轉換，即使 needs_conversion 為 False
+                            if not processing_info.get('needs_conversion'):
+                                logger.info("📢 覆蓋決定：強制執行音訊轉換")
+                                processing_info['needs_conversion'] = True
+                        
+                        if processing_info['needs_conversion']:
+                            logger.info(f"🔄 執行音訊轉換: {' → '.join(processing_info['conversion_steps'])}")
+                            logger.info(f"📈 處理結果: {len(audio_data)} → {processing_info['final_size']} bytes")
+                            audio_data = processed_audio
+                        else:
+                            logger.info("✨ 音訊格式無需轉換，直接使用")
+                    
+                        # 步驟 4：為 Whisper 進行最終格式轉換 (INT16 → FLOAT32)
+                        if 'format_conversion' in self.operator_factories:
+                            logger.info(f"🔄 為 Whisper 進行最終格式轉換 - Session: {self._format_session_id(session_id)}")
+                            format_converter = self.operator_factories['format_conversion'](
+                                target_format="float32",
+                                sample_rate=16000,
+                                channels=1
+                            )
+                            
+                            try:
+                                final_audio = await format_converter.process(audio_data)
+                                if final_audio:
+                                    audio_data = final_audio
+                                    logger.info(f"✅ Whisper 最終格式轉換成功 - 大小: {len(audio_data)} bytes")
+                                else:
+                                    logger.warning("⚠️ 最終格式轉換返回空結果，使用處理後的音訊")
+                            except Exception as e:
+                                logger.warning(f"⚠️ 最終格式轉換失敗: {e}，使用處理後的音訊")
+                                
+                    except ImportError as e:
+                        logger.error(f"❌ 無法匯入音訊處理模組: {e}")
+                        if self.store:
+                            self.store.dispatch(session_error(session_id, f"系統配置錯誤: 缺少音訊處理模組"))
+                        return []
+                    except Exception as e:
+                        logger.error(f"❌ 音訊格式處理失敗: {e}")
+                        if self.store:
+                            self.store.dispatch(session_error(session_id, f"音訊處理錯誤: {e}"))
+                        return []
+                    
                     # 調用真實的轉譯
                     result = await whisper.transcribe(audio_data)
                     if self.store:
-                        self.store.dispatch(transcription_done(session_id, result))
+                        # 確保轉譯結果轉換為字典格式以便 PyStoreX 序列化
+                        result_dict = result.to_dict() if hasattr(result, 'to_dict') else result
+                        logger.block("Transcription Result", [
+                            f"🔊 TRANSCRIPTION RESULT - Session: {self._format_session_id(session_id)}...",
+                            f"📝 Result: {str(result_dict)[:50]}...",
+                            f"⏱️ Duration: {result_dict.get('duration', 'unknown')}s",
+                            f"📈 Word Count: {result_dict.get('word_count', 'unknown')}",
+                            f"🎯 Language: {result_dict.get('language', 'unknown')}"
+                        ])
+                        self.store.dispatch(transcription_done(session_id, result_dict))
+                        logger.info(f"✅ transcription_done action dispatched for session {self._format_session_id(session_id)}")
                 else:
                     logger.warning(f"No audio data available for transcription in session {session_id}")
                     if self.store:
@@ -761,6 +999,12 @@ class SessionEffects:
             logger.error(f"Transcription failed for session {session_id}: {e}")
             if self.store:
                 self.store.dispatch(session_error(session_id, str(e)))
+        finally:
+            # 清除處理標記
+            self._transcription_processing.discard(session_id)
+            # 記錄處理時間戳
+            import time
+            self._last_transcription_timestamp[session_id] = time.time()
         
         return []
     
@@ -836,7 +1080,7 @@ class SessionEffects:
         記錄所有 Session 相關的重要事件。
         """
         return action_stream.pipe(
-            ops.filter(lambda a: a.type.startswith("[Session]")),
+            ops.filter(lambda a: a.type.startswith("[Session]") and "Audio Chunk Received" not in a.type),
             ops.do_action(lambda action: self._log_action(action))
         )
     
@@ -865,8 +1109,18 @@ class SessionEffects:
         
         elif action.type == transcription_done.type:
             # 記錄轉譯完成指標
-            result_length = len(action.payload.get("result", ""))
-            logger.info(f"Transcription completed: {result_length} characters")
+            result = action.payload.get("result", {})
+            # 處理字典格式的結果
+            if isinstance(result, dict):
+                text = result.get("text", "")
+                result_length = len(text)
+                confidence = result.get("confidence", 0.0)
+                language = result.get("language", "unknown")
+                logger.info(f"Transcription completed: {result_length} characters, confidence: {confidence}, language: {language}")
+            else:
+                # 向後兼容：處理字串格式
+                result_length = len(str(result))
+                logger.info(f"Transcription completed: {result_length} characters")
         
         elif action.type == session_error.type:
             # 記錄錯誤指標
@@ -885,6 +1139,15 @@ class SessionTimerEffects:
             store: PyStoreX store 實例
         """
         self.store = store
+        # 注入 audio_queue_manager
+        from src.core.audio_queue_manager import get_audio_queue_manager
+        self.audio_queue_manager = get_audio_queue_manager()
+    
+    def _format_session_id(self, session_id: str) -> str:
+        """安全格式化 session_id 用於日誌顯示"""
+        if session_id is None:
+            return "[None]"
+        return session_id[:8] if len(session_id) > 8 else session_id
     
     @create_effect
     def session_timeout(self, action_stream):
@@ -946,12 +1209,11 @@ class SessionTimerEffects:
             timeout_sec = timeout_ms / 1000.0
         
         # Phase 3.3: 增強超時警告日誌
-        logger.warning("┌" + "─" * 60 + "┐")
-        logger.warning(f"│ ⏰ RECORDING TIMEOUT STARTED")
-        logger.warning(f"│ 🔹 Session: {self._format_session_id(session_id)}...")
-        logger.warning(f"│ ⏱️  Duration: {timeout_sec}s")
-        logger.warning(f"│ 🎤 Type: {'Streaming' if is_streaming else 'Recording'}")
-        logger.warning("└" + "─" * 60 + "┘")
+        logger.block("Recording Timeout Warning", [
+            f"🔴 RECORDING TIMEOUT STARTED - Session: {self._format_session_id(session_id)}...",
+            f"⏱️  Duration: {timeout_sec}s",
+            f"🎤 Type: {'Streaming' if is_streaming else 'Recording'}"
+        ])
         
         # 選擇結束動作
         end_action = end_asr_streaming if is_streaming else end_recording
@@ -977,3 +1239,314 @@ class SessionTimerEffects:
                 )
             )
         )
+    
+    # ============================================================================
+    # 純事件驅動架構新增 Effects (Phase 3)
+    # ============================================================================
+    
+    @create_effect
+    def upload_file_effect(self, action_stream):
+        """處理批次上傳 - 監聽 upload_file action
+        
+        當收到 upload_file action 時：
+        1. 從 AudioQueueManager 獲取音訊
+        2. 準備音訊數據
+        3. 分發 upload_file_done action
+        """
+        return action_stream.pipe(
+            ofType(upload_file),
+            async_flat_map(self._handle_upload_file)
+        )
+    
+    @create_effect
+    def upload_file_done_effect(self, action_stream):
+        """處理上傳完成 - 監聽 upload_file_done action
+        
+        當收到 upload_file_done action 時：
+        1. 獲取準備好的音訊數據
+        2. 調用 provider 處理
+        3. 分發 transcription_done action
+        """
+        return action_stream.pipe(
+            ofType(upload_file_done),
+            async_flat_map(self._handle_upload_file_done)
+        )
+    
+    async def _handle_upload_file(self, action):
+        """處理檔案上傳邏輯 - 準備音訊數據
+        
+        Args:
+            action: upload_file action
+            
+        Returns:
+            upload_file_done 或 session_error action
+        """
+        session_id = action.payload.get("session_id")
+        
+        try:
+            logger.info(f"📤 處理檔案上傳 - Session: {self._format_session_id(session_id)}")
+            
+            # 從 AudioQueueManager 獲取音訊數據
+            # 使用 get_all_audio 來獲取批次上傳的所有音訊數據（不需要先開始錄音）
+            audio_data = self.audio_queue_manager.get_all_audio(session_id)
+            
+            if not audio_data:
+                logger.warning(f"⚠️ Session {session_id} 沒有音訊數據")
+                return session_error(session_id, "No audio data available")
+            
+            # 準備音訊數據並分發 upload_file_done
+            logger.info(f"✅ 音訊準備完成，大小: {len(audio_data)} bytes")
+            return upload_file_done(session_id, audio_data)
+            
+        except Exception as e:
+            logger.error(f"檔案上傳失敗: {e}")
+            return session_error(session_id, str(e))
+    
+    async def _handle_upload_file_done(self, action):
+        """處理上傳完成邏輯 - 調用 provider 進行轉譯
+        
+        Args:
+            action: upload_file_done action (包含音訊數據)
+            
+        Returns:
+            transcription_done 或 session_error action
+        """
+        session_id = action.payload.get("session_id")
+        audio_data = action.payload.get("audio_data")
+        
+        try:
+            logger.info(f"📄 處理檔案上傳完成 - Session: {self._format_session_id(session_id)}")
+            
+            if not audio_data:
+                logger.warning(f"⚠️ Session {session_id} 沒有音訊數據")
+                return session_error(session_id, "No audio data in upload_file_done")
+            
+            logger.info(f"✅ 檔案處理準備完成，大小: {len(audio_data)} bytes")
+            
+            # 調用統一的轉譯處理邏輯
+            return await self._process_audio_transcription(session_id, audio_data, "file upload")
+            
+        except Exception as e:
+            logger.error(f"❌ 檔案處理失敗 - Session: {session_id}, Error: {e}")
+            return session_error(session_id, str(e))
+    
+    @create_effect
+    def end_recording_effect(self, action_stream):
+        """處理錄音結束 - 監聽 end_recording action
+        
+        當收到 end_recording action 時（NON_STREAMING 模式）：
+        1. 檢查策略是否為 NON_STREAMING
+        2. 從隊列獲取累積音訊
+        3. 處理音訊並分發結果
+        """
+        return action_stream.pipe(
+            ofType(end_recording),
+            async_flat_map(self._handle_recording_complete)
+        )
+    
+    async def _handle_recording_complete(self, action):
+        """處理錄音完成邏輯
+        
+        Args:
+            action: end_recording action
+            
+        Returns:
+            transcription_done 或 session_error action，或空列表
+        """
+        session_id = action.payload.get("session_id")
+        
+        try:
+            # 獲取 session 資訊以檢查策略
+            state = self.store.state
+            sessions_state = state.get('sessions', {})
+            all_sessions = sessions_state.get('sessions', {}) if hasattr(sessions_state, 'get') else {}
+            session = all_sessions.get(session_id) if hasattr(all_sessions, 'get') else None
+            
+            if not session:
+                logger.warning(f"⚠️ Session {session_id} not found")
+                return []
+            
+            strategy = session.get("strategy", FSMStrategy.NON_STREAMING)
+            
+            # 只有 NON_STREAMING 模式才處理
+            if strategy != FSMStrategy.NON_STREAMING:
+                logger.debug(f"Session {session_id} 不是 NON_STREAMING 模式，跳過處理")
+                return []
+            
+            logger.info(f"🎯 處理錄音完成 - Session: {self._format_session_id(session_id)}")
+            
+            # 從隊列獲取累積音訊
+            audio_data = await self.audio_queue_manager.stop_recording(session_id)
+            
+            if not audio_data:
+                logger.warning(f"⚠️ Session {session_id} 沒有音訊數據")
+                return session_error(session_id, "No audio data available")
+            
+            # 調用 provider 處理
+            global provider_manager
+            if provider_manager:
+                try:
+                    # 使用 ProviderManager 進行轉譯
+                    transcription = await provider_manager.transcribe(
+                        audio_data,
+                        session_id=session_id
+                    )
+                    
+                    # 將 TranscriptionResult 轉換為字典格式
+                    if hasattr(transcription, 'to_dict'):
+                        result = transcription.to_dict()
+                    else:
+                        # 手動轉換 TranscriptionResult 為字典
+                        result = {
+                            "text": transcription.text,
+                            "language": getattr(transcription, 'language', 'unknown'),
+                            "confidence": getattr(transcription, 'confidence', 0.92),
+                            "timestamp": datetime.now().isoformat()
+                        }
+                except Exception as e:
+                    logger.error(f"Provider 轉譯失敗: {e}")
+                    # 使用模擬結果作為降級策略
+                    result = {
+                        "text": f"[轉譯失敗] {str(e)}",
+                        "confidence": 0.0,
+                        "timestamp": datetime.now().isoformat(),
+                        "error": str(e)
+                    }
+            else:
+                logger.warning("ProviderManager 未初始化，使用模擬結果")
+                # 模擬轉譯結果（降級策略）
+                result = {
+                    "text": "[模擬] 非實時模式轉譯結果",
+                    "confidence": 0.92,
+                    "timestamp": datetime.now().isoformat()
+                }
+            
+            logger.info(f"✅ 錄音處理完成 - Session: {self._format_session_id(session_id)}")
+            return transcription_done(session_id, result)
+            
+        except Exception as e:
+            logger.error(f"❌ 錄音處理失敗 - Session: {session_id}, Error: {e}")
+            return session_error(session_id, str(e))
+    
+    # ============================================================================
+    # Chunk Upload Effects - 統一處理連續音訊塊上傳與一次性檔案上傳
+    # ============================================================================
+    
+    @create_effect
+    def chunk_upload_start_effect(self, action_stream):
+        """處理 chunk upload 開始 - 監聽 chunk_upload_start action
+        
+        當收到 chunk_upload_start action 時：
+        1. 記錄開始狀態
+        2. 準備接收音訊塊
+        3. 等待 chunk_upload_done
+        """
+        return action_stream.pipe(
+            ofType(chunk_upload_start),
+            async_flat_map(self._handle_chunk_upload_start)
+        )
+    
+    @create_effect  
+    def chunk_upload_done_effect(self, action_stream):
+        """處理 chunk upload 完成 - 監聽 chunk_upload_done action
+        
+        當收到 chunk_upload_done action 時：
+        1. 從 AudioQueueManager 獲取累積的音訊塊
+        2. 調用 provider 處理（與 upload_file_done 相同）
+        3. 分發 transcription_done action
+        
+        這個處理邏輯與 upload_file_done 完全等價
+        """
+        return action_stream.pipe(
+            ofType(chunk_upload_done),
+            async_flat_map(self._handle_chunk_upload_done)
+        )
+    
+    async def _handle_chunk_upload_start(self, action):
+        """處理 chunk upload 開始邏輯
+        
+        Args:
+            action: chunk_upload_start action
+            
+        Returns:
+            空列表（無需分發其他 action）
+        """
+        session_id = action.payload.get("session_id")
+        
+        try:
+            logger.info(f"📡 開始接收音訊塊 - Session: {self._format_session_id(session_id)}")
+            
+            # 確保音訊隊列已存在
+            if self.audio_queue_manager:
+                queue = self.audio_queue_manager.get_queue(session_id)
+                if not queue:
+                    await self.audio_queue_manager.create_queue(session_id)
+                    logger.debug(f"Created audio queue for chunk upload - Session: {session_id}")
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Chunk upload start failed: {e}")
+            return [session_error(session_id, str(e))]
+    
+    async def _handle_chunk_upload_done(self, action):
+        """處理 chunk upload 完成邏輯 - 與 upload_file_done 統一
+        
+        Args:
+            action: chunk_upload_done action
+            
+        Returns:
+            transcription_done 或 session_error action
+        """
+        session_id = action.payload.get("session_id")
+        
+        try:
+            logger.info(f"📦 處理音訊塊上傳完成 - Session: {self._format_session_id(session_id)}")
+            
+            # 從 AudioQueueManager 獲取累積的音訊數據
+            # 使用 get_all_audio 來獲取所有接收到的音訊塊
+            audio_data = self.audio_queue_manager.get_all_audio(session_id)
+            
+            if not audio_data:
+                logger.warning(f"⚠️ Session {session_id} 沒有音訊數據")
+                return session_error(session_id, "No audio data available")
+            
+            logger.info(f"✅ 音訊塊處理準備完成，大小: {len(audio_data)} bytes")
+            
+            # 調用與 upload_file_done 相同的處理邏輯
+            return await self._process_audio_transcription(session_id, audio_data, "chunk upload")
+            
+        except Exception as e:
+            logger.error(f"❌ 音訊塊處理失敗 - Session: {session_id}, Error: {e}")
+            return session_error(session_id, str(e))
+    
+    async def _process_audio_transcription(self, session_id: str, audio_data: bytes, source: str):
+        """統一的音訊轉譯處理邏輯
+        
+        This method unifies the transcription logic for both file upload and chunk upload,
+        ensuring equivalent processing regardless of the input method.
+        
+        Args:
+            session_id: Session ID
+            audio_data: Audio data to transcribe
+            source: Source description for logging ("file upload" or "chunk upload")
+            
+        Returns:
+            transcription_done or session_error action
+        """
+        try:
+            logger.info(f"🎯 處理{source}轉譯請求 - Session: {self._format_session_id(session_id)}")
+            
+            # 不再直接調用 provider，改為 dispatch begin_transcription action
+            # 這會觸發 _handle_transcription effect 來處理
+            from .sessions_actions import begin_transcription
+            
+            # 確保音訊數據已經在隊列中（已經由 upload_file_done 或 chunk_upload_done 處理）
+            logger.info(f"📤 Dispatching begin_transcription for {source} - Session: {self._format_session_id(session_id)}")
+            
+            # 只返回 begin_transcription action，讓 effect 處理後續流程
+            return begin_transcription(session_id)
+            
+        except Exception as e:
+            logger.error(f"❌ {source}轉譯處理失敗 - Session: {session_id}, Error: {e}")
+            return session_error(session_id, str(e))

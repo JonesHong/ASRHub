@@ -47,8 +47,9 @@ from .sessions import (
     fsm_reset,
     audio_chunk_received,
     clear_audio_buffer,
+    audio_metadata,
     session_error,
-    clear_session_error,
+    clear_error,
     
     # Reducer
     sessions_reducer,

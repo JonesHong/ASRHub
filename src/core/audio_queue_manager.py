@@ -23,21 +23,33 @@ class AudioBuffer:
     支援 pre-recording 和高效的數據管理
     """
     
-    def __init__(self, max_size_seconds: float = 5.0, sample_rate: int = 16000):
+    def __init__(self, max_size_seconds: float = 5.0, sample_rate: int = 16000, batch_mode: bool = False):
         """
         初始化環形緩衝區
         
         Args:
             max_size_seconds: 最大緩衝時長（秒）
             sample_rate: 採樣率
+            batch_mode: 批次模式，不限制緩衝區大小
         """
         self.max_size_seconds = max_size_seconds
         self.sample_rate = sample_rate
-        self.max_size_bytes = int(max_size_seconds * sample_rate * 2)  # 16-bit audio
+        self.batch_mode = batch_mode
         
-        # 使用 deque 實現環形緩衝
-        self.buffer = deque(maxlen=self.max_size_bytes)
-        self.timestamps = deque(maxlen=1000)  # 儲存時間戳記
+        if batch_mode:
+            # 批次模式：無大小限制，保留所有音訊數據
+            self.max_size_bytes = float('inf')
+            self.buffer = deque()  # 無限制大小
+            self.timestamps = deque()
+            logger.info("AudioBuffer initialized in BATCH mode - unlimited buffer size")
+        else:
+            # 串流模式：限制大小的環形緩衝區
+            self.max_size_bytes = int(max_size_seconds * sample_rate * 2)  # 16-bit audio
+            self.buffer = deque(maxlen=1000)  # 最多1000個音訊塊
+            self.timestamps = deque(maxlen=1000)  # 儲存時間戳記
+            logger.debug(f"AudioBuffer initialized in STREAMING mode - max {self.max_size_bytes} bytes")
+        
+        self.total_bytes = 0  # 追踪總字節數
     
     def push(self, audio_chunk: bytes, timestamp: Optional[float] = None):
         """
@@ -47,12 +59,27 @@ class AudioBuffer:
             audio_chunk: 音訊數據
             timestamp: 時間戳記
         """
-        # 如果緩衝區滿了，舊數據會自動被移除
-        self.buffer.extend(audio_chunk)
+        # logger.info(f"AudioBuffer.push: chunk_size={len(audio_chunk)}, current_total={self.total_bytes}, max_size={self.max_size_bytes}, batch_mode={self.batch_mode}")
+        
+        if not self.batch_mode:
+            # 串流模式：檢查是否超過最大緩衝大小
+            while self.total_bytes + len(audio_chunk) > self.max_size_bytes and self.buffer:
+                # 移除最舊的塊來釋放空間
+                old_chunk = self.buffer.popleft()
+                self.total_bytes -= len(old_chunk)
+                if self.timestamps:
+                    self.timestamps.popleft()
+                # logger.info(f"AudioBuffer.push: removed old chunk of {len(old_chunk)} bytes")
+        
+        # 添加新的音訊塊（批次模式無大小限制）
+        self.buffer.append(audio_chunk)
+        self.total_bytes += len(audio_chunk)
+        
+        # logger.info(f"AudioBuffer.push: added chunk, new_total={self.total_bytes}, buffer_length={len(self.buffer)}")
         
         if timestamp is None:
             timestamp = asyncio.get_event_loop().time()
-        self.timestamps.append((len(self.buffer), timestamp))
+        self.timestamps.append(timestamp)
     
     def get_recent(self, seconds: float) -> bytes:
         """
@@ -64,21 +91,38 @@ class AudioBuffer:
         Returns:
             音訊數據
         """
-        num_bytes = int(seconds * self.sample_rate * 2)
-        num_bytes = min(num_bytes, len(self.buffer))
+        target_bytes = int(seconds * self.sample_rate * 2)
         
-        # 從緩衝區末尾取數據
-        recent_data = bytes(list(self.buffer)[-num_bytes:]) if num_bytes > 0 else b''
-        return recent_data
+        # 從最新的塊開始收集數據，直到達到目標字節數
+        collected_bytes = 0
+        selected_chunks = []
+        
+        # 從後往前遍歷塊
+        for chunk in reversed(self.buffer):
+            selected_chunks.insert(0, chunk)  # 插入到前面保持順序
+            collected_bytes += len(chunk)
+            if collected_bytes >= target_bytes:
+                break
+        
+        # 連接所有選中的塊
+        if selected_chunks:
+            all_data = b''.join(selected_chunks)
+            # 如果數據太多，只返回最後的目標字節數
+            if len(all_data) > target_bytes:
+                return all_data[-target_bytes:]
+            return all_data
+        else:
+            return b''
     
     def clear(self):
         """清空緩衝區"""
         self.buffer.clear()
         self.timestamps.clear()
+        self.total_bytes = 0
     
     def size_seconds(self) -> float:
         """獲取當前緩衝區的時長（秒）"""
-        return len(self.buffer) / (self.sample_rate * 2)
+        return self.total_bytes / (self.sample_rate * 2)
 
 
 class SessionAudioQueue:
@@ -87,17 +131,27 @@ class SessionAudioQueue:
     管理該 session 的所有音訊數據流
     """
     
-    def __init__(self, session_id: str, max_queue_size: int = 100):
+    def __init__(self, session_id: str, max_queue_size: int = 100, batch_mode: bool = False):
         """
         初始化 Session 音訊佇列
         
         Args:
             session_id: Session ID
             max_queue_size: 佇列最大長度
+            batch_mode: 批次模式，用於文件上傳場景
         """
         self.session_id = session_id
+        self.batch_mode = batch_mode
         self.queue = asyncio.Queue(maxsize=max_queue_size)
-        self.pre_buffer = AudioBuffer(max_size_seconds=5.0)  # 5秒 pre-recording
+        
+        # 根據模式選擇緩衝區策略
+        if batch_mode:
+            self.pre_buffer = AudioBuffer(max_size_seconds=5.0, batch_mode=True)  # 無限制批次緩衝
+            logger.info(f"SessionAudioQueue {session_id} initialized in BATCH mode")
+        else:
+            self.pre_buffer = AudioBuffer(max_size_seconds=5.0, batch_mode=False)  # 5秒 pre-recording
+            logger.debug(f"SessionAudioQueue {session_id} initialized in STREAMING mode")
+            
         self.recording_buffer = []  # 當前錄音緩衝
         self.wake_word_window = AudioBuffer(max_size_seconds=3.0)  # 3秒喚醒詞窗口
         self.is_recording = False
@@ -116,12 +170,14 @@ class SessionAudioQueue:
             audio_chunk: 音訊數據
             timestamp: 時間戳記
         """
+        # logger.info(f"SessionAudioQueue.push: session={self.session_id}, chunk_size={len(audio_chunk)}")
         self.last_activity = datetime.now()
         self.total_chunks += 1
         self.total_bytes += len(audio_chunk)
         
         # 總是推送到 pre-buffer（環形緩衝）
         self.pre_buffer.push(audio_chunk, timestamp)
+        # logger.info(f"SessionAudioQueue.push: pushed to pre_buffer, new total_bytes={self.pre_buffer.total_bytes}")
         
         # 推送到喚醒詞窗口（環形緩衝）
         self.wake_word_window.push(audio_chunk, timestamp)
@@ -186,6 +242,28 @@ class SessionAudioQueue:
         logger.info(f"Stopped recording for session {self.session_id}, captured {len(recording_data)} bytes")
         return recording_data
     
+    def get_all_audio(self) -> bytes:
+        """
+        獲取所有推送的音訊數據（用於批次上傳模式）
+        從 pre_buffer 中獲取所有可用數據
+        
+        Returns:
+            所有推送的音訊數據
+        """
+        logger.info(f"SessionAudioQueue.get_all_audio: session={self.session_id}, pre_buffer.total_bytes={self.pre_buffer.total_bytes}, buffer_length={len(self.pre_buffer.buffer)}")
+        
+        # 從 pre_buffer 的 deque 中獲取所有數據並連接成 bytes
+        if self.pre_buffer.buffer:
+            # buffer 裡面存儲的是 bytes 塊列表，需要將它們連接起來
+            audio_data = b''.join(self.pre_buffer.buffer)
+            logger.info(f"SessionAudioQueue.get_all_audio: joined {len(self.pre_buffer.buffer)} chunks into {len(audio_data)} bytes")
+        else:
+            audio_data = b''
+            logger.info(f"SessionAudioQueue.get_all_audio: pre_buffer.buffer is empty")
+        
+        logger.info(f"Retrieved all audio for session {self.session_id}, total {len(audio_data)} bytes")
+        return audio_data
+    
     def get_wake_word_audio(self) -> bytes:
         """
         獲取喚醒詞檢測窗口的音訊
@@ -242,14 +320,15 @@ class AudioQueueManager:
         self.max_sessions = max_sessions
         self.queues: Dict[str, SessionAudioQueue] = {}
         
-        logger.info(f"AudioQueueManager initialized with max_sessions={max_sessions}")
+        logger.info(f"AudioQueueManager initialized with max_sessions={max_sessions}, instance_id={id(self)}")
     
-    async def create_queue(self, session_id: str) -> SessionAudioQueue:
+    async def create_queue(self, session_id: str, batch_mode: bool = False) -> SessionAudioQueue:
         """
         為 session 創建音訊佇列
         
         Args:
             session_id: Session ID
+            batch_mode: 是否為批次模式
             
         Returns:
             SessionAudioQueue 實例
@@ -262,10 +341,10 @@ class AudioQueueManager:
             # 清理最舊的非活動佇列
             await self._cleanup_oldest_queue()
         
-        queue = SessionAudioQueue(session_id)
+        queue = SessionAudioQueue(session_id, batch_mode=batch_mode)
         self.queues[session_id] = queue
         
-        logger.debug(f"Created audio queue for session {session_id}")
+        logger.debug(f"Created audio queue for session {session_id} (batch_mode={batch_mode})")
         return queue
     
     async def destroy_queue(self, session_id: str):
@@ -284,7 +363,7 @@ class AudioQueueManager:
         
         logger.debug(f"Destroyed audio queue for session {session_id}")
     
-    async def push(self, session_id: str, audio_chunk: bytes, timestamp: Optional[float] = None):
+    async def push(self, session_id: str, audio_chunk: bytes, timestamp: Optional[float] = None, batch_mode: bool = False):
         """
         推送音訊數據到指定 session
         
@@ -292,13 +371,18 @@ class AudioQueueManager:
             session_id: Session ID
             audio_chunk: 音訊數據
             timestamp: 時間戳記
+            batch_mode: 是否為批次模式（用於文件上傳）
         """
-        if session_id not in self.queues:
-            logger.warning(f"No audio queue for session {session_id}, creating one")
-            await self.create_queue(session_id)
+        # logger.info(f"AudioQueueManager.push: session={session_id}, chunk_size={len(audio_chunk)}, batch_mode={batch_mode}")
         
+        if session_id not in self.queues:
+            logger.warning(f"No audio queue for session {session_id}, creating one with batch_mode={batch_mode}")
+            await self.create_queue(session_id, batch_mode=batch_mode)
+        
+        # logger.info(f"AudioQueueManager.push: about to call queue.push for session={session_id}")
         queue = self.queues[session_id]
         await queue.push(audio_chunk, timestamp)
+        # logger.info(f"AudioQueueManager.push: completed queue.push for session={session_id}")
     
     async def pull(self, session_id: str, timeout: Optional[float] = None) -> Optional[bytes]:
         """
@@ -350,6 +434,26 @@ class AudioQueueManager:
         
         queue = self.queues[session_id]
         return queue.stop_recording()
+    
+    def get_all_audio(self, session_id: str) -> Optional[bytes]:
+        """
+        獲取所有推送的音訊數據（用於批次上傳模式）
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            所有音訊數據
+        """
+        if session_id not in self.queues:
+            logger.warning(f"No audio queue for session {session_id}")
+            return None
+        
+        queue = self.queues[session_id]
+        # logger.info(f"AudioQueueManager.get_all_audio: session={session_id}, queue exists, calling queue.get_all_audio()")
+        result = queue.get_all_audio()
+        # logger.info(f"AudioQueueManager.get_all_audio: session={session_id}, result length={len(result) if result else 0}")
+        return result
     
     def get_queue(self, session_id: str) -> Optional[SessionAudioQueue]:
         """
@@ -403,12 +507,20 @@ def get_audio_queue_manager() -> AudioQueueManager:
     """獲取全域音訊佇列管理器實例"""
     global _audio_queue_manager
     if _audio_queue_manager is None:
+        # If no instance exists, create one with default settings
+        # This should normally be configured via configure_audio_queue_manager()
+        logger.warning("AudioQueueManager not configured, creating with default settings")
         _audio_queue_manager = AudioQueueManager()
+    logger.debug(f"get_audio_queue_manager returning instance_id={id(_audio_queue_manager)}")
     return _audio_queue_manager
 
 
 def configure_audio_queue_manager(max_sessions: int = 1000) -> AudioQueueManager:
     """配置並獲取音訊佇列管理器"""
     global _audio_queue_manager
-    _audio_queue_manager = AudioQueueManager(max_sessions=max_sessions)
+    if _audio_queue_manager is None:
+        _audio_queue_manager = AudioQueueManager(max_sessions=max_sessions)
+        logger.debug(f"configure_audio_queue_manager created instance_id={id(_audio_queue_manager)}")
+    else:
+        logger.warning(f"AudioQueueManager already exists (instance_id={id(_audio_queue_manager)}), not creating new instance. Use existing instance.")
     return _audio_queue_manager

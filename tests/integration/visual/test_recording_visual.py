@@ -206,13 +206,13 @@ class RecordingVisualTester:
             
             if curr_session and isinstance(curr_session, dict):
                 timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                logger.info(
-                    f"[{timestamp}] Session {self.test_session_id} updated:\n"
-                    f"  FSM State: {curr_session.get('fsm_state')}\n"
-                    f"  Mode: {curr_session.get('mode')}\n"
-                    f"  Recording State: {curr_session.get('recording_state')}\n"
-                    f"  Audio Buffer Size: {len(curr_session.get('audio_buffer', []))}"
-                )
+                logger.block("Session Update", [
+                    f"Session ID: {curr_session.get('session_id', 'unknown')[:8]}...",
+                    f"FSM State: {curr_session.get('fsm_state', 'unknown')}",
+                    f"Mode: {curr_session.get('mode', 'unknown')}",
+                    f"Recording State: {curr_session.get('recording_state', 'unknown')}",
+                    f"Audio Buffer Size: {len(curr_session.get('audio_buffer', []))}"
+                ])
     
     def _on_action_dispatched(self, action):
         """處理 action dispatch 事件"""
@@ -239,10 +239,11 @@ class RecordingVisualTester:
         ]
         
         if action.type in important_actions:
-            logger.info(
-                f"🎯 [{timestamp}] Action: {action.type}\n"
-                f"   Payload: {action.payload}"
-            )
+            logger.block("Action Dispatched", [
+                f"Timestamp: {timestamp}",
+                f"Action Type: {action.type}",
+                f"Payload: {action.payload}"
+            ])
     
     async def _create_test_session(self):
         """創建測試用的 session"""
@@ -301,9 +302,10 @@ class RecordingVisualTester:
     
     def test_visual_recording(self, duration: float = 10.0):
         """視覺化錄音測試 (同步版本)"""
-        logger.info(f"\n{'='*60}")
-        logger.info(f"視覺化錄音測試 ({duration} 秒)")
-        logger.info(f"{'='*60}")
+        logger.block("Visual Recording Test", [
+            f"開始視覺化錄音測試，持續時間: {duration} 秒",
+            "請確保麥克風已連接並正常工作"
+        ])
         
         session_id = f"visual_{int(time.time())}"
         
@@ -444,18 +446,19 @@ class RecordingVisualTester:
         duration_actual = time.time() - self.start_time
         
         if recorded_data:
-            logger.info(f"\n{'='*60}")
-            logger.info(f"錄音完成！")
-            logger.info(f"{'='*60}")
-            logger.info(f"實際錄音時長: {duration_actual:.2f} 秒")
-            logger.info(f"音訊資料大小: {len(recorded_data) / 1024:.1f} KB")
-            logger.info(f"預期音訊長度: {len(recorded_data) / (self.sample_rate * 2):.2f} 秒")
-            logger.info(f"儲存位置: test_recordings/{session_id}_*.wav")
+            logger.block("Recording Summary", [
+                f"Session ID: {session_id}",
+                f"錄音時長: {duration_actual:.2f} 秒",
+                f"音訊資料大小: {len(recorded_data) / 1024:.1f} KB",
+                f"預期音訊長度: {len(recorded_data) / (self.sample_rate * 2):.2f} 秒",
+                f"儲存位置: test_recordings/{session_id}_*.wav"
+            ])
             
             # PyStoreX 統計
-            logger.info(f"\n📦 PyStoreX 統計:")
-            logger.info(f"  📨 總 Actions 數: {len(self.action_log)}")
-            logger.info(f"  🔄 狀態變化數: {len(self.state_changes)}")
+            logger.block("PyStoreX Statistics", [
+                f"總 Actions 數: {len(self.action_log)}",
+                f"狀態變化數: {len(self.state_changes)}"
+            ])
             
             # 顯示最常見的 action 類型
             if self.action_log:

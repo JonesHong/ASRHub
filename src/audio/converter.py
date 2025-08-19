@@ -593,6 +593,149 @@ class AudioConverter:
         
         return None
     
+    @staticmethod
+    def convert_webm_to_pcm(data: bytes, 
+                           sample_rate: int = 16000, 
+                           channels: int = 1) -> bytes:
+        """
+        轉換 WebM/Opus 音訊為 PCM 格式
+        
+        Args:
+            data: WebM/Opus 音訊資料
+            sample_rate: 目標採樣率
+            channels: 目標聲道數
+            
+        Returns:
+            PCM 格式音訊資料
+        """
+        converter = AudioConverter(prefer_ffmpeg=True)
+        
+        try:
+            # 檢測格式
+            detected_format = converter.detect_format(data)
+            logger.debug(f"檢測到音訊格式: {detected_format}")
+            
+            # 創建目標元資料
+            target_metadata = AudioMetadata(
+                sample_rate=sample_rate,
+                channels=channels,
+                format=AudioSampleFormat.INT16,
+                container_format=AudioContainerFormat.PCM
+            )
+            
+            # 轉換為 PCM
+            pcm_chunk = converter.convert(
+                data=data,
+                to_format=AudioContainerFormat.PCM,
+                to_metadata=target_metadata,
+                from_format=detected_format
+            )
+            
+            logger.info(f"WebM 轉 PCM 成功: {len(data)} → {len(pcm_chunk.data)} bytes")
+            return pcm_chunk.data
+            
+        except Exception as e:
+            logger.error(f"WebM 轉 PCM 失敗: {e}")
+            raise ValueError(f"無法轉換 WebM/Opus 音訊: {e}")
+    
+    @staticmethod
+    def convert_audio_file_to_pcm(data: bytes,
+                                 sample_rate: int = 16000,
+                                 channels: int = 1,
+                                 target_format: AudioSampleFormat = AudioSampleFormat.INT16) -> bytes:
+        """
+        通用音訊檔案轉 PCM 格式
+        
+        Args:
+            data: 音訊資料
+            sample_rate: 目標採樣率
+            channels: 目標聲道數
+            target_format: 目標音訊格式
+            
+        Returns:
+            PCM 格式音訊資料
+        """
+        converter = AudioConverter(prefer_ffmpeg=True)
+        
+        try:
+            # 檢測格式
+            detected_format = converter.detect_format(data)
+            logger.debug(f"檢測到音訊格式: {detected_format}")
+            
+            # 創建目標元資料
+            target_metadata = AudioMetadata(
+                sample_rate=sample_rate,
+                channels=channels,
+                format=target_format,
+                container_format=AudioContainerFormat.PCM
+            )
+            
+            # 轉換為 PCM
+            pcm_chunk = converter.convert(
+                data=data,
+                to_format=AudioContainerFormat.PCM,
+                to_metadata=target_metadata,
+                from_format=detected_format
+            )
+            
+            logger.info(f"音訊轉 PCM 成功: {detected_format} → PCM ({len(data)} → {len(pcm_chunk.data)} bytes)")
+            return pcm_chunk.data
+            
+        except Exception as e:
+            logger.error(f"音訊轉 PCM 失敗: {e}")
+            raise ValueError(f"無法轉換音訊檔案: {e}")
+    
+    @staticmethod
+    def is_compressed_audio(data: bytes) -> bool:
+        """
+        檢測音訊是否為壓縮格式
+        
+        Args:
+            data: 音訊資料
+            
+        Returns:
+            True 如果是壓縮格式，否則 False
+        """
+        if len(data) < 12:
+            return False
+            
+        # WebM/Matroska 格式 (包含 Opus)
+        if data[:4] == b'\x1a\x45\xdf\xa3':
+            return True
+            
+        # OGG 格式 (可能包含 Opus)
+        if data[:4] == b'OggS':
+            return True
+            
+        # MP3 格式
+        if (data[:3] == b'ID3' or 
+            (len(data) >= 2 and data[:2] in [b'\xff\xfb', b'\xff\xfa'])):
+            return True
+            
+        # M4A/AAC 格式
+        if len(data) >= 8 and data[4:8] == b'ftyp':
+            return True
+            
+        # FLAC 格式
+        if data[:4] == b'fLaC':
+            return True
+            
+        # WAV 格式 - 通常未壓縮，但可能包含壓縮音訊
+        if data[:4] == b'RIFF' and data[8:12] == b'WAVE':
+            # 簡單判斷：如果是標準 PCM WAV，不算壓縮
+            # 但其他格式的 WAV 可能需要解碼
+            try:
+                # 檢查音訊格式代碼
+                if len(data) >= 22:
+                    import struct
+                    audio_format = struct.unpack('<H', data[20:22])[0]
+                    # 1 = PCM, 其他為壓縮格式
+                    return audio_format != 1
+            except:
+                pass
+                
+        return False
+    
     def _safe_remove_file(self, file_path: str, max_attempts: int = 5) -> bool:
         """安全刪除檔案"""
         for attempt in range(max_attempts):
