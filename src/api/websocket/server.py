@@ -15,6 +15,7 @@ from src.api.base import APIBase, APIResponse
 from src.utils.logger import logger
 from src.store import get_global_store
 from src.store.sessions import sessions_actions, sessions_selectors
+from src.store.sessions.sessions_state import translate_fsm_state
 from src.core.exceptions import APIError
 
 # 模組級變數
@@ -915,10 +916,12 @@ class WebSocketServer(APIBase):
             return
             
         # 建立狀態更新訊息
+        current_state = session.get("state", "IDLE")
         status_message = MessageBuilder.build_status(
             session_id=connection.session_id,
-            state=session.get("state", "IDLE"),
+            state=translate_fsm_state(current_state),
             details={
+                "state_code": current_state,
                 "last_activity": session.get("last_activity").isoformat() if isinstance(session.get("last_activity"), datetime) else session.get("last_activity")
             }
         )

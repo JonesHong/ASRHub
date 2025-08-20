@@ -131,11 +131,12 @@ class AudioFormatDetector:
             return inferred_format
         
         # 最后假设为 PCM，但标记需要尝试解压缩
-        logger.debug("无法识别音频格式，假设为 PCM 但建议尝试解压缩")
+        logger.debug("无法识别音频格式，强制嘗試 WebM/Opus 解壓縮")
         result.update({
             'confidence': 0.3,
             'needs_decompression_attempt': True,  # 新增标记
-            'recommended_formats': ['webm', 'ogg']  # 推荐尝试的格式
+            'recommended_formats': ['webm', 'ogg'],  # 推荐尝试的格式
+            'force_webm_attempt': True  # 強制嘗試 WebM 轉換
         })
         return result
     
@@ -366,7 +367,8 @@ def detect_and_prepare_audio_for_whisper(audio_data: bytes) -> Tuple[bytes, Dict
             
             # 执行转换
             if (format_info['format'] == AudioContainerFormat.WEBM or 
-                format_info.get('needs_decompression_attempt', False)):
+                format_info.get('needs_decompression_attempt', False) or
+                format_info.get('force_webm_attempt', False)):
                 # WebM/Opus 专用转换或智能推断需要尝试的转换
                 try:
                     logger.info("尝试 WebM/Opus 格式转换...")
@@ -379,9 +381,12 @@ def detect_and_prepare_audio_for_whisper(audio_data: bytes) -> Tuple[bytes, Dict
                     logger.info("WebM/Opus 转换成功")
                 except Exception as e:
                     logger.warning(f"WebM/Opus 转换失败: {e}")
-                    if format_info.get('needs_decompression_attempt', False):
-                        # 如果是智能推断，尝试其他格式
-                        logger.info("尝试通用音频格式转换...")
+                    # 對於所有低信心度的檢測，都嘗試通用轉換
+                    if (format_info.get('needs_decompression_attempt', False) or 
+                        format_info.get('force_webm_attempt', False) or
+                        format_info.get('confidence', 1.0) < 0.7):
+                        # 如果是智能推断或低信心度檢測，尝试通用格式
+                        logger.info("嘗試通用音频格式转换...")
                         try:
                             audio_data = AudioConverter.convert_audio_file_to_pcm(
                                 audio_data,
@@ -392,8 +397,12 @@ def detect_and_prepare_audio_for_whisper(audio_data: bytes) -> Tuple[bytes, Dict
                             processing_info['actual_format_used'] = 'generic_conversion'
                             logger.info("通用格式转换成功")
                         except Exception as e2:
-                            logger.error(f"所有格式转换都失败: {e2}")
-                            raise e  # 抛出原始异常
+                            logger.error(f"通用格式轉換也失敗: {e2}")
+                            # 最後嘗試：直接當作原始音訊數據處理
+                            logger.warning("最後嘗試：將數據當作原始音訊處理")
+                            processing_info['actual_format_used'] = 'raw_audio_fallback'
+                            processing_info['conversion_failed'] = True
+                            # 不拋出異常，讓後續代碼嘗試處理原始數據
                     else:
                         raise e  # 非智能推断，直接抛出异常
             else:

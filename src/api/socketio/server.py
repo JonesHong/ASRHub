@@ -15,6 +15,7 @@ from src.api.base import APIBase, APIResponse
 from src.utils.logger import logger
 from src.store import get_global_store
 from src.store.sessions import sessions_actions, sessions_selectors
+from src.store.sessions.sessions_state import translate_fsm_state
 from src.core.exceptions import APIError
 
 # 模組級變數
@@ -24,6 +25,9 @@ from src.providers.manager import ProviderManager
 from src.audio import AudioChunk, AudioContainerFormat
 from src.config.manager import ConfigManager
 
+# 從 ConfigManager 獲取配置
+config_manager = ConfigManager()
+sio_config = config_manager.api.socketio
 
 class SocketIOServer(APIBase):
     """
@@ -42,9 +46,6 @@ class SocketIOServer(APIBase):
         # 初始化父類
         super().__init__()
         
-        # 從 ConfigManager 獲取配置
-        config_manager = ConfigManager()
-        sio_config = config_manager.api.socketio
         
         self.provider_manager = provider_manager
         self.host = sio_config.host
@@ -599,11 +600,13 @@ class SocketIOServer(APIBase):
             state = store.state if store else None
             session = sessions_selectors.get_session(session_id)(state) if state else None
             if session:
+                current_state = session.get("fsm_state", "IDLE")
                 await self.sio.emit(
                     'status_update',
                     {
                         'session_id': session_id,
-                        'state': session.get("fsm_state", "IDLE"),  # 修復字段名稱不匹配
+                        'state': translate_fsm_state(current_state),
+                        'state_code': current_state,
                         'timestamp': datetime.now().isoformat()
                     },
                     namespace=self.namespace,
@@ -846,11 +849,13 @@ class SocketIOServer(APIBase):
             
         room_name = f"session_{session_id}"
         
+        current_state = session.get("fsm_state", "IDLE")
         await self.sio.emit(
             'status_update',
             {
                 'session_id': session_id,
-                'state': session.get("fsm_state", "IDLE"),  # 修復字段名稱不匹配
+                'state': translate_fsm_state(current_state),
+                'state_code': current_state,
                 'timestamp': datetime.now().isoformat()
             },
             namespace=self.namespace,
@@ -995,8 +1000,8 @@ class SocketIOServer(APIBase):
                 from src.audio import AudioChunk, AudioContainerFormat, AudioEncoding
                 audio = AudioChunk(
                     data=pcm_data,
-                    sample_rate=self.config_manager.pipeline.default_sample_rate,  # 從配置讀取
-                    channels=self.config_manager.pipeline.channels,               # 從配置讀取
+                    sample_rate=config_manager.pipeline.default_sample_rate,  # 從配置讀取
+                    channels=config_manager.pipeline.channels,               # 從配置讀取
                     format=AudioContainerFormat.PCM,  # 轉換後的格式
                     encoding=AudioEncoding.LINEAR16,  # PCM 使用 LINEAR16 編碼
                     bits_per_sample=16  # 16 位元深度

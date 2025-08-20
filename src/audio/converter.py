@@ -327,8 +327,18 @@ class AudioConverter:
         temp_output_path = None
         
         try:
-            # 創建臨時輸入檔案
-            suffix = f'.{from_format.value}'
+            # 創建臨時輸入檔案 - 修復格式後綴問題
+            suffix_map = {
+                AudioContainerFormat.WEBM: '.webm',
+                AudioContainerFormat.OGG: '.ogg', 
+                AudioContainerFormat.MP3: '.mp3',
+                AudioContainerFormat.WAV: '.wav',
+                AudioContainerFormat.M4A: '.m4a',
+                AudioContainerFormat.FLAC: '.flac',
+                AudioContainerFormat.PCM: '.raw'
+            }
+            suffix = suffix_map.get(from_format, f'.{from_format.value}')
+            
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_input:
                 temp_input_path = temp_input.name
                 temp_input.write(data)
@@ -389,29 +399,52 @@ class AudioConverter:
         """使用 pydub 轉換"""
         from pydub import AudioSegment
         
-        # 載入音訊
-        audio = AudioSegment.from_file(
-            io.BytesIO(data),
-            format=from_format.value
-        )
-        
-        # 設定參數
-        audio = audio.set_frame_rate(metadata.sample_rate)
-        audio = audio.set_channels(metadata.channels)
-        
-        # 設定採樣寬度
-        if metadata.format == AudioSampleFormat.INT16:
-            audio = audio.set_sample_width(2)
-        elif metadata.format == AudioSampleFormat.INT32:
-            audio = audio.set_sample_width(4)
-        
-        # 輸出
-        if to_format == AudioContainerFormat.PCM:
-            return audio.raw_data
-        else:
-            output = io.BytesIO()
-            audio.export(output, format=to_format.value)
-            return output.getvalue()
+        try:
+            # 修復格式映射問題
+            format_map = {
+                AudioContainerFormat.WEBM: 'webm',
+                AudioContainerFormat.OGG: 'ogg',
+                AudioContainerFormat.MP3: 'mp3', 
+                AudioContainerFormat.WAV: 'wav',
+                AudioContainerFormat.M4A: 'm4a',
+                AudioContainerFormat.FLAC: 'flac'
+            }
+            pydub_format = format_map.get(from_format, from_format.value)
+            
+            # 載入音訊
+            audio = AudioSegment.from_file(
+                io.BytesIO(data),
+                format=pydub_format
+            )
+            
+            # 設定參數
+            audio = audio.set_frame_rate(metadata.sample_rate)
+            audio = audio.set_channels(metadata.channels)
+            
+            # 設定採樣寬度 - 修復 sample_width 錯誤
+            if metadata.format == AudioSampleFormat.INT16:
+                audio = audio.set_sample_width(2)
+            elif metadata.format == AudioSampleFormat.INT24:
+                audio = audio.set_sample_width(3) 
+            elif metadata.format == AudioSampleFormat.INT32:
+                audio = audio.set_sample_width(4)
+            elif metadata.format == AudioSampleFormat.FLOAT32:
+                # pydub 不直接支援 float32，轉為 int16
+                audio = audio.set_sample_width(2)
+            
+            # 輸出
+            if to_format == AudioContainerFormat.PCM:
+                return audio.raw_data
+            else:
+                output = io.BytesIO()
+                output_format = format_map.get(to_format, to_format.value)
+                audio.export(output, format=output_format)
+                return output.getvalue()
+                
+        except Exception as e:
+            # 增加更詳細的錯誤信息
+            logger.error(f"pydub 轉換失敗: {from_format} -> {to_format}, 錯誤: {e}")
+            raise
     
     def _add_wav_header(self, pcm_data: bytes, metadata: AudioMetadata) -> bytes:
         """添加 WAV 檔頭"""

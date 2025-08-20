@@ -62,6 +62,45 @@ class FSMStateEnum(str, Enum):
     RECOVERING = "RECOVERING"
 
 
+# FSM 狀態中文翻譯映射
+FSM_STATE_TRANSLATIONS = {
+    FSMStateEnum.ANY: "任意",
+    FSMStateEnum.IDLE: "閒置",
+    FSMStateEnum.LISTENING: "監聽中",
+    FSMStateEnum.ACTIVATED: "已激活",
+    FSMStateEnum.RECORDING: "錄音中",
+    FSMStateEnum.STREAMING: "串流中",
+    FSMStateEnum.TRANSCRIBING: "轉譯中",
+    FSMStateEnum.PROCESSING: "處理中",
+    FSMStateEnum.BUSY: "忙碌中",
+    FSMStateEnum.ERROR: "錯誤",
+    FSMStateEnum.RECOVERING: "恢復中"
+}
+
+
+def translate_fsm_state(state: FSMStateEnum) -> str:
+    """
+    將 FSM 狀態翻譯為中文
+    
+    Args:
+        state: FSM 狀態枚舉
+        
+    Returns:
+        中文翻譯的狀態字符串
+    """
+    if state is None:
+        return "閒置"
+    
+    if isinstance(state, str):
+        # 如果是字符串，嘗試轉換為枚舉
+        try:
+            state = FSMStateEnum(state)
+        except ValueError:
+            return "未知狀態"
+    
+    return FSM_STATE_TRANSLATIONS.get(state, str(state))
+
+
 class FSMStrategy(str, Enum):
     """FSM 策略枚舉"""
     STREAMING = "streaming"

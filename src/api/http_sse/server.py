@@ -15,6 +15,7 @@ from src.api.base import APIBase, APIResponse
 from src.utils.logger import logger
 from src.store import get_global_store
 from src.store.sessions import sessions_actions, sessions_selectors
+from src.store.sessions.sessions_state import translate_fsm_state
 from src.core.exceptions import APIError, SessionError
 from src.config.manager import ConfigManager
 from src.core.audio_queue_manager import get_audio_queue_manager
@@ -288,18 +289,53 @@ class SSEServer(APIBase):
                 if not self.validate_session(session_id):
                     raise HTTPException(status_code=404, detail="Session not found")
                 
-                # 讀取音訊資料
-                audio_data = await request.body()
+                # 解析 multipart form data
+                form = await request.form()
+                audio_file = form.get("audio")
+                
+                if not audio_file:
+                    raise HTTPException(status_code=400, detail="Missing audio file")
+                
+                # 讀取音訊檔案內容
+                audio_data = await audio_file.read()
                 if not audio_data:
                     raise HTTPException(status_code=400, detail="Empty audio data")
+                
+                # 獲取檔案名和內容類型用於格式檢測
+                filename = getattr(audio_file, 'filename', 'audio') or 'audio'
+                content_type = getattr(audio_file, 'content_type', 'audio/wav') or 'audio/wav'
+                
+                logger.info(f"接收到音訊檔案: {filename}, 類型: {content_type}, 大小: {len(audio_data)} bytes")
+                
+                # 從檔案名和內容類型檢測音訊格式
+                audio_format = 'wav'  # 預設格式
+                
+                # 從檔案名推測格式
+                if filename:
+                    file_ext = filename.split('.')[-1].lower()
+                    if file_ext in ['webm', 'mp3', 'mp4', 'wav', 'ogg', 'pcm']:
+                        audio_format = file_ext
+                
+                # 從內容類型確認格式
+                if content_type:
+                    if 'webm' in content_type:
+                        audio_format = 'webm'
+                    elif 'mp3' in content_type:
+                        audio_format = 'mp3'
+                    elif 'mp4' in content_type:
+                        audio_format = 'mp4'
+                    elif 'wav' in content_type:
+                        audio_format = 'wav'
+                    elif 'ogg' in content_type:
+                        audio_format = 'ogg'
                 
                 # 解析音頻參數
                 audio_params = {
                     'sample_rate': 16000,
-                    'format': 'webm'
+                    'format': audio_format
                 }
                 
-                # 從 headers 獲取音頻參數
+                # 從 headers 獲取音頻參數（如果有的話）
                 if request.headers.get('X-Audio-Sample-Rate'):
                     try:
                         audio_params['sample_rate'] = int(request.headers['X-Audio-Sample-Rate'])
@@ -309,7 +345,8 @@ class SSEServer(APIBase):
                 
                 if request.headers.get('X-Audio-Format'):
                     audio_params['format'] = request.headers['X-Audio-Format']
-                    logger.info(f"音頻格式: {audio_params['format']}")
+                
+                logger.info(f"檢測到音頻格式: {audio_params['format']}")
                 
                 # 保存音頻參數到 session
                 if session_id not in self.audio_params:
@@ -653,10 +690,14 @@ class SSEServer(APIBase):
                                 last_fsm_state = current_fsm_state
                                 logger.debug(f"SSE: FSM 狀態變化 - Session: {session_id[:8]}... -> {current_fsm_state}")
                                 
+                                # 翻譯狀態為中文
+                                translated_state = translate_fsm_state(current_fsm_state)
+                                
                                 await queue.put({
                                     "event": "status",
                                     "data": {
-                                        "state": str(current_fsm_state) if current_fsm_state else "IDLE",
+                                        "state": translated_state,
+                                        "state_code": str(current_fsm_state) if current_fsm_state else "IDLE",
                                         "session_id": session_id,
                                         "timestamp": datetime.now().isoformat()
                                     }
@@ -1247,10 +1288,11 @@ class SSEServer(APIBase):
             if command == "start":
                 store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                 await self._send_sse_event(session_id, "status", {
-                    "state": "LISTENING",
+                    "state": translate_fsm_state("LISTENING"),
+                    "state_code": "LISTENING",
                     "message": "Started listening"
                 })
-                return self.create_success_response({"state": "LISTENING"}, session_id)
+                return self.create_success_response({"state": translate_fsm_state("LISTENING")}, session_id)
                 
             elif command == "stop":
                 store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
@@ -1262,14 +1304,17 @@ class SSEServer(APIBase):
                     await self._process_all_audio(session_id)
                 
                 await self._send_sse_event(session_id, "status", {
-                    "state": "IDLE",
+                    "state": translate_fsm_state("IDLE"),
+                    "state_code": "IDLE",
                     "message": "Stopped listening"
                 })
-                return self.create_success_response({"state": "IDLE"}, session_id)
+                return self.create_success_response({"state": translate_fsm_state("IDLE")}, session_id)
                 
             elif command == "status":
+                current_state = session.get("state", "IDLE")
                 return self.create_success_response({
-                    "state": session.get("state", "IDLE"),
+                    "state": translate_fsm_state(current_state),
+                    "state_code": current_state,
                     "created_at": session.get("created_at", datetime.now()).isoformat() if isinstance(session.get("created_at"), datetime) else session.get("created_at"),
                     "last_activity": session.get("last_activity", datetime.now()).isoformat() if isinstance(session.get("last_activity"), datetime) else session.get("last_activity")
                 }, session_id)
@@ -1277,18 +1322,20 @@ class SSEServer(APIBase):
             elif command == "busy_start":
                 store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
                 await self._send_sse_event(session_id, "status", {
-                    "state": "BUSY",
+                    "state": translate_fsm_state("BUSY"),
+                    "state_code": "BUSY",
                     "message": "Entered busy mode"
                 })
-                return self.create_success_response({"state": "BUSY"}, session_id)
+                return self.create_success_response({"state": translate_fsm_state("BUSY")}, session_id)
                 
             elif command == "busy_end":
                 store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                 await self._send_sse_event(session_id, "status", {
-                    "state": "LISTENING",
+                    "state": translate_fsm_state("LISTENING"),
+                    "state_code": "LISTENING",
                     "message": "Exited busy mode"
                 })
-                return self.create_success_response({"state": "LISTENING"}, session_id)
+                return self.create_success_response({"state": translate_fsm_state("LISTENING")}, session_id)
             
             # 喚醒詞相關指令
             elif command == "wake":
