@@ -39,7 +39,7 @@ if HAS_CONFIG:
             kwargs['retention'] = config.logging.retention
     
     # 使用基礎配置並套用自定義設定
-    logger = create_logger("asr_hub", config=base_config, **kwargs)
+    logger = create_logger("asr_hub",use_native_format=True, config=base_config, **kwargs)
 else:
     # 沒有配置時使用預設值
     logger = create_logger(

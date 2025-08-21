@@ -332,16 +332,22 @@ class WebSocketServer(APIBase):
             connection: WebSocket 連線
             data: 包含 action 的訊息
         """
-        # 支援兩種格式：
+        # 支援三種格式：
         # 1. 直接的 action 格式：{type: "[Session] Create", payload: {...}}
         # 2. 包裝的 action 格式：{action: {type: "[Session] Create", payload: {...}}}
+        # 3. data 字段格式：{type: "action", data: {type: "[Session] Create", payload: {...}}}
         
         if "action" in data:
-            # 包裝格式
+            # 包裝格式 (protocol-test 使用)
             action = data.get("action")
             if not action:
                 await self._send_error(connection, "No action provided")
                 return
+            action_type = action.get("type")
+            payload = action.get("payload", {})
+        elif "data" in data and isinstance(data.get("data"), dict):
+            # data 字段格式 (realtime-streaming 使用)
+            action = data.get("data")
             action_type = action.get("type")
             payload = action.get("payload", {})
         else:

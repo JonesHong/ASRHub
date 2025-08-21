@@ -43,6 +43,11 @@ faster-whisper
 pytest
 pytest-asyncio
 pytest-cov
+coverage
+
+# 視覺化和分析（選用）
+colorama
+matplotlib
 
 # 開發工具（選用）
 black

@@ -71,8 +71,6 @@ class ASRHub:
     
     def _show_startup_message(self):
         """使用 pretty-loguru 顯示啟動訊息"""
-        # ASCII 藝術標題 - 使用簡單的日誌訊息替代
-        logger.ascii_header("ASR HUB")
         
         # 系統資訊區塊
         system_info = [
@@ -100,11 +98,7 @@ class ASRHub:
             f"降噪：{'啟用' if self.pipeline_config.operators.denoise.enabled else '停用'}",
         ]
         
-        # 使用 ASCII 標題顯示啟動畫面
-        logger.ascii_header(
-            self.app_name,
-            font="slant"
-        )
+        logger.block("ASR Hub 啟動資訊", system_info, border_style="cyan")
         
         # 使用 info 顯示版本和描述資訊
         logger.block("ASR Hub Info", [
@@ -276,6 +270,11 @@ class ASRHub:
     
     async def _run_forever(self):
         """保持服務運行"""
+        # ASCII 藝術標題 - 使用簡單的日誌訊息替代
+        logger.ascii_header(
+            "ASR_HUB",
+            font="slant"
+        )
         logger.info("服務正在運行中...（按 Ctrl+C 停止）")
         try:
             while self._running:

@@ -1,0 +1,292 @@
+/* Custom styles for realtime streaming interface */
+
+/* Audio Visualizer */
+#audioVisualizer {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.dark #audioVisualizer {
+    background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+}
+
+/* Main Microphone Button */
+#mainMicBtn {
+    position: relative;
+    overflow: hidden;
+}
+
+#mainMicBtn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+#mainMicBtn:hover::before {
+    opacity: 1;
+}
+
+/* Streaming animation */
+.streaming #mainMicBtn {
+    animation: pulse 2s ease-in-out infinite;
+    box-shadow: 0 0 20px rgba(34, 197, 94, 0.5);
+}
+
+/* Recording animation */
+.recording #mainMicBtn {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    animation: recording-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+    0% { 
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); 
+    }
+    70% { 
+        box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); 
+    }
+    100% { 
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); 
+    }
+}
+
+/* VAD Indicator States */
+.vad-active {
+    background-color: #22c55e;
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.5);
+    animation: pulse 1s ease-in-out infinite;
+}
+
+.vad-inactive {
+    background-color: #64748b;
+}
+
+/* Wake Word Indicator */
+.wake-detected {
+    background-color: #f59e0b;
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
+    animation: bounce 1s ease-in-out infinite;
+}
+
+/* Recording Indicator */
+.recording-active {
+    background-color: #ef4444;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+    animation: pulse 1s ease-in-out infinite;
+}
+
+/* Countdown Timer Animation */
+#countdownProgress {
+    transition: stroke-dashoffset 0.1s linear;
+}
+
+.countdown-active #countdownProgress {
+    stroke: #f59e0b;
+}
+
+.countdown-warning #countdownProgress {
+    stroke: #ef4444;
+}
+
+/* ASR Result Items */
+.asr-result-item {
+    animation: slideInFromRight 0.3s ease-out;
+    border-left: 4px solid #22c55e;
+}
+
+@keyframes slideInFromRight {
+    from {
+        opacity: 0;
+        transform: translateX(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.asr-result-item.new {
+    background: linear-gradient(90deg, rgba(34, 197, 94, 0.1) 0%, transparent 100%);
+}
+
+.dark .asr-result-item.new {
+    background: linear-gradient(90deg, rgba(34, 197, 94, 0.2) 0%, transparent 100%);
+}
+
+/* Event Log Items */
+.log-item {
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: 4px;
+    opacity: 0;
+    animation: fadeInLog 0.3s ease-out forwards;
+}
+
+@keyframes fadeInLog {
+    from {
+        opacity: 0;
+        transform: translateY(-5px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.log-timestamp {
+    color: #6b7280;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    margin-right: 8px;
+}
+
+.dark .log-timestamp {
+    color: #9ca3af;
+}
+
+.log-level-info {
+    color: #3b82f6;
+}
+
+.log-level-success {
+    color: #22c55e;
+}
+
+.log-level-warning {
+    color: #f59e0b;
+}
+
+.log-level-error {
+    color: #ef4444;
+}
+
+/* Status Badges */
+.status-badge {
+    transition: all 0.3s ease;
+}
+
+.status-connected {
+    background-color: #dcfce7;
+    color: #166534;
+}
+
+.dark .status-connected {
+    background-color: #14532d;
+    color: #bbf7d0;
+}
+
+.status-disconnected {
+    background-color: #fef2f2;
+    color: #991b1b;
+}
+
+.dark .status-disconnected {
+    background-color: #7f1d1d;
+    color: #fecaca;
+}
+
+.status-connecting {
+    background-color: #fef3c7;
+    color: #92400e;
+}
+
+.dark .status-connecting {
+    background-color: #78350f;
+    color: #fcd34d;
+}
+
+/* Responsive Design */
+@media (max-width: 1024px) {
+    #mainMicBtn {
+        width: 120px;
+        height: 120px;
+    }
+    
+    #micIcon {
+        font-size: 2.5rem;
+    }
+}
+
+@media (max-width: 768px) {
+    #mainMicBtn {
+        width: 100px;
+        height: 100px;
+    }
+    
+    #micIcon {
+        font-size: 2rem;
+    }
+    
+    .grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Dark mode adjustments */
+.dark .bg-gradient-to-r {
+    --tw-gradient-from: #1e40af;
+    --tw-gradient-to: #7c3aed;
+}
+
+/* Range input styling */
+input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #3b82f6;
+    cursor: pointer;
+    border: 2px solid #ffffff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+input[type="range"]::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #3b82f6;
+    cursor: pointer;
+    border: 2px solid #ffffff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+/* Toggle switch enhancement */
+.peer:checked + div {
+    background-color: #3b82f6;
+}
+
+/* Scroll bar styling */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f5f9;
+    border-radius: 3px;
+}
+
+.dark ::-webkit-scrollbar-track {
+    background: #374151;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+    background: #6b7280;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+    background: #9ca3af;
+}

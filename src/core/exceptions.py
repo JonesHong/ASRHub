@@ -67,3 +67,13 @@ class ModelError(ASRHubException):
 class StateError(ASRHubException):
     """狀態機相關錯誤"""
     pass
+
+
+class ConnectionError(ASRHubException):
+    """連線相關錯誤"""
+    pass
+
+
+class RouterError(ASRHubException):
+    """路由相關錯誤"""
+    pass

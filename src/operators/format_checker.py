@@ -104,8 +104,8 @@ class AudioFormatChecker:
         "GoogleSTTProvider": FormatRequirement(
             sample_rates=[16000, 8000, 44100, 48000],
             channels=[1, 2],
-            formats=[AudioFormat.PCM, AudioFormat.FLAC],
-            encodings=[AudioEncoding.LINEAR16, AudioEncoding.FLAC]
+            formats=[AudioContainerFormat.PCM, AudioContainerFormat.FLAC],
+            encodings=[AudioEncoding.LINEAR16]
         )
     }
     

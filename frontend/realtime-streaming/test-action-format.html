@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>測試 Action 格式</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="max-w-4xl mx-auto bg-white rounded-lg shadow-lg p-6">
+        <h1 class="text-2xl font-bold mb-6">WebSocket Action 格式測試</h1>
+        
+        <div class="grid grid-cols-2 gap-4 mb-6">
+            <div>
+                <h3 class="font-semibold mb-2">1. 正確格式（新）</h3>
+                <button onclick="sendCorrectFormat()" 
+                        class="w-full px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600">
+                    發送正確格式的 Action
+                </button>
+                <pre class="mt-2 p-2 bg-gray-100 text-xs rounded overflow-auto">
+{
+  type: "action",
+  action: {
+    type: "[Session] Start Listening",
+    payload: {...}
+  }
+}</pre>
+            </div>
+            
+            <div>
+                <h3 class="font-semibold mb-2">2. 錯誤格式（舊）</h3>
+                <button onclick="sendWrongFormat()" 
+                        class="w-full px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600">
+                    發送錯誤格式的 Action
+                </button>
+                <pre class="mt-2 p-2 bg-gray-100 text-xs rounded overflow-auto">
+{
+  type: "action",
+  data: {
+    type: "[Session] Start Listening",
+    payload: {...}
+  }
+}</pre>
+            </div>
+        </div>
+        
+        <div class="mb-4">
+            <button onclick="connectWebSocket()" 
+                    class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 mr-2">
+                連接 WebSocket
+            </button>
+            <button onclick="disconnectWebSocket()" 
+                    class="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600">
+                斷開連接
+            </button>
+        </div>
+        
+        <div id="status" class="mb-4 p-3 bg-gray-100 rounded">
+            <span class="font-semibold">狀態：</span>
+            <span id="statusText">未連接</span>
+        </div>
+        
+        <div class="bg-gray-50 rounded p-4">
+            <h3 class="font-semibold mb-2">日誌：</h3>
+            <div id="logs" class="h-64 overflow-y-auto font-mono text-sm"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let sessionId = `test-${Date.now()}`;
+        
+        function addLog(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const time = new Date().toLocaleTimeString();
+            const color = type === 'error' ? 'text-red-600' : 
+                         type === 'success' ? 'text-green-600' : 
+                         type === 'sent' ? 'text-blue-600' : 
+                         'text-gray-700';
+            
+            logs.innerHTML += `<div class="${color}">[${time}] ${message}</div>`;
+            logs.scrollTop = logs.scrollHeight;
+        }
+        
+        function updateStatus(text, color = 'text-gray-700') {
+            document.getElementById('statusText').textContent = text;
+            document.getElementById('statusText').className = color;
+        }
+        
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                addLog('WebSocket 已經連接', 'error');
+                return;
+            }
+            
+            ws = new WebSocket('ws://localhost:8765/ws');
+            
+            ws.onopen = () => {
+                updateStatus('已連接', 'text-green-600');
+                addLog('WebSocket 連接成功', 'success');
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    addLog(`收到: ${JSON.stringify(data, null, 2)}`);
+                } catch (e) {
+                    addLog(`收到: ${event.data}`);
+                }
+            };
+            
+            ws.onerror = (error) => {
+                addLog(`錯誤: ${error.message || '連接失敗'}`, 'error');
+                updateStatus('連接錯誤', 'text-red-600');
+            };
+            
+            ws.onclose = () => {
+                updateStatus('已斷開', 'text-gray-600');
+                addLog('連接已關閉');
+            };
+        }
+        
+        function disconnectWebSocket() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        function sendCorrectFormat() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addLog('請先連接 WebSocket', 'error');
+                return;
+            }
+            
+            const message = {
+                type: 'action',
+                action: {
+                    type: '[Session] Start Listening',
+                    payload: {
+                        session_id: sessionId,
+                        audio_format: {
+                            sample_rate: 16000,
+                            channels: 1,
+                            encoding: 'pcm_f32le',
+                            bits_per_sample: 32,
+                            format: 'raw',
+                            buffer_size: 4096
+                        },
+                        protocol: 'websocket',
+                        timestamp: Date.now()
+                    }
+                }
+            };
+            
+            ws.send(JSON.stringify(message));
+            addLog(`發送正確格式: ${JSON.stringify(message, null, 2)}`, 'sent');
+        }
+        
+        function sendWrongFormat() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addLog('請先連接 WebSocket', 'error');
+                return;
+            }
+            
+            const message = {
+                type: 'action',
+                session_id: sessionId,
+                data: {
+                    type: '[Session] Start Listening',
+                    payload: {
+                        session_id: sessionId,
+                        audio_format: {
+                            sample_rate: 16000,
+                            channels: 1,
+                            encoding: 'pcm_f32le',
+                            bits_per_sample: 32,
+                            format: 'raw',
+                            buffer_size: 4096
+                        },
+                        protocol: 'websocket',
+                        timestamp: Date.now()
+                    }
+                },
+                timestamp: Date.now()
+            };
+            
+            ws.send(JSON.stringify(message));
+            addLog(`發送錯誤格式: ${JSON.stringify(message, null, 2)}`, 'sent');
+        }
+        
+        // 自動連接
+        window.onload = () => {
+            addLog('測試頁面已載入');
+        };
+    </script>
+</body>
+</html>
