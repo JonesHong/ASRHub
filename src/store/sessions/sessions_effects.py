@@ -907,15 +907,64 @@ class SessionEffects:
                         audio_data = self.audio_queue_manager.stop_recording(session_id)
                 
                 if audio_data:
-                    # 步驟 3：智能音訊格式檢測和處理
+                    # 步驟 3：音訊格式處理
                     try:
                         from src.utils.audio_format_detector import detect_and_prepare_audio_for_whisper
                         
                         logger.info(f"🔍 開始音訊格式分析 - Session: {self._format_session_id(session_id)}")
                         logger.info(f"📊 原始音訊大小: {len(audio_data)} bytes")
                         
-                        # 使用高级检测和处理
-                        processed_audio, processing_info = detect_and_prepare_audio_for_whisper(audio_data)
+                        # 檢查是否有客戶端提供的元資料
+                        # 首先檢查 audio_metadata 欄位，如果沒有則檢查 metadata.audio_metadata
+                        stored_metadata = session.get('audio_metadata') if session else None
+                        if not stored_metadata and session and session.get('metadata'):
+                            stored_metadata = session.get('metadata', {}).get('audio_metadata')
+                        
+                        if stored_metadata:
+                            # 映射前端 camelCase 欄位到後端 snake_case
+                            mapped_metadata = {
+                                'format': stored_metadata.get('detectedFormat', stored_metadata.get('format')),
+                                'sample_rate': stored_metadata.get('sampleRate', stored_metadata.get('sample_rate')),
+                                'channels': stored_metadata.get('channels'),
+                                'mime_type': stored_metadata.get('mimeType', stored_metadata.get('mime_type')),
+                                'file_extension': stored_metadata.get('fileExtension', stored_metadata.get('file_extension')),
+                                'duration': stored_metadata.get('duration'),
+                                'is_silent': stored_metadata.get('isSilent', stored_metadata.get('is_silent')),
+                                'is_low_volume': stored_metadata.get('isLowVolume', stored_metadata.get('is_low_volume'))
+                            }
+                            
+                            # 檢查必要欄位
+                            if not mapped_metadata.get('format') or not mapped_metadata.get('sample_rate'):
+                                error_msg = f"❌ 缺少必要的音訊元資料: format={mapped_metadata.get('format')}, sample_rate={mapped_metadata.get('sample_rate')}"
+                                logger.error(error_msg)
+                                # 發送錯誤事件給前端
+                                self.store.dispatch(session_error(
+                                    session_id,
+                                    error_msg
+                                ))
+                                return  # Early return
+                            
+                            logger.info(f"📋 使用客戶端提供的音訊元資料:")
+                            logger.info(f"   格式: {mapped_metadata.get('format', 'unknown')}")
+                            logger.info(f"   取樣率: {mapped_metadata.get('sample_rate', 'unknown')} Hz")
+                            logger.info(f"   聲道數: {mapped_metadata.get('channels', 'unknown')}")
+                            
+                            # 使用映射後的元資料進行處理
+                            # 傳遞 metadata 給檢測函數，優先使用而非推斷
+                            processed_audio, processing_info = detect_and_prepare_audio_for_whisper(
+                                audio_data, 
+                                metadata=mapped_metadata
+                            )
+                        else:
+                            # 如果沒有元資料，直接報錯並返回
+                            error_msg = "❌ 未提供音訊元資料，無法處理音訊。請確保客戶端傳送 audio_metadata"
+                            logger.error(error_msg)
+                            # 發送錯誤事件給前端
+                            self.store.dispatch(session_error(
+                                session_id,
+                                error_msg
+                            ))
+                            return  # Early return，不進行自動推論
                         
                         # 记录处理信息
                         format_info = processing_info['detected_format']

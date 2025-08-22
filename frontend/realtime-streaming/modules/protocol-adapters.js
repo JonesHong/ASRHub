@@ -350,26 +350,93 @@ class HTTPSSEAdapter extends ProtocolAdapter {
     }
     
     async sendAction(action) {
+        // 將 sendAction 轉發到 sendEvent
+        const eventType = action.action || action.type;
+        const payload = action.payload || action;
+        return this.sendEvent(eventType, payload);
+    }
+    
+    async sendEvent(eventType, payload) {
         try {
-            const response = await fetch(`${this.httpSSEUrl}/action`, {
+            // HTTP SSE 特殊處理：session/create 事件透過建立 SSE 連接自動創建
+            if (eventType === 'session/create' || eventType === 'create_session') {
+                const sessionId = payload.session_id || this.generateSessionId();
+                console.log(`[HTTP SSE] 自動創建 session: ${sessionId}`);
+                
+                // 建立 SSE 連接時會自動創建 session
+                await this.createSSEConnection(sessionId);
+                
+                // 保存 session ID
+                this.sessionId = sessionId;
+                
+                // 模擬成功回應
+                return {
+                    status: 'success',
+                    action: 'create_session',
+                    session_id: sessionId,
+                    timestamp: new Date().toISOString()
+                };
+            }
+            
+            // HTTP SSE 特殊處理：session/destroy 事件關閉 SSE 連接
+            if (eventType === 'session/destroy' || eventType === 'destroy_session') {
+                console.log(`[HTTP SSE] 銷毀 session: ${payload.session_id}`);
+                this.closeSSEConnection();
+                
+                // 模擬成功回應
+                return {
+                    status: 'success',
+                    action: 'destroy_session',
+                    session_id: payload.session_id,
+                    timestamp: new Date().toISOString()
+                };
+            }
+            
+            // 將事件類型轉換為端點路徑
+            const endpoint = this.eventTypeToEndpoint(eventType);
+            const sessionId = payload.session_id || this.sessionId;
+            
+            // 為需要 session_id 的端點構建 URL
+            const url = endpoint.includes('{session_id}') 
+                ? `${this.httpSSEUrl}${endpoint.replace('{session_id}', sessionId)}`
+                : `${this.httpSSEUrl}${endpoint}`;
+            
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(action)
+                body: JSON.stringify(payload)
             });
             
             if (!response.ok) {
-                throw new Error(`Action 分發失敗: ${response.status}`);
+                throw new Error(`事件發送失敗: ${response.status}`);
             }
             
             return await response.json();
         } catch (error) {
             if (this.onError) {
-                this.onError(`HTTP Action 發送失敗: ${error.message}`);
+                this.onError(`HTTP 事件發送失敗: ${error.message}`);
             }
             throw error;
         }
+    }
+    
+    eventTypeToEndpoint(eventType) {
+        // 將事件類型轉換為對應的 HTTP 端點（使用實際的後端路由）
+        const endpointMap = {
+            'session/start': '/session/start-listening/{session_id}',
+            'recording/start': '/recording/start/{session_id}',
+            'recording/end': '/recording/end/{session_id}',
+            'chunk/upload/start': '/upload/chunk-start/{session_id}',
+            'chunk/upload/done': '/upload/chunk-done/{session_id}',
+            'file/upload': '/upload/file/{session_id}',
+            'file/upload/done': '/upload/file-done/{session_id}',
+            'transcription/begin': '/transcription/begin/{session_id}',
+            'audio/metadata': '/audio/metadata/{session_id}'
+        };
+        
+        return endpointMap[eventType] || '/control';
     }
     
     async sendAudioChunk(sessionId, chunk, chunkId) {
@@ -391,25 +458,51 @@ class HTTPSSEAdapter extends ProtocolAdapter {
                 progressCallback(10); // 初始化完成
             }
             
-            // 上傳音訊
-            const formData = new FormData();
+            // 準備音訊數據
+            let audioBase64;
+            let filename;
+            let format = 'webm';  // 默認格式
+            let sampleRate = 16000;  // 默認採樣率
             
             if (isFileUpload) {
-                formData.append('audio', audioSource, audioSource.name);
+                // 檔案上傳：讀取檔案並轉換為 base64
+                const arrayBuffer = await audioSource.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+                audioBase64 = this.arrayBufferToBase64(uint8Array.buffer);
+                filename = audioSource.name;
+                
+                // 從檔案名判斷格式
+                const ext = filename.split('.').pop().toLowerCase();
+                if (['mp3', 'wav', 'webm', 'ogg', 'flac'].includes(ext)) {
+                    format = ext;
+                }
             } else {
-                formData.append('audio', audioSource, 'recording.webm');
+                // 錄音：Blob 轉換為 base64
+                const arrayBuffer = await audioSource.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+                audioBase64 = this.arrayBufferToBase64(uint8Array.buffer);
+                filename = 'recording.webm';
             }
-            
-            formData.append('session_id', sessionId);
             
             if (progressCallback) {
                 progressCallback(30); // 準備上傳
             }
             
-            // 上傳音訊到 audio endpoint
+            // 構建 JSON 請求體
+            const requestBody = {
+                audio: audioBase64,
+                format: format,
+                sample_rate: sampleRate,
+                filename: filename
+            };
+            
+            // 上傳音訊到 audio endpoint（使用 JSON 格式）
             const uploadResponse = await fetch(`${this.httpSSEUrl}/audio/${sessionId}`, {
                 method: 'POST',
-                body: formData
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody)
             });
             
             if (!uploadResponse.ok) {

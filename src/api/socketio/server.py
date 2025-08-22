@@ -15,8 +15,10 @@ from src.api.base import APIBase, APIResponse
 from src.utils.logger import logger
 from src.store import get_global_store
 from src.store.sessions import sessions_actions, sessions_selectors
+from src.store.sessions.sessions_actions import audio_metadata
 from src.store.sessions.sessions_state import translate_fsm_state
 from src.core.exceptions import APIError
+from .routes import routes
 
 # 模組級變數
 store = get_global_store()
@@ -46,6 +48,8 @@ class SocketIOServer(APIBase):
         # 初始化父類
         super().__init__()
         
+        # 获取全局 store 实例
+        self.store = get_global_store()
         
         self.provider_manager = provider_manager
         self.host = sio_config.host
@@ -83,45 +87,95 @@ class SocketIOServer(APIBase):
     def _register_event_handlers(self):
         """註冊 Socket.io 事件處理器"""
         
-        @self.sio.event(namespace=self.namespace)
-        async def connect(sid, environ):
+        # 使用 setattr 動態註冊事件處理器，避免硬編碼
+        async def handle_connect(sid, environ):
             """處理客戶端連線"""
             await self._handle_connect(sid, environ)
+        self.sio.on(routes["CONNECT"], namespace=self.namespace)(handle_connect)
             
-        @self.sio.event(namespace=self.namespace)
-        async def disconnect(sid):
+        async def handle_disconnect(sid):
             """處理客戶端斷線"""
             await self._handle_disconnect(sid)
+        self.sio.on(routes["DISCONNECT"], namespace=self.namespace)(handle_disconnect)
             
-        @self.sio.event(namespace=self.namespace)
-        async def control(sid, data):
-            """處理控制指令"""
-            await self._handle_control_event(sid, data)
-            
-        @self.sio.event(namespace=self.namespace)
-        async def audio_chunk(sid, data):
+        async def handle_audio_chunk(sid, data):
             """處理音訊資料"""
             await self._handle_audio_chunk_event(sid, data)
+        self.sio.on(routes["AUDIO_CHUNK"], namespace=self.namespace)(handle_audio_chunk)
             
-        @self.sio.event(namespace=self.namespace)
-        async def subscribe(sid, data):
+        async def handle_subscribe(sid, data):
             """訂閱特定 session"""
             await self._handle_subscribe_event(sid, data)
+        self.sio.on(routes["SUBSCRIBE"], namespace=self.namespace)(handle_subscribe)
             
-        @self.sio.event(namespace=self.namespace)
-        async def unsubscribe(sid, data):
+        async def handle_unsubscribe(sid, data):
             """取消訂閱"""
             await self._handle_unsubscribe_event(sid, data)
+        self.sio.on(routes["UNSUBSCRIBE"], namespace=self.namespace)(handle_unsubscribe)
             
-        @self.sio.event(namespace=self.namespace)
-        async def ping(sid):
+        async def handle_ping(sid):
             """處理 ping"""
-            await self.sio.emit('pong', namespace=self.namespace, to=sid)
+            await self.sio.emit(routes["PONG"], namespace=self.namespace, to=sid)
+        self.sio.on(routes["PING"], namespace=self.namespace)(handle_ping)
             
-        @self.sio.event(namespace=self.namespace)
-        async def action(sid, data):
-            """處理 PyStoreX action 事件"""
-            await self._handle_action_event(sid, data)
+        # === Session 管理事件 ===
+        async def handle_session_create(sid, data):
+            """處理創建會話事件"""
+            await self._handle_session_create(sid, data)
+        self.sio.on(routes["SESSION_CREATE"], namespace=self.namespace)(handle_session_create)
+        
+        async def handle_session_start(sid, data):
+            """處理開始監聽事件"""
+            await self._handle_session_start(sid, data)
+        self.sio.on(routes["SESSION_START"], namespace=self.namespace)(handle_session_start)
+        
+        async def handle_session_stop(sid, data):
+            """處理停止監聽事件"""
+            await self._handle_session_stop(sid, data)
+        self.sio.on(routes["SESSION_STOP"], namespace=self.namespace)(handle_session_stop)
+        
+        async def handle_session_destroy(sid, data):
+            """處理銷毀會話事件"""
+            await self._handle_session_destroy(sid, data)
+        self.sio.on(routes["SESSION_DESTROY"], namespace=self.namespace)(handle_session_destroy)
+        
+        # === 錄音管理事件 ===
+        async def handle_recording_start(sid, data):
+            """處理開始錄音事件"""
+            await self._handle_recording_start(sid, data)
+        self.sio.on(routes["RECORDING_START"], namespace=self.namespace)(handle_recording_start)
+        
+        async def handle_recording_end(sid, data):
+            """處理結束錄音事件"""
+            await self._handle_recording_end(sid, data)
+        self.sio.on(routes["RECORDING_END"], namespace=self.namespace)(handle_recording_end)
+        
+        # === 上傳管理事件 ===
+        async def handle_chunk_upload_start(sid, data):
+            """處理開始分塊上傳事件"""
+            await self._handle_chunk_upload_start(sid, data)
+        self.sio.on(routes["CHUNK_UPLOAD_START"], namespace=self.namespace)(handle_chunk_upload_start)
+        
+        async def handle_chunk_upload_done(sid, data):
+            """處理完成分塊上傳事件"""
+            await self._handle_chunk_upload_done(sid, data)
+        self.sio.on(routes["CHUNK_UPLOAD_DONE"], namespace=self.namespace)(handle_chunk_upload_done)
+        
+        async def handle_file_upload(sid, data):
+            """處理檔案上傳事件"""
+            await self._handle_file_upload(sid, data)
+        self.sio.on(routes["FILE_UPLOAD"], namespace=self.namespace)(handle_file_upload)
+        
+        async def handle_file_upload_done(sid, data):
+            """處理檔案上傳完成事件"""
+            await self._handle_file_upload_done(sid, data)
+        self.sio.on(routes["FILE_UPLOAD_DONE"], namespace=self.namespace)(handle_file_upload_done)
+        
+        # === 音訊元資料事件 ===
+        async def handle_audio_metadata(sid, data):
+            """處理音訊元資料事件"""
+            await self._handle_audio_metadata(sid, data)
+        self.sio.on("audio/metadata", namespace=self.namespace)(handle_audio_metadata)
             
     async def start(self):
         """啟動 Socket.io 服務器"""
@@ -199,7 +253,7 @@ class SocketIOServer(APIBase):
             
             # 發送歡迎訊息
             await self.sio.emit(
-                'welcome',
+                routes["WELCOME"],
                 {
                     'sid': sid,
                     'version': '1.0',
@@ -249,184 +303,7 @@ class SocketIOServer(APIBase):
         except Exception as e:
             logger.error(f"Error handling disconnect: {e}")
             
-    async def _handle_control_event(self, sid: str, data: Dict[str, Any]):
-        """
-        處理控制事件
-        
-        Args:
-            sid: Socket ID
-            data: 控制資料
-        """
-        try:
-            if sid not in self.connections:
-                await self._emit_error(sid, "Connection not found")
-                return
-                
-            connection = self.connections[sid]
-            command = data.get("command")
-            params = data.get("params", {})
-            
-            # 如果是 start 指令且沒有 session，建立新的
-            if command == "start" and not connection.session_id:
-                connection.session_id = str(uuid.uuid4())
-                # 自動加入 session 房間
-                await self._join_session_room(sid, connection.session_id)
-                
-                # 處理音訊配置（如果有提供）
-                audio_config = params.get("audio_config")
-                if audio_config:
-                    try:
-                        validated_params = await self.validate_audio_params(audio_config)
-                        connection.audio_config = validated_params
-                        logger.info(f"Socket.io 音訊配置已儲存，sid: {sid}, session_id: {connection.session_id}")
-                    except APIError as e:
-                        logger.error(f"音訊配置驗證失敗: {e}")
-                        await self._emit_error(sid, f"音訊配置錯誤: {str(e)}")
-                        return
-                
-            response = await self.handle_control_command(
-                command=command,
-                session_id=connection.session_id,
-                params=params,
-                connection=connection
-            )
-            
-            # 發送回應
-            await self.sio.emit(
-                'control_response',
-                {
-                    'command': command,
-                    'status': response.status,
-                    'data': response.data,
-                    'error': response.error,
-                    'timestamp': datetime.now().isoformat()
-                },
-                namespace=self.namespace,
-                to=sid
-            )
-            
-            # 廣播狀態更新到房間
-            if command in ["start", "stop", "busy_start", "busy_end"]:
-                await self._broadcast_status_to_room(connection.session_id)
-                
-        except Exception as e:
-            logger.error(f"Error handling control event: {e}")
-            await self._emit_error(sid, str(e))
-            
-    async def _handle_action_event(self, sid: str, data: Dict[str, Any]):
-        """
-        處理 PyStoreX action 事件
-        
-        Args:
-            sid: Socket ID
-            data: Action 資料
-        """
-        try:
-            if sid not in self.connections:
-                await self._emit_error(sid, "Connection not found")
-                return
-                
-            connection = self.connections[sid]
-            
-            # 取得 action 內容
-            action = data.get("action") if "action" in data else data
-            action_type = action.get("type")
-            payload = action.get("payload", {})
-            
-            logger.info(f"Socket.IO: Handling action {action_type}")
-            
-            # 處理不同的 action 類型
-            if action_type == "[Session] Create":
-                # 創建新的 session
-                session_id = payload.get("session_id") or str(uuid.uuid4())
-                connection.session_id = session_id
-                
-                # 獲取策略，支援 'batch' 或 FSMStrategy 枚舉值
-                strategy = payload.get("strategy", "non_streaming")
-                # 確保策略值符合後端期望的格式
-                if strategy == "batch":
-                    from src.store.sessions.sessions_state import FSMStrategy
-                    strategy = FSMStrategy.BATCH
-                elif strategy == "streaming":
-                    from src.store.sessions.sessions_state import FSMStrategy
-                    strategy = FSMStrategy.STREAMING
-                else:
-                    from src.store.sessions.sessions_state import FSMStrategy
-                    strategy = FSMStrategy.NON_STREAMING
-                
-                # 自動加入 session 房間
-                await self._join_session_room(sid, session_id)
-                
-                # 分發到 store，包含策略參數
-                store.dispatch(sessions_actions.create_session(session_id, strategy=strategy))
-                
-                # 發送確認
-                await self.sio.emit(
-                    'action',
-                    {
-                        'type': '[Session] Session Created',
-                        'payload': {'session_id': session_id},
-                        'timestamp': datetime.now().isoformat()
-                    },
-                    namespace=self.namespace,
-                    to=sid
-                )
-                
-            elif action_type == "[Session] Start Listening":
-                # 開始監聽
-                session_id = payload.get("session_id") or connection.session_id
-                if session_id:
-                    store.dispatch(sessions_actions.start_listening(session_id))
-                    await self._broadcast_status_to_room(session_id)
-                    
-            elif action_type == "[Session] Chunk Upload Start":
-                # 開始批次上傳
-                session_id = payload.get("session_id") or connection.session_id
-                if session_id:
-                    # 重置分塊序號
-                    self.chunk_sequences[session_id] = 0
-                    # 分發到 store
-                    store.dispatch(sessions_actions.chunk_upload_start(session_id))
-                    logger.info(f"Socket.IO: Started chunk upload for session {session_id}")
-                    
-            elif action_type == "[Session] Chunk Upload Done":
-                # 完成批次上傳，觸發轉譯
-                session_id = payload.get("session_id") or connection.session_id
-                if session_id:
-                    # 分發到 store，這會觸發 SessionEffects 處理
-                    store.dispatch(sessions_actions.chunk_upload_done(session_id))
-                    logger.info(f"Socket.IO: Completed chunk upload for session {session_id}, triggering transcription")
-                    
-                    # 發送確認
-                    await self.sio.emit(
-                        'action',
-                        {
-                            'type': '[Session] Processing',
-                            'payload': {'session_id': session_id},
-                            'timestamp': datetime.now().isoformat()
-                        },
-                        namespace=self.namespace,
-                        to=sid
-                    )
-                    
-            elif action_type == "[Session] Upload File":
-                # 舊的 upload file action（向後兼容）
-                session_id = payload.get("session_id") or connection.session_id
-                if session_id:
-                    store.dispatch(sessions_actions.upload_file(session_id))
-                    
-            elif action_type == "[Session] Upload File Done":
-                # 舊的 upload file done action（向後兼容）
-                session_id = payload.get("session_id") or connection.session_id
-                if session_id:
-                    store.dispatch(sessions_actions.upload_file_done(session_id))
-                    
-            else:
-                logger.warning(f"Unknown action type: {action_type}")
-                
-        except Exception as e:
-            logger.error(f"Error handling action event: {e}")
-            await self._emit_error(sid, str(e))
+    # ========== Session 管理 Handlers ==========
     
     async def _handle_audio_chunk_event(self, sid: str, data: Dict[str, Any]):
         """
@@ -455,13 +332,19 @@ class SocketIOServer(APIBase):
                 connection.session_id = session_id
                 
             # 使用 selector 檢查 session 狀態
-            state = store.state if store else None
+            state = self.store.state if self.store else None
             session = sessions_selectors.get_session(session_id)(state) if state else None
             
-            # 批次上傳模式不需要檢查 LISTENING 狀態
-            # 因為 chunk_upload_start 已經準備好接收資料
+            # 如果 session 不存在且不是批次上傳模式，則創建 session
+            if not session and not data.get("batch_mode", True):  # 默認為批次模式
+                logger.info(f"Socket.IO: Session {session_id} not found, creating new session for batch upload")
+                self.store.dispatch(sessions_actions.create_session(session_id, "batch"))
+                # 重新獲取 session 狀態
+                state = self.store.state if self.store else None
+                session = sessions_selectors.get_session(session_id)(state) if state else None
+                
             if not session:
-                await self._emit_error(sid, f"Session {session_id} not found")
+                await self._emit_error(sid, f"Failed to create or find session {session_id}")
                 return
                 
             # 處理音訊資料
@@ -538,12 +421,12 @@ class SocketIOServer(APIBase):
                 
                 # 分發 audio_chunk_received action (類似 WebSocket 實現)
                 chunk_size = len(audio_bytes)
-                store.dispatch(sessions_actions.audio_chunk_received(session_id, chunk_size))
+                self.store.dispatch(sessions_actions.audio_chunk_received(session_id, chunk_size))
                 logger.info(f"Socket.IO: 📦 Received audio chunk {chunk_id}, size={chunk_size} bytes, session={session_id}")
                 
                 # 發送確認
                 await self.sio.emit(
-                    'audio_received',
+                    routes["AUDIO_RECEIVED"],
                     {
                         'size': len(audio_bytes),
                         'chunk_id': data.get('chunk_id'),
@@ -556,7 +439,7 @@ class SocketIOServer(APIBase):
                 # 檢查背壓
                 if self.stream_manager.implement_backpressure(session_id):
                     await self.sio.emit(
-                        'backpressure',
+                        routes["BACKPRESSURE"],
                         {'message': 'Audio buffer near capacity'},
                         namespace=self.namespace,
                         to=sid
@@ -587,7 +470,7 @@ class SocketIOServer(APIBase):
             
             # 發送確認
             await self.sio.emit(
-                'subscribed',
+                routes["SUBSCRIBED"],
                 {
                     'session_id': session_id,
                     'timestamp': datetime.now().isoformat()
@@ -597,12 +480,12 @@ class SocketIOServer(APIBase):
             )
             
             # 使用 selector 發送當前狀態
-            state = store.state if store else None
+            state = self.store.state if self.store else None
             session = sessions_selectors.get_session(session_id)(state) if state else None
             if session:
                 current_state = session.get("fsm_state", "IDLE")
                 await self.sio.emit(
-                    'status_update',
+                    routes["STATUS_UPDATE"],
                     {
                         'session_id': session_id,
                         'state': translate_fsm_state(current_state),
@@ -636,7 +519,7 @@ class SocketIOServer(APIBase):
             
             # 發送確認
             await self.sio.emit(
-                'unsubscribed',
+                routes["UNSUBSCRIBED"],
                 {
                     'session_id': session_id,
                     'timestamp': datetime.now().isoformat()
@@ -696,7 +579,7 @@ class SocketIOServer(APIBase):
         """
         監聽 PyStoreX store 事件
         """
-        if not store:
+        if not self.store:
             logger.warning("No store available for event listening")
             return
             
@@ -704,7 +587,7 @@ class SocketIOServer(APIBase):
         
         while self._running:
             try:
-                current_state = store.state if store else {}
+                current_state = self.store.state if self.store else {}
                 
                 # 檢查 sessions 狀態變化
                 if 'sessions' in current_state:
@@ -753,20 +636,30 @@ class SocketIOServer(APIBase):
         # 將 immutables.Map 轉換為可序列化的 dict
         serializable_result = self._convert_immutable_to_dict(result)
         
-        # 發送轉譯完成事件
+        # 準備轉譯結果數據 - 與 WebSocket 格式保持一致
+        transcription_data = {
+            'session_id': session_id,
+            'result': serializable_result if isinstance(serializable_result, dict) else {'text': str(serializable_result)},
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # 發送轉譯完成事件到房間
         await self.sio.emit(
-            'action',
-            {
-                'type': '[Session] Transcription Done',
-                'payload': {
-                    'session_id': session_id,
-                    'result': serializable_result if isinstance(serializable_result, dict) else {'text': str(serializable_result)},
-                    'timestamp': datetime.now().isoformat()
-                }
-            },
+            routes["TRANSCRIPT"],
+            transcription_data,
             namespace=self.namespace,
             room=room_name
         )
+        
+        # 也直接發送給所有與此 session 相關的連線
+        for sid, connection in self.connections.items():
+            if connection.session_id == session_id:
+                await self.sio.emit(
+                    routes["TRANSCRIPT"],
+                    transcription_data,
+                    namespace=self.namespace,
+                    to=sid
+                )
         
         # 向後兼容：也發送 final_result 事件
         if isinstance(serializable_result, dict):
@@ -775,7 +668,7 @@ class SocketIOServer(APIBase):
             text = str(serializable_result)
             
         await self.sio.emit(
-            'final_result',
+            routes["TRANSCRIPT"],
             {
                 'text': text,
                 'is_final': True,
@@ -842,7 +735,7 @@ class SocketIOServer(APIBase):
             session_id: Session ID
         """
         # 使用 selector 獲取 session
-        state = store.state if store else None
+        state = self.store.state if self.store else None
         session = sessions_selectors.get_session(session_id)(state) if state else None
         if not session:
             return
@@ -851,7 +744,7 @@ class SocketIOServer(APIBase):
         
         current_state = session.get("fsm_state", "IDLE")
         await self.sio.emit(
-            'status_update',
+            routes["STATUS_UPDATE"],
             {
                 'session_id': session_id,
                 'state': translate_fsm_state(current_state),
@@ -862,6 +755,438 @@ class SocketIOServer(APIBase):
             room=room_name
         )
         
+    # === 新增獨立的事件處理器 ===
+    
+    async def _handle_session_create(self, sid: str, data: Dict[str, Any]):
+        """處理創建會話事件"""
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            payload = data.get("payload", {})
+            # 優先使用前端提供的 session_id，確保 ID 一致性
+            session_id = payload.get("session_id")
+            
+            if not session_id:
+                session_id = str(uuid.uuid4())
+                logger.info(f"Socket.IO: Generated new session ID: {session_id}")
+            else:
+                logger.info(f"Socket.IO: Using frontend-provided session ID: {session_id}")
+                
+            # 更新連線的 session_id
+            connection.session_id = session_id
+            
+            # 分發 action 到 store，使用 batch 策略
+            strategy = payload.get("strategy", "batch").lower()
+            self.store.dispatch(sessions_actions.create_session(session_id, strategy))
+            logger.info(f"Socket.IO: Created session {session_id} with strategy: {strategy}")
+            
+            # 發送確認
+            await self.sio.emit(
+                routes["SESSION_CREATE"],
+                {
+                    'status': 'created',
+                    'session_id': session_id,
+                    'strategy': strategy,
+                    'timestamp': datetime.now().isoformat()
+                },
+                namespace=self.namespace,
+                to=sid
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling session create: {e}")
+            await self._emit_error(sid, str(e))
+            
+    async def _handle_session_start(self, sid: str, data: Dict[str, Any]):
+        """處理開始監聽事件"""
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            payload = data.get("payload", {})
+            session_id = payload.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._emit_error(sid, "No session ID")
+                return
+                
+            # 更新連線的 session_id
+            connection.session_id = session_id
+            
+            # 檢查音訊配置
+            audio_config = payload.get("audio_config", {})
+            if audio_config:
+                self.store.dispatch(sessions_actions.update_audio_config(session_id, audio_config))
+                
+            # 分發 action 到 store
+            self.store.dispatch(sessions_actions.start_listening(session_id))
+            logger.info(f"Socket.IO: Started listening for session {session_id}")
+            
+            # 發送確認
+            await self.sio.emit(
+                routes["SESSION_START"],
+                {
+                    'status': 'listening',
+                    'session_id': session_id,
+                    'timestamp': datetime.now().isoformat()
+                },
+                namespace=self.namespace,
+                to=sid
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling session start: {e}")
+            await self._emit_error(sid, str(e))
+            
+    async def _handle_session_stop(self, sid: str, data: Dict[str, Any]):
+        """處理停止監聽事件"""
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            payload = data.get("payload", {})
+            session_id = payload.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._emit_error(sid, "No session ID")
+                return
+                
+            # 分發 action 到 store
+            self.store.dispatch(sessions_actions.stop(session_id))
+            logger.info(f"Socket.IO: Stopped listening for session {session_id}")
+            
+            # 發送確認
+            await self.sio.emit(
+                routes["SESSION_STOP"],
+                {
+                    'status': 'stopped',
+                    'session_id': session_id,
+                    'timestamp': datetime.now().isoformat()
+                },
+                namespace=self.namespace,
+                to=sid
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling session stop: {e}")
+            await self._emit_error(sid, str(e))
+            
+    async def _handle_session_destroy(self, sid: str, data: Dict[str, Any]):
+        """處理銷毀會話事件"""
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            payload = data.get("payload", {})
+            session_id = payload.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._emit_error(sid, "No session ID")
+                return
+                
+            # 分發 action 到 store
+            self.store.dispatch(sessions_actions.destroy_session(session_id))
+            logger.info(f"Socket.IO: Destroyed session {session_id}")
+            
+            # 清理連線的 session_id
+            connection.session_id = None
+            
+            # 發送確認
+            await self.sio.emit(
+                routes["SESSION_DESTROY"],
+                {
+                    'status': 'destroyed',
+                    'session_id': session_id,
+                    'timestamp': datetime.now().isoformat()
+                },
+                namespace=self.namespace,
+                to=sid
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling session destroy: {e}")
+            await self._emit_error(sid, str(e))
+            
+    async def _handle_recording_start(self, sid: str, data: Dict[str, Any]):
+        """處理開始錄音事件"""
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            payload = data.get("payload", {})
+            session_id = payload.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._emit_error(sid, "No session ID")
+                return
+                
+            # 分發 action 到 store
+            self.store.dispatch(sessions_actions.start_recording(session_id))
+            logger.info(f"Socket.IO: Started recording for session {session_id}")
+            
+            # 發送確認
+            await self.sio.emit(
+                routes["RECORDING_START"],
+                {
+                    'status': 'recording',
+                    'session_id': session_id,
+                    'timestamp': datetime.now().isoformat()
+                },
+                namespace=self.namespace,
+                to=sid
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling recording start: {e}")
+            await self._emit_error(sid, str(e))
+            
+    async def _handle_recording_end(self, sid: str, data: Dict[str, Any]):
+        """處理結束錄音事件"""
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            payload = data.get("payload", {})
+            session_id = payload.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._emit_error(sid, "No session ID")
+                return
+                
+            # 分發 action 到 store
+            self.store.dispatch(sessions_actions.end_recording(session_id))
+            logger.info(f"Socket.IO: Ended recording for session {session_id}")
+            
+            # 發送確認
+            await self.sio.emit(
+                routes["RECORDING_END"],
+                {
+                    'status': 'ended',
+                    'session_id': session_id,
+                    'timestamp': datetime.now().isoformat()
+                },
+                namespace=self.namespace,
+                to=sid
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling recording end: {e}")
+            await self._emit_error(sid, str(e))
+            
+    async def _handle_chunk_upload_start(self, sid: str, data: Dict[str, Any]):
+        """處理開始分塊上傳事件"""
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            payload = data.get("payload", {})
+            # 優先使用前端提供的 session_id
+            session_id = payload.get("session_id")
+            
+            if not session_id:
+                # 如果前端沒有提供，嘗試使用連線的 session_id
+                session_id = connection.session_id
+                
+            if not session_id:
+                # 最後選擇：生成新的 session_id
+                session_id = str(uuid.uuid4())
+                logger.info(f"Socket.IO: Generated new session ID for chunk upload: {session_id}")
+            else:
+                logger.info(f"Socket.IO: Using session ID for chunk upload: {session_id}")
+                
+            # 更新連線的 session_id
+            connection.session_id = session_id
+                
+            # 重置分塊序號
+            self.chunk_sequences[session_id] = 0
+            
+            # 分發 action 到 store
+            self.store.dispatch(sessions_actions.chunk_upload_start(session_id))
+            logger.info(f"Socket.IO: Started chunk upload for session {session_id}")
+            
+            # 發送確認
+            await self.sio.emit(
+                routes["CHUNK_UPLOAD_START"],
+                {
+                    'status': 'ready',
+                    'session_id': session_id,
+                    'timestamp': datetime.now().isoformat()
+                },
+                namespace=self.namespace,
+                to=sid
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling chunk upload start: {e}")
+            await self._emit_error(sid, str(e))
+            
+    async def _handle_chunk_upload_done(self, sid: str, data: Dict[str, Any]):
+        """處理完成分塊上傳事件"""
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            payload = data.get("payload", {})
+            session_id = payload.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._emit_error(sid, "No session ID")
+                return
+                
+            # 分發 action 到 store
+            self.store.dispatch(sessions_actions.chunk_upload_done(session_id))
+            logger.info(f"Socket.IO: Completed chunk upload for session {session_id}")
+            
+            # 發送確認
+            await self.sio.emit(
+                routes["CHUNK_UPLOAD_DONE"],
+                {
+                    'status': 'processing',
+                    'session_id': session_id,
+                    'timestamp': datetime.now().isoformat()
+                },
+                namespace=self.namespace,
+                to=sid
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling chunk upload done: {e}")
+            await self._emit_error(sid, str(e))
+            
+    async def _handle_file_upload(self, sid: str, data: Dict[str, Any]):
+        """處理檔案上傳事件"""
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            payload = data.get("payload", {})
+            session_id = payload.get("session_id") or connection.session_id
+            
+            if not session_id:
+                session_id = str(uuid.uuid4())
+                connection.session_id = session_id
+                
+            # 分發 action 到 store
+            self.store.dispatch(sessions_actions.upload_file(session_id))
+            logger.info(f"Socket.IO: File upload for session {session_id}")
+            
+            # 發送確認
+            await self.sio.emit(
+                routes["FILE_UPLOAD"],
+                {
+                    'status': 'uploading',
+                    'session_id': session_id,
+                    'timestamp': datetime.now().isoformat()
+                },
+                namespace=self.namespace,
+                to=sid
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling file upload: {e}")
+            await self._emit_error(sid, str(e))
+            
+    async def _handle_file_upload_done(self, sid: str, data: Dict[str, Any]):
+        """處理檔案上傳完成事件"""
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            payload = data.get("payload", {})
+            session_id = payload.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._emit_error(sid, "No session ID")
+                return
+                
+            # 分發 action 到 store
+            self.store.dispatch(sessions_actions.upload_file_done(session_id))
+            logger.info(f"Socket.IO: File upload done for session {session_id}")
+            
+            # 發送確認
+            await self.sio.emit(
+                routes["FILE_UPLOAD_DONE"],
+                {
+                    'status': 'completed',
+                    'session_id': session_id,
+                    'timestamp': datetime.now().isoformat()
+                },
+                namespace=self.namespace,
+                to=sid
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling file upload done: {e}")
+            await self._emit_error(sid, str(e))
+    
+    async def _handle_audio_metadata(self, sid: str, data: Dict[str, Any]):
+        """處理音訊元資料事件"""
+        try:
+            if sid not in self.connections:
+                await self._emit_error(sid, "Connection not found")
+                return
+                
+            connection = self.connections[sid]
+            payload = data.get("payload", {})
+            session_id = payload.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._emit_error(sid, "Session ID is required for audio metadata")
+                return
+            
+            # 提取元資料 - 前端發送的是 audio_metadata
+            metadata = payload.get("audio_metadata", {})
+            
+            logger.info(f"Socket.IO: Received audio metadata for session {session_id}")
+            logger.debug(f"Metadata: {metadata}")
+            
+            # 分發 audio metadata 事件到 store
+            self.store.dispatch(
+                audio_metadata(
+                    session_id=session_id,
+                    audio_metadata=metadata  # 使用正確的參數名
+                )
+            )
+            
+            # 發送確認
+            await self.sio.emit(
+                "audio/metadata",
+                {
+                    'status': 'received',
+                    'session_id': session_id,
+                    'timestamp': datetime.now().isoformat()
+                },
+                namespace=self.namespace,
+                to=sid
+            )
+            
+        except Exception as e:
+            logger.error(f"Error handling audio metadata: {e}")
+            await self._emit_error(sid, str(e))
+    
+    # === 輔助方法 ===
+    
     async def _emit_error(self, sid: str, error_message: str):
         """
         發送錯誤訊息
@@ -871,7 +1196,7 @@ class SocketIOServer(APIBase):
             error_message: 錯誤訊息
         """
         await self.sio.emit(
-            'error',
+            routes["ERROR"],
             {
                 'error': error_message,
                 'timestamp': datetime.now().isoformat()
@@ -905,7 +1230,7 @@ class SocketIOServer(APIBase):
                 
                 # 發送進度更新
                 await self.sio.emit(
-                    'progress',
+                    routes["PROGRESS"],
                     {
                         'percent': 50,
                         'message': f'接收音訊片段 {chunk_count}',
@@ -924,7 +1249,7 @@ class SocketIOServer(APIBase):
                 await self._transcribe_audio(connection, complete_audio, room_name)
             else:
                 await self.sio.emit(
-                    'error',
+                    routes["ERROR"],
                     {
                         'error': '沒有收到音訊資料',
                         'timestamp': datetime.now().isoformat()
@@ -936,7 +1261,7 @@ class SocketIOServer(APIBase):
         except Exception as e:
             logger.error(f"Error processing audio stream: {e}")
             await self.sio.emit(
-                'error',
+                routes["ERROR"],
                 {
                     'error': str(e),
                     'timestamp': datetime.now().isoformat()
@@ -960,7 +1285,7 @@ class SocketIOServer(APIBase):
         try:
             # 發送開始轉譯訊息
             await self.sio.emit(
-                'partial_result',
+                routes["TRANSCRIBE_START"],
                 {
                     'text': '正在進行語音辨識...',
                     'is_final': False,
@@ -985,7 +1310,7 @@ class SocketIOServer(APIBase):
                     logger.error(f"音訊轉換失敗: {e}")
                     # 如果轉換失敗，無法處理
                     await self.sio.emit(
-                        'error',
+                        routes["ERROR"],
                         {
                             'error': "無法轉換音訊格式。請確保系統已安裝 FFmpeg。"
                                     "在 macOS 上可以使用 'brew install ffmpeg' 安裝 FFmpeg。",
@@ -1026,7 +1351,7 @@ class SocketIOServer(APIBase):
                     final_text = result.text
                     
                     await self.sio.emit(
-                        'final_result',
+                        routes["TRANSCRIPT"],
                         {
                             'text': final_text,
                             'is_final': True,
@@ -1039,7 +1364,7 @@ class SocketIOServer(APIBase):
                 else:
                     final_text = "無法辨識音訊內容"
                     await self.sio.emit(
-                        'error',
+                        routes["ERROR"],
                         {
                             'error': final_text,
                             'timestamp': datetime.now().isoformat()
@@ -1053,7 +1378,7 @@ class SocketIOServer(APIBase):
         except Exception as e:
             logger.error(f"Transcription error: {e}")
             await self.sio.emit(
-                'error',
+                routes["ERROR"],
                 {
                     'error': f'轉譯錯誤: {str(e)}',
                     'timestamp': datetime.now().isoformat()
@@ -1080,13 +1405,13 @@ class SocketIOServer(APIBase):
         """
         try:
             # 使用 selector 獲取 session
-            state = store.state if store else None
+            state = self.store.state if self.store else None
             session = sessions_selectors.get_session(session_id)(state) if state else None
             
             if command == "start":
                 if not session:
                     # 使用 Store dispatch 創建 session (不傳遞 audio_format)
-                    store.dispatch(sessions_actions.create_session(session_id))
+                    self.store.dispatch(sessions_actions.create_session(session_id))
                 
                 # 檢查是否有音訊配置
                 audio_format = None
@@ -1103,7 +1428,7 @@ class SocketIOServer(APIBase):
                     }
                 
                 # 使用 start_listening action 傳遞 audio_format
-                store.dispatch(sessions_actions.start_listening(session_id, audio_format))
+                self.store.dispatch(sessions_actions.start_listening(session_id, audio_format))
                 
                 return self.create_success_response(
                     {"status": "started", "session_id": session_id},
@@ -1112,7 +1437,7 @@ class SocketIOServer(APIBase):
                 
             elif command == "stop":
                 if session:
-                    store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
+                    self.store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
                     # 停止音訊串流
                     self.stream_manager.stop_stream(session_id)
                 return self.create_success_response(
@@ -1131,7 +1456,7 @@ class SocketIOServer(APIBase):
                 
             elif command == "busy_start":
                 if session:
-                    store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
+                    self.store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
                 return self.create_success_response(
                     {"status": "busy_started", "session_id": session_id},
                     session_id
@@ -1139,7 +1464,7 @@ class SocketIOServer(APIBase):
                 
             elif command == "busy_end":
                 if session:
-                    store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
+                    self.store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
                 return self.create_success_response(
                     {"status": "busy_ended", "session_id": session_id},
                     session_id

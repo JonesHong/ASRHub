@@ -63,6 +63,23 @@ class UIManager {
     }
     
     /**
+     * 更新進度顯示
+     */
+    updateProgress(progress) {
+        // 如果有進度條元素，更新它
+        const progressBar = document.getElementById('uploadProgress');
+        if (progressBar) {
+            progressBar.style.width = `${progress}%`;
+            progressBar.textContent = `${Math.round(progress)}%`;
+        }
+        
+        // 也可以在狀態文字中顯示進度
+        if (progress < 100) {
+            this.updateStatus(`上傳中... ${Math.round(progress)}%`, 'processing');
+        }
+    }
+    
+    /**
      * 更新連線狀態
      */
     updateConnectionStatus(connected, protocol = '') {

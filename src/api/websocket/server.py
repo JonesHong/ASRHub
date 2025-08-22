@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime
 
 from src.api.base import APIBase, APIResponse
+from src.api.websocket.routes import routes
 from src.utils.logger import logger
 from src.store import get_global_store
 from src.store.sessions import sessions_actions, sessions_selectors
@@ -189,84 +190,60 @@ class WebSocketServer(APIBase):
                 await self._send_error(connection, "Invalid JSON format")
                 return
                 
-            message_type = data.get("type")
-            # logger.info(f"WebSocket: Received message with type '{message_type}'")
+            # 檢查事件欄位（WebSocket 使用 event 欄位來識別事件類型）
+            event_type = data.get("event")
             
-            # 檢查是否為 PyStoreX action（以 "[" 開頭的 type）
-            if message_type and message_type.startswith("["):
-                # 這是 PyStoreX action，直接處理為 action
-                # logger.info(f"WebSocket: Detected PyStoreX action, routing to _handle_action_message")
-                await self._handle_action_message(connection, data)
-            elif message_type == "action":
-                # 處理 PyStoreX action (新的事件驅動架構)
-                # logger.info(f"WebSocket: Routing to _handle_action_message")
-                await self._handle_action_message(connection, data)
-            elif message_type == "audio_chunk":
-                # 處理音訊塊上傳
-                # logger.info(f"WebSocket: Routing to _handle_audio_chunk_message")
-                await self._handle_audio_chunk_message(connection, data)
-            elif message_type == "audio_config":
-                # 處理音訊配置訊息 (向後兼容)
-                await self._handle_audio_config(connection, data)
-            elif message_type == "control":
-                # 處理控制訊息 (向後兼容)
-                await self._handle_control_message(connection, data)
-            elif message_type == "audio":
-                # 處理 JSON 格式的音訊資料 (向後兼容)
-                await self._handle_audio_json(connection, data)
-            elif message_type == "ping":
-                await self._send_message(connection, {"type": "pong"})
+            if not event_type:
+                await self._send_error(connection, "Missing event type")
+                return
+            
+            # 提取實際的資料內容
+            payload = data.get("data", {})
+            
+            # 路由到對應的 handler（新的獨立事件）
+            if event_type == routes["SESSION_CREATE"]:
+                await self._handle_session_create(connection, payload)
+            elif event_type == routes["SESSION_START"]:
+                await self._handle_session_start(connection, payload)
+            elif event_type == routes["SESSION_STOP"]:
+                await self._handle_session_stop(connection, payload)
+            elif event_type == routes["SESSION_DESTROY"]:
+                await self._handle_session_destroy(connection, payload)
+            elif event_type == routes["RECORDING_START"]:
+                await self._handle_recording_start(connection, payload)
+            elif event_type == routes["RECORDING_END"]:
+                await self._handle_recording_end(connection, payload)
+            elif event_type == routes["CHUNK_UPLOAD_START"]:
+                await self._handle_chunk_upload_start(connection, payload)
+            elif event_type == routes["CHUNK_UPLOAD_DONE"]:
+                await self._handle_chunk_upload_done(connection, payload)
+            elif event_type == routes["FILE_UPLOAD"]:
+                await self._handle_file_upload(connection, payload)
+            elif event_type == routes["FILE_UPLOAD_DONE"]:
+                await self._handle_file_upload_done(connection, payload)
+            
+            # 音訊處理事件
+            elif event_type == routes["AUDIO_CHUNK"] or event_type == "chunk/data":
+                await self._handle_audio_chunk_message(connection, payload)
+            elif event_type == routes["AUDIO_CONFIG"]:
+                await self._handle_audio_config(connection, payload)
+            elif event_type == routes["AUDIO_METADATA"]:
+                await self._handle_audio_metadata(connection, payload)
+                
+            # 控制指令
+            elif event_type == routes["AUDIO"]:
+                await self._handle_audio_json(connection, payload)
+                
+            # 系統事件
+            elif event_type == routes["PING"]:
+                await self._send_message(connection, {"type": routes["PONG"]})
             else:
-                await self._send_error(connection, f"Unknown message type: {message_type}")
+                await self._send_error(connection, f"Unknown event type: {event_type}")
                 
         except Exception as e:
             logger.error(f"Error handling message: {e}")
             await self._send_error(connection, str(e))
             
-    async def _handle_control_message(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
-        """
-        處理控制訊息
-        
-        Args:
-            connection: WebSocket 連線
-            data: 控制訊息資料
-        """
-        from src.api.websocket.handlers import MessageBuilder, MessageValidator
-        
-        # 驗證控制訊息格式
-        if not MessageValidator.validate_control_message(data):
-            await self._send_error(connection, "Invalid control message format")
-            return
-            
-        command = data.get("command")
-        params = data.get("params", {})
-        
-        # 如果沒有 session_id，先建立新的 session
-        if not connection.session_id and command == "start":
-            connection.session_id = data.get("session_id") or str(uuid.uuid4())
-            logger.info(f"從 control start 命令設置 session_id: {connection.session_id}")
-            
-        response = await self.handle_control_command(
-            command=command,
-            session_id=connection.session_id,
-            params=params,
-            connection=connection
-        )
-        
-        # 使用 MessageBuilder 建立回應
-        response_message = MessageBuilder.build_control_response(
-            command=command,
-            status=response.status,
-            data=response.data,
-            error=response.error
-        )
-        
-        await self._send_message(connection, response_message)
-        
-        # 如果狀態有變更，推送狀態更新
-        if command in ["start", "stop", "busy_start", "busy_end"]:
-            await self._broadcast_status_update(connection)
-        
     async def _handle_audio_data(self, connection: 'WebSocketConnection', audio_data: bytes):
         """
         處理音訊資料
@@ -305,7 +282,7 @@ class WebSocketServer(APIBase):
             # 檢查背壓
             if self.stream_manager.implement_backpressure(connection.session_id):
                 await self._send_message(connection, {
-                    "type": "backpressure",
+                    "type": routes["BACKPRESSURE"],
                     "message": "Audio buffer near capacity, please slow down"
                 })
                 
@@ -313,7 +290,7 @@ class WebSocketServer(APIBase):
             if self.stream_manager.add_audio_chunk(connection.session_id, audio_data):
                 # 發送確認
                 await self._send_message(connection, {
-                    "type": "audio_received",
+                    "type": routes["AUDIO_RECEIVED"],
                     "size": len(audio_data),
                     "timestamp": datetime.now().isoformat()
                 })
@@ -324,139 +301,310 @@ class WebSocketServer(APIBase):
             logger.error(f"Error handling audio data: {e}")
             await self._send_error(connection, str(e))
     
-    async def _handle_action_message(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
-        """
-        處理 PyStoreX action 訊息（新的事件驅動架構）
-        
-        Args:
-            connection: WebSocket 連線
-            data: 包含 action 的訊息
-        """
-        # 支援三種格式：
-        # 1. 直接的 action 格式：{type: "[Session] Create", payload: {...}}
-        # 2. 包裝的 action 格式：{action: {type: "[Session] Create", payload: {...}}}
-        # 3. data 字段格式：{type: "action", data: {type: "[Session] Create", payload: {...}}}
-        
-        if "action" in data:
-            # 包裝格式 (protocol-test 使用)
-            action = data.get("action")
-            if not action:
-                await self._send_error(connection, "No action provided")
-                return
-            action_type = action.get("type")
-            payload = action.get("payload", {})
-        elif "data" in data and isinstance(data.get("data"), dict):
-            # data 字段格式 (realtime-streaming 使用)
-            action = data.get("data")
-            action_type = action.get("type")
-            payload = action.get("payload", {})
-        else:
-            # 直接格式（前端使用的格式）
-            action_type = data.get("type")
-            payload = data.get("payload", {})
-        
-        logger.info(f"處理 Action: {action_type}")
-        
+    # ========== Session 管理 Handlers ==========
+    
+    async def _handle_session_create(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """處理創建會話事件"""
         try:
-            # 獲取 global store
+            # data 現在直接是 payload (來自 {event, data} 結構)
+            session_id = data.get("session_id") or str(uuid.uuid4())
+            # 將 strategy 轉換為小寫以符合 FSMStrategy enum
+            strategy = data.get("strategy", "batch").lower()
+            
+            connection.session_id = session_id
+            
             store = get_global_store()
             if not store:
                 await self._send_error(connection, "Store not initialized")
                 return
                 
-            # 根據 action 類型分發到 PyStoreX store
-            if action_type == "[Session] Create":
-                session_id = payload.get("session_id")
-                strategy = payload.get("strategy", "BATCH")
-                connection.session_id = session_id
-                store.dispatch(sessions_actions.create_session(session_id, strategy))
-                # 發送成功回應
-                await self._send_message(connection, {
-                    "type": "action",
-                    "action": {
-                        "type": "[Session] Created",
-                        "payload": {"session_id": session_id}
-                    }
-                })
-                
-            elif action_type == "[Session] Upload File":
-                session_id = payload.get("session_id")
-                if session_id:
-                    connection.session_id = session_id  # 確保連線有 session_id
-                    # 分發 upload_file action，這會觸發 SessionEffects 處理
-                    store.dispatch(sessions_actions.upload_file(session_id))
-                    # 發送開始處理的確認
-                    await self._send_message(connection, {
-                        "type": "action",
-                        "action": {
-                            "type": "[Session] Begin Transcription",
-                            "payload": {"session_id": session_id}
-                        }
-                    })
-                    
-            elif action_type == "[Session] Start Recording":
-                session_id = payload.get("session_id")
-                strategy = payload.get("strategy", "NON_STREAMING")
-                if session_id:
-                    store.dispatch(sessions_actions.start_recording(session_id, strategy))
-                    
-            elif action_type == "[Session] End Recording":
-                session_id = payload.get("session_id")
-                trigger = payload.get("trigger", "manual")
-                duration = payload.get("duration", 0)
-                if session_id:
-                    store.dispatch(sessions_actions.end_recording(session_id, trigger, duration))
-                    
-            elif action_type == "[Session] Chunk Upload Start":
-                session_id = payload.get("session_id")
-                if session_id:
-                    connection.session_id = session_id  # 確保連線有 session_id
-                    # 分發 chunk_upload_start action
-                    store.dispatch(sessions_actions.chunk_upload_start(session_id))
-                    # 發送確認
-                    await self._send_message(connection, {
-                        "type": "action",
-                        "action": {
-                            "type": "[Session] Chunk Upload Started",
-                            "payload": {"session_id": session_id}
-                        }
-                    })
-                    
-            elif action_type == "[Session] Chunk Upload Done":
-                session_id = payload.get("session_id")
-                if session_id:
-                    connection.session_id = session_id  # 確保連線有 session_id
-                    # 分發 chunk_upload_done action，這會觸發 SessionEffects 處理
-                    store.dispatch(sessions_actions.chunk_upload_done(session_id))
-                    # 發送開始處理的確認
-                    await self._send_message(connection, {
-                        "type": "action",
-                        "action": {
-                            "type": "[Session] Begin Transcription",
-                            "payload": {"session_id": session_id}
-                        }
-                    })
-                    
-            elif action_type == "[Session] Destroy":
-                session_id = payload.get("session_id")
-                if session_id:
-                    # 分發 destroy_session action
-                    store.dispatch(sessions_actions.destroy_session(session_id))
-                    # 發送確認
-                    await self._send_message(connection, {
-                        "type": "action",
-                        "action": {
-                            "type": "[Session] Destroyed",
-                            "payload": {"session_id": session_id}
-                        }
-                    })
-                    
-            else:
-                logger.warning(f"未處理的 Action 類型: {action_type}")
-                
+            store.dispatch(sessions_actions.create_session(session_id, strategy))
+            
+            await self._send_message(connection, {
+                "type": routes["SESSION_CREATE"],
+                "payload": {"session_id": session_id, "status": "created"}
+            })
+            
+            logger.info(f"Session created: {session_id}")
+            
         except Exception as e:
-            logger.error(f"處理 Action 時發生錯誤: {e}")
-            await self._send_error(connection, str(e))
+            logger.error(f"Error creating session: {e}")
+            await self._send_error(connection, f"Failed to create session: {str(e)}")
+    
+    async def _handle_session_start(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """處理開始監聽事件"""
+        try:
+            # data 現在直接是 payload
+            session_id = data.get("session_id") or connection.session_id
+            audio_format = data.get("audio_format", "pcm")
+            
+            if not session_id:
+                await self._send_error(connection, "No session_id provided")
+                return
+            
+            store = get_global_store()
+            if not store:
+                await self._send_error(connection, "Store not initialized")
+                return
+                
+            store.dispatch(sessions_actions.start_listening(session_id, audio_format))
+            
+            await self._send_message(connection, {
+                "type": routes["SESSION_START"],
+                "payload": {"session_id": session_id, "status": "listening"}
+            })
+            
+            logger.info(f"Session started listening: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error starting session: {e}")
+            await self._send_error(connection, f"Failed to start session: {str(e)}")
+    
+    async def _handle_session_stop(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """處理停止監聽事件"""
+        try:
+            # data 現在直接是 payload
+            session_id = data.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._send_error(connection, "No session_id provided")
+                return
+            
+            store = get_global_store()
+            if not store:
+                await self._send_error(connection, "Store not initialized")
+                return
+                
+            store.dispatch(sessions_actions.stop_listening(session_id))
+            
+            await self._send_message(connection, {
+                "type": routes["SESSION_STOP"],
+                "payload": {"session_id": session_id, "status": "stopped"}
+            })
+            
+            logger.info(f"Session stopped: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error stopping session: {e}")
+            await self._send_error(connection, f"Failed to stop session: {str(e)}")
+    
+    async def _handle_session_destroy(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """處理銷毀會話事件"""
+        try:
+            # data 現在直接是 payload
+            session_id = data.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._send_error(connection, "No session_id provided")
+                return
+            
+            store = get_global_store()
+            if not store:
+                await self._send_error(connection, "Store not initialized")
+                return
+                
+            store.dispatch(sessions_actions.destroy_session(session_id))
+            
+            if connection.session_id == session_id:
+                connection.session_id = None
+            
+            await self._send_message(connection, {
+                "type": routes["SESSION_DESTROY"],
+                "payload": {"session_id": session_id, "status": "destroyed"}
+            })
+            
+            logger.info(f"Session destroyed: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error destroying session: {e}")
+            await self._send_error(connection, f"Failed to destroy session: {str(e)}")
+    
+    # ========== 錄音管理 Handlers ==========
+    
+    async def _handle_recording_start(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """處理開始錄音事件"""
+        try:
+            # data 現在直接是 payload
+            session_id = data.get("session_id") or connection.session_id
+            strategy = data.get("strategy", "non_streaming").lower()
+            
+            if not session_id:
+                await self._send_error(connection, "No session_id provided")
+                return
+            
+            store = get_global_store()
+            if not store:
+                await self._send_error(connection, "Store not initialized")
+                return
+                
+            store.dispatch(sessions_actions.start_recording(session_id, strategy))
+            
+            await self._send_message(connection, {
+                "type": routes["RECORDING_START"],
+                "payload": {"session_id": session_id, "status": "recording"}
+            })
+            
+            logger.info(f"Recording started: {session_id}")
+
+            
+        except Exception as e:
+            logger.error(f"Error starting recording: {e}")
+            await self._send_error(connection, f"Failed to start recording: {str(e)}")
+    
+    async def _handle_recording_end(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """處理結束錄音事件"""
+        try:
+            # data 現在直接是 payload
+            session_id = data.get("session_id") or connection.session_id
+            trigger = payload.get("trigger", "manual")
+            duration = payload.get("duration", 0)
+            
+            if not session_id:
+                await self._send_error(connection, "No session_id provided")
+                return
+            
+            store = get_global_store()
+            if not store:
+                await self._send_error(connection, "Store not initialized")
+                return
+                
+            store.dispatch(sessions_actions.end_recording(session_id, trigger, duration))
+            
+            await self._send_message(connection, {
+                "type": routes["RECORDING_END"],
+                "payload": {
+                    "session_id": session_id,
+                    "status": "ended",
+                    "trigger": trigger,
+                    "duration": duration
+                }
+            })
+            
+            logger.info(f"Recording ended: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error ending recording: {e}")
+            await self._send_error(connection, f"Failed to end recording: {str(e)}")
+    
+    # ========== 上傳管理 Handlers ==========
+    
+    async def _handle_chunk_upload_start(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """處理開始分塊上傳事件"""
+        try:
+            # data 現在直接是 payload
+            session_id = data.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._send_error(connection, "No session_id provided")
+                return
+            
+            connection.session_id = session_id
+            
+            store = get_global_store()
+            if not store:
+                await self._send_error(connection, "Store not initialized")
+                return
+                
+            store.dispatch(sessions_actions.chunk_upload_start(session_id))
+            
+            await self._send_message(connection, {
+                "type": routes["CHUNK_UPLOAD_START"],
+                "payload": {"session_id": session_id, "status": "ready"}
+            })
+            
+            logger.info(f"Chunk upload started: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error starting chunk upload: {e}")
+            await self._send_error(connection, f"Failed to start chunk upload: {str(e)}")
+    
+    async def _handle_chunk_upload_done(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """處理完成分塊上傳事件"""
+        try:
+            # data 現在直接是 payload
+            session_id = data.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._send_error(connection, "No session_id provided")
+                return
+            
+            connection.session_id = session_id
+            
+            store = get_global_store()
+            if not store:
+                await self._send_error(connection, "Store not initialized")
+                return
+                
+            store.dispatch(sessions_actions.chunk_upload_done(session_id))
+            
+            await self._send_message(connection, {
+                "type": routes["CHUNK_UPLOAD_DONE"],
+                "payload": {"session_id": session_id, "status": "processing"}
+            })
+            
+            logger.info(f"Chunk upload done: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error completing chunk upload: {e}")
+            await self._send_error(connection, f"Failed to complete chunk upload: {str(e)}")
+    
+    async def _handle_file_upload(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """處理檔案上傳事件"""
+        try:
+            # data 現在直接是 payload
+            session_id = data.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._send_error(connection, "No session_id provided")
+                return
+            
+            connection.session_id = session_id
+            
+            store = get_global_store()
+            if not store:
+                await self._send_error(connection, "Store not initialized")
+                return
+                
+            store.dispatch(sessions_actions.upload_file(session_id))
+            
+            await self._send_message(connection, {
+                "type": routes["FILE_UPLOAD"],
+                "payload": {"session_id": session_id, "status": "uploading"}
+            })
+            
+            logger.info(f"File upload started: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error starting file upload: {e}")
+            await self._send_error(connection, f"Failed to start file upload: {str(e)}")
+    
+    async def _handle_file_upload_done(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """處理檔案上傳完成事件"""
+        try:
+            # data 現在直接是 payload
+            session_id = data.get("session_id") or connection.session_id
+            
+            if not session_id:
+                await self._send_error(connection, "No session_id provided")
+                return
+            
+            store = get_global_store()
+            if not store:
+                await self._send_error(connection, "Store not initialized")
+                return
+                
+            store.dispatch(sessions_actions.upload_file_done(session_id))
+            
+            await self._send_message(connection, {
+                "type": routes["FILE_UPLOAD_DONE"],
+                "payload": {"session_id": session_id, "status": "completed"}
+            })
+            
+            logger.info(f"File upload done: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error completing file upload: {e}")
+            await self._send_error(connection, f"Failed to complete file upload: {str(e)}")
     
     async def _handle_audio_chunk_message(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
         """
@@ -527,7 +675,7 @@ class WebSocketServer(APIBase):
             
             # 發送確認
             await self._send_message(connection, {
-                "type": "audio_received",  
+                "type": routes["AUDIO_RECEIVED"],  
                 "size": chunk_size,
                 "chunk_id": data.get("chunk_id")
             })
@@ -553,12 +701,24 @@ class WebSocketServer(APIBase):
                 # 暫時使用輪詢方式檢查狀態變化
                 await asyncio.sleep(0.1)  # 100ms 檢查一次
                 
+                # 獲取最新的 store 實例
+                current_store = get_global_store()
+                if not current_store:
+                    logger.debug("Store not initialized yet, waiting...")
+                    continue
+                
                 # 檢查每個連線的 session 狀態
                 for conn_id, connection in list(self.connections.items()):
                     if connection.session_id:
                         # 獲取 session 狀態
-                        state = store.state if store else None
-                        session = sessions_selectors.get_session(connection.session_id)(state) if state else None
+                        state = current_store.state
+                        if not state:
+                            continue
+                            
+                        # 使用正確的選擇器路徑
+                        sessions_state = state.get('sessions', {})
+                        all_sessions = sessions_state.get('sessions', {})
+                        session = all_sessions.get(connection.session_id)
                         
                         if session:
                             # 檢查是否有新的轉譯結果 (存儲在 transcription 欄位)
@@ -570,17 +730,21 @@ class WebSocketServer(APIBase):
                                     
                                 # 比較整個轉譯結果對象
                                 if transcription != connection._last_transcription_sent:
-                                    # 發送 TRANSCRIPTION_DONE action
-                                    await self._send_message(connection, {
-                                        "type": "action",
-                                        "action": {
-                                            "type": "[Session] Transcription Done",
-                                            "payload": {
-                                                "session_id": connection.session_id,
-                                                "result": transcription
-                                            }
-                                        }
-                                    })
+                                    logger.info(f"[✨] 檢測到新的轉譯結果，session: {connection.session_id[:8]}...")
+                                    
+                                    # 轉換 immutables.Map 為可序列化的 dict
+                                    serializable_result = self._convert_immutable_to_dict(transcription)
+                                    
+                                    # 發送最終轉譯結果
+                                    message = {
+                                        "type": routes["TRANSCRIPT"],
+                                        "session_id": connection.session_id,
+                                        "result": serializable_result,
+                                        "timestamp": datetime.now().isoformat()
+                                    }
+                                    
+                                    logger.info(f"[📤] 發送轉譯結果到 WebSocket 客戶端: {conn_id[:8]}...")
+                                    await self._send_message(connection, message)
                                     connection._last_transcription_sent = transcription
                                     # 修復屬性訪問 - transcription 現在是字典格式
                                     if isinstance(transcription, dict):
@@ -603,7 +767,7 @@ class WebSocketServer(APIBase):
                             if current_state != connection._last_state:
                                 # 發送狀態更新
                                 await self._send_message(connection, {
-                                    "type": "event",
+                                    "type": routes["EVENT"],
                                     "event": {
                                         "type": "state_changed",
                                         "state": current_state,
@@ -891,6 +1055,47 @@ class WebSocketServer(APIBase):
         except Exception as e:
             logger.error(f"處理音訊配置時發生錯誤: {e}")
             await self._send_error(connection, "處理音訊配置失敗")
+    
+    async def _handle_audio_metadata(self, connection: 'WebSocketConnection', data: Dict[str, Any]):
+        """
+        處理音訊元資料訊息
+        
+        Args:
+            connection: WebSocket 連線
+            data: 音訊元資料
+        """
+        try:
+            session_id = data.get("session_id") or connection.session_id
+            if not session_id:
+                await self._send_error(connection, "No session_id provided")
+                return
+            
+            metadata = data.get("audio_metadata", {})
+            
+            # 記錄收到的元資料
+            logger.info(f"收到音訊元資料 - Session: {session_id}")
+            logger.debug(f"元資料內容: {metadata}")
+            
+            # 儲存元資料到 store（如果需要）
+            store = get_global_store()
+            if store:
+                # 可以將元資料儲存到 session 中
+                from src.store.sessions import sessions_actions
+                store.dispatch(sessions_actions.audio_metadata(session_id, metadata))
+            
+            # 發送確認訊息
+            await self._send_message(connection, {
+                "type": "audio_metadata_ack",
+                "status": "success",
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            logger.info(f"音訊元資料已處理: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"處理音訊元資料時發生錯誤: {e}")
+            await self._send_error(connection, f"處理音訊元資料失敗: {str(e)}")
         
     async def _send_error(self, connection: 'WebSocketConnection', error_message: str):
         """
@@ -1011,7 +1216,7 @@ class WebSocketServer(APIBase):
                 
                 # 發送進度更新
                 await self._send_message(connection, {
-                    "type": "progress",
+                    "type": routes["PROGRESS"],
                     "message": f"接收音訊片段 {chunk_count}",
                     "timestamp": datetime.now().isoformat()
                 })
@@ -1044,7 +1249,7 @@ class WebSocketServer(APIBase):
         try:
             # 發送開始轉譯訊息
             await self._send_message(connection, {
-                "type": "transcript_partial",
+                "type": routes["TRANSCRIPT_PARTIAL"],
                 "text": "正在進行語音辨識...",
                 "is_final": False,
                 "timestamp": datetime.now().isoformat()

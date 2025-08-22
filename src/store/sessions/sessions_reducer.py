@@ -16,7 +16,7 @@ from .sessions_actions import (
     tts_playback_started, tts_playback_finished, interrupt_reply,
     timeout, error,
     fsm_reset, audio_chunk_received, clear_audio_buffer, audio_metadata,
-    session_error, clear_error
+    session_error, clear_error, update_session_metadata
 )
 
 
@@ -218,6 +218,64 @@ def handle_clear_active_session(state: SessionsState, action) -> SessionsState:
     return {
         **state,
         "active_session_id": None
+    }
+
+
+def handle_update_session_metadata(state: SessionsState, action) -> SessionsState:
+    """處理更新 session metadata
+    
+    用於更新 session 的 metadata 欄位，例如：
+    - 音訊檔案的 metadata
+    - 其他自定義的 metadata
+    """
+    from src.utils.logger import logger
+    
+    # 確保 state 不是 None
+    if state is None:
+        state = get_initial_state()
+    
+    # 確保轉換為字典格式
+    if hasattr(state, '__dict__'):
+        state = to_dict(state)
+    elif not isinstance(state, dict):
+        state = dict(state) if state else get_initial_state().__dict__
+    
+    sessions = to_dict(state.get("sessions", {}))
+    session_id = action.payload.get("session_id")
+    new_metadata = action.payload.get("metadata", {})
+    
+    if session_id not in sessions:
+        logger.warning(f"Session {session_id} not found when updating metadata")
+        return state
+    
+    session = to_dict(sessions[session_id])
+    
+    # 合併現有的 metadata 和新的 metadata
+    existing_metadata = session.get("metadata", {})
+    if isinstance(existing_metadata, dict):
+        updated_metadata = {**existing_metadata, **new_metadata}
+    else:
+        updated_metadata = new_metadata
+    
+    # 如果 metadata 中包含 audio_metadata，同時更新 session 的 audio_metadata 欄位
+    if "audio_metadata" in new_metadata:
+        session["audio_metadata"] = new_metadata["audio_metadata"]
+    
+    # 更新 session
+    updated_session = {
+        **session,
+        "metadata": updated_metadata,
+        "updated_at": TimeProvider.now()
+    }
+    
+    logger.info(f"Updated metadata for session {session_id}: {updated_metadata}")
+    
+    return {
+        **state,
+        "sessions": {
+            **sessions,
+            session_id: updated_session
+        }
     }
 
 
@@ -697,6 +755,9 @@ sessions_reducer = create_reducer(
     on(audio_chunk_received.type, handle_audio_chunk),
     on(clear_audio_buffer.type, handle_clear_audio_buffer),
     on(audio_metadata.type, handle_audio_metadata),
+    
+    # Metadata 更新
+    on(update_session_metadata.type, handle_update_session_metadata),
     
     # 錯誤處理
     on(session_error.type, handle_session_error),

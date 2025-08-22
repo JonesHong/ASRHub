@@ -12,6 +12,8 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from src.api.base import APIBase, APIResponse
+from src.api.http_sse.routes import routes
+from src.audio.converter import AudioConverter
 from src.utils.logger import logger
 from src.store import get_global_store
 from src.store.sessions import sessions_actions, sessions_selectors
@@ -69,6 +71,113 @@ class SSEServer(APIBase):
         
         # Uvicorn 伺服器
         self.server = None
+    
+    # ========== 通用輔助方法 ==========
+    
+    def _create_response(self, action: str, session_id: str, **kwargs) -> Dict[str, Any]:
+        """建立標準化回應"""
+        response = {
+            "status": "success",
+            "action": action,
+            "session_id": session_id,
+            "timestamp": datetime.now().isoformat()
+        }
+        response.update(kwargs)
+        return response
+    
+    def create_success_response(self, data: Dict[str, Any], session_id: str = None) -> Dict[str, Any]:
+        """建立成功回應"""
+        response = {"status": "success", "timestamp": datetime.now().isoformat()}
+        if session_id:
+            response["session_id"] = session_id
+        response.update(data)
+        return response
+    
+    def create_error_response(self, message: str, session_id: str = None) -> Dict[str, Any]:
+        """建立錯誤回應"""
+        response = {"status": "error", "message": message, "timestamp": datetime.now().isoformat()}
+        if session_id:
+            response["session_id"] = session_id
+        return response
+    
+    async def _handle_simple_action(self, session_id: str, action_name: str, 
+                                   dispatch_action, log_message: str,
+                                   **extra_fields) -> Dict[str, Any]:
+        """處理簡單的 action（無請求參數）"""
+        try:
+            # 對於 chunk_upload_start 和需要 session 的 action，先確保 session 存在
+            if action_name in ['chunk_upload_start', 'upload_file', 'recording_start']:
+                state = store.state if store else None
+                session = sessions_selectors.get_session(session_id)(state) if state else None
+                
+                if not session:
+                    # 如果 session 不存在，先創建一個
+                    logger.info(f"Session {session_id} 不存在，自動創建 (來自 {action_name})")
+                    store.dispatch(sessions_actions.create_session(session_id, "batch"))
+            
+            store.dispatch(dispatch_action(session_id))
+            logger.info(f"{log_message} - Session: {session_id}")
+            
+            if session_id in self.sse_connections:
+                event_data = {
+                    "type": action_name,
+                    "timestamp": datetime.now().isoformat()
+                }
+                event_data.update(extra_fields)
+                await self._send_sse_event(session_id, "action_received", event_data)
+            
+            return self._create_response(action_name, session_id, **extra_fields)
+            
+        except Exception as e:
+            logger.error(f"{log_message}錯誤：{e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    async def _handle_action_with_params(self, session_id: str, request: Request,
+                                        action_name: str, dispatch_action,
+                                        log_message: str, param_extractor=None) -> Dict[str, Any]:
+        """處理帶參數的 action"""
+        try:
+            data = await request.json() if request.headers.get("content-type") == "application/json" else {}
+            
+            # 提取參數
+            params = param_extractor(data) if param_extractor else data
+            
+            # 分發動作
+            if isinstance(params, dict):
+                store.dispatch(dispatch_action(session_id, **params))
+            else:
+                store.dispatch(dispatch_action(session_id, params))
+            
+            # 記錄日誌
+            if isinstance(params, dict):
+                param_str = ", ".join(f"{k}: {v}" for k, v in params.items())
+            else:
+                param_str = str(params)
+            logger.info(f"{log_message} - Session: {session_id}, {param_str}")
+            
+            # 發送 SSE 事件
+            if session_id in self.sse_connections:
+                event_data = {"type": action_name, "timestamp": datetime.now().isoformat()}
+                if isinstance(params, dict):
+                    event_data.update(params)
+                await self._send_sse_event(session_id, "action_received", event_data)
+            
+            # 返回響應
+            return self._create_response(action_name, session_id, **params if isinstance(params, dict) else {})
+            
+        except Exception as e:
+            logger.error(f"{log_message}錯誤：{e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    async def _handle_state_change(self, session_id: str, new_state: str, message: str) -> Dict[str, Any]:
+        """處理狀態變更"""
+        store.dispatch(sessions_actions.update_session_state(session_id, new_state))
+        await self._send_sse_event(session_id, "status", {
+            "state": translate_fsm_state(new_state),
+            "state_code": new_state,
+            "message": message
+        })
+        return self.create_success_response({"state": translate_fsm_state(new_state)}, session_id)
         
     def _setup_cors(self):
         """設定 CORS 中間件"""
@@ -82,99 +191,131 @@ class SSEServer(APIBase):
     
     def _setup_routes(self):
         """設定 API 路由"""
+
+        # ========== Session Management Endpoints ==========
         
-        @self.app.post("/action")
-        async def dispatch_action(request: Request):
+        @self.app.post(f"/{routes['SESSION_START_LISTENING']}/{{session_id}}")
+        async def start_listening(session_id: str, request: Request):
+            """開始監聽音訊"""
+            return await self._handle_action_with_params(
+                session_id, request, "start_listening",
+                lambda sid, audio_format="pcm": sessions_actions.start_listening(sid, audio_format),
+                "開始監聽",
+                lambda data: {"audio_format": data.get("audio_format", "pcm")}
+            )
+        
+        # ========== Upload Management Endpoints ==========
+        
+        @self.app.post(f"/{routes['UPLOAD_FILE']}/{{session_id}}")
+        async def upload_file_start(session_id: str):
+            """開始檔案上傳"""
+            return await self._handle_simple_action(
+                session_id, "upload_file",
+                sessions_actions.upload_file,
+                "開始檔案上傳"
+            )
+        
+        @self.app.post(f"/{routes['UPLOAD_FILE_DONE']}/{{session_id}}")
+        async def upload_file_done(session_id: str):
+            """完成檔案上傳"""
+            return await self._handle_simple_action(
+                session_id, "upload_file_done",
+                sessions_actions.upload_file_done,
+                "完成檔案上傳"
+            )
+        
+        @self.app.post(f"/{routes['UPLOAD_CHUNK_START']}/{{session_id}}")
+        async def chunk_upload_start(session_id: str):
+            """開始分塊上傳"""
+            return await self._handle_simple_action(
+                session_id, "chunk_upload_start",
+                sessions_actions.chunk_upload_start,
+                "開始分塊上傳"
+            )
+        
+        @self.app.post(f"/{routes['UPLOAD_CHUNK_DONE']}/{{session_id}}")
+        async def chunk_upload_done(session_id: str):
+            """完成分塊上傳"""
+            return await self._handle_simple_action(
+                session_id, "chunk_upload_done",
+                sessions_actions.chunk_upload_done,
+                "完成分塊上傳"
+            )
+        
+        # ========== Recording Management Endpoints ==========
+        
+        @self.app.post(f"/{routes['RECORDING_START']}/{{session_id}}")
+        async def start_recording(session_id: str, request: Request):
+            """開始錄音"""
+            return await self._handle_action_with_params(
+                session_id, request, "start_recording",
+                lambda sid, strategy="non_streaming": sessions_actions.start_recording(sid, strategy),
+                "開始錄音",
+                lambda data: {"strategy": data.get("strategy", "non_streaming")}
+            )
+        
+        @self.app.post(f"/{routes['RECORDING_END']}/{{session_id}}")
+        async def end_recording(session_id: str, request: Request):
+            """結束錄音"""
+            return await self._handle_action_with_params(
+                session_id, request, "end_recording",
+                lambda sid, trigger="manual", duration=0: sessions_actions.end_recording(sid, trigger, duration),
+                "結束錄音",
+                lambda data: {"trigger": data.get("trigger", "manual"), "duration": data.get("duration", 0)}
+            )
+        
+        # ========== Transcription Endpoints ==========
+        
+        @self.app.post(f"/{routes['TRANSCRIPTION_BEGIN']}/{{session_id}}")
+        async def begin_transcription(session_id: str):
+            """開始轉譯"""
+            return await self._handle_simple_action(
+                session_id, "begin_transcription",
+                sessions_actions.begin_transcription,
+                "開始轉譯"
+            )
+        
+        @self.app.post(f"/{routes['AUDIO_CHUNK']}/{{session_id}}")
+        async def audio_chunk_received(session_id: str, request: Request):
             """
-            接收並分發 PyStoreX action
-            符合事件驅動架構
+            接收音訊分塊
             """
             try:
-                action = await request.json()
+                data = await request.json()
+                chunk_data = data.get("chunk_data")
+                chunk_id = data.get("chunk_id")
                 
-                # 驗證 action 格式
-                if not action.get("type"):
-                    raise HTTPException(status_code=400, detail="Missing action type")
+                if not chunk_data:
+                    raise HTTPException(status_code=400, detail="Missing chunk_data")
                 
-                action_type = action["type"]
-                payload = action.get("payload", {})
+                store.dispatch(sessions_actions.audio_chunk_received(
+                    session_id,
+                    chunk_data,
+                    chunk_id
+                ))
                 
-                logger.info(f"收到 Action: {action_type}")
+                logger.debug(f"接收音訊分塊 - Session: {session_id}, Chunk ID: {chunk_id}")
                 
-                # 根據 action type 分發到對應的 store action
-                if action_type == "[Session] Create":
-                    store.dispatch(sessions_actions.create_session(
-                        payload.get("session_id"),
-                        payload.get("strategy", "non_streaming")
-                    ))
-                elif action_type == "[Session] Destroy":
-                    store.dispatch(sessions_actions.destroy_session(
-                        payload.get("session_id")
-                    ))
-                elif action_type == "[Session] Start Listening":
-                    store.dispatch(sessions_actions.start_listening(
-                        payload.get("session_id"),
-                        payload.get("audio_format")
-                    ))
-                elif action_type == "[Session] Upload File":
-                    store.dispatch(sessions_actions.upload_file(
-                        payload.get("session_id")
-                    ))
-                elif action_type == "[Session] Upload File Done":
-                    store.dispatch(sessions_actions.upload_file_done(
-                        payload.get("session_id")
-                    ))
-                elif action_type == "[Session] Chunk Upload Start":
-                    store.dispatch(sessions_actions.chunk_upload_start(
-                        payload.get("session_id")
-                    ))
-                elif action_type == "[Session] Chunk Upload Done":
-                    store.dispatch(sessions_actions.chunk_upload_done(
-                        payload.get("session_id")
-                    ))
-                elif action_type == "[Session] Start Recording":
-                    store.dispatch(sessions_actions.start_recording(
-                        payload.get("session_id"),
-                        payload.get("strategy", "non_streaming")
-                    ))
-                elif action_type == "[Session] End Recording":
-                    store.dispatch(sessions_actions.end_recording(
-                        payload.get("session_id"),
-                        payload.get("trigger", "manual"),
-                        payload.get("duration", 0)
-                    ))
-                elif action_type == "[Session] Begin Transcription":
-                    store.dispatch(sessions_actions.begin_transcription(
-                        payload.get("session_id")
-                    ))
-                elif action_type == "[Session] Audio Chunk Received":
-                    store.dispatch(sessions_actions.audio_chunk_received(
-                        payload.get("session_id"),
-                        payload.get("chunk_data"),
-                        payload.get("chunk_id")
-                    ))
-                else:
-                    logger.warning(f"未處理的 Action: {action_type}")
-                
-                # 發送事件到對應的 SSE 連接
-                session_id = payload.get("session_id")
-                if session_id and session_id in self.sse_connections:
+                if session_id in self.sse_connections:
                     await self._send_sse_event(session_id, "action_received", {
-                        "type": action_type,
+                        "type": "audio_chunk_received",
+                        "chunk_id": chunk_id,
                         "timestamp": datetime.now().isoformat()
                     })
                 
                 return {
                     "status": "success",
-                    "action": action_type,
+                    "action": "audio_chunk_received",
+                    "session_id": session_id,
+                    "chunk_id": chunk_id,
                     "timestamp": datetime.now().isoformat()
                 }
                 
             except Exception as e:
-                logger.error(f"Action 分發錯誤：{e}")
+                logger.error(f"接收音訊分塊錯誤：{e}")
                 raise HTTPException(status_code=500, detail=str(e))
-        
-        @self.app.get("/events/{session_id}")
+
+        @self.app.get(f"/{routes['EVENTS']}/{{session_id}}")
         async def events_stream(session_id: str, request: Request):
             """
             SSE 事件流端點
@@ -219,18 +360,42 @@ class SSEServer(APIBase):
                 "version": "0.1.0",
                 "status": "running",
                 "endpoints": {
-                    "health": "/health",
-                    "action": "/action",
-                    "events": "/events/{session_id}",
-                    "control": "/control",
-                    "transcribe": "/transcribe/{session_id}",
-                    "transcribe_v1": "/v1/transcribe",
-                    "audio_upload": "/audio/{session_id}",
-                    "session": "/session"
+                    "health": f"/{routes['HEALTH']}",
+                    "events": f"/{routes['EVENTS']}/{{session_id}}",
+                    "session_management": {
+                        "create": f"POST /{routes['SESSION']}",
+                        "get": f"GET /{routes['SESSION']}/{{session_id}}",
+                        "delete": f"DELETE /{routes['SESSION']}/{{session_id}}",
+                        "start_listening": f"POST /{routes['SESSION_START_LISTENING']}/{{session_id}}",
+                        "status": f"GET /{routes['SESSION_STATUS']}/{{session_id}}",
+                        "wake": f"POST /{routes['SESSION_WAKE']}/{{session_id}}",
+                        "sleep": f"POST /{routes['SESSION_SLEEP']}/{{session_id}}",
+                        "wake_timeout": f"PUT /{routes['SESSION_WAKE_TIMEOUT']}/{{session_id}}",
+                        "wake_status": f"GET /{routes['SESSION_WAKE_STATUS']}/{{session_id}}",
+                        "busy_start": f"POST /{routes['SESSION_BUSY_START']}/{{session_id}}",
+                        "busy_end": f"POST /{routes['SESSION_BUSY_END']}/{{session_id}}"
+                    },
+                    "upload_management": {
+                        "upload_audio": f"POST /{routes['UPLOAD']}/{{session_id}}",
+                        "upload_file": f"POST /{routes['UPLOAD_FILE']}/{{session_id}}",
+                        "upload_file_done": f"POST /{routes['UPLOAD_FILE_DONE']}/{{session_id}}",
+                        "chunk_upload_start": f"POST /{routes['UPLOAD_CHUNK_START']}/{{session_id}}",
+                        "chunk_upload_done": f"POST /{routes['UPLOAD_CHUNK_DONE']}/{{session_id}}"
+                    },
+                    "recording_management": {
+                        "start": f"POST /{routes['RECORDING_START']}/{{session_id}}",
+                        "end": f"POST /{routes['RECORDING_END']}/{{session_id}}"
+                    },
+                    "transcription": {
+                        "begin": f"POST /{routes['TRANSCRIPTION_BEGIN']}/{{session_id}}",
+                        "stream": f"GET /{routes['TRANSCRIBE']}/{{session_id}}",
+                        "one_shot": f"POST /{routes['TRANSCRIBE_V1']}",
+                        "audio_chunk": f"POST /{routes['AUDIO_CHUNK']}/{{session_id}}"
+                    }
                 }
             }
-        
-        @self.app.get("/health")
+
+        @self.app.get(f"/{routes['HEALTH']}")
         async def health_check():
             """健康檢查端點"""
             return {
@@ -239,27 +404,238 @@ class SSEServer(APIBase):
                 "active_sessions": len(sessions_selectors.get_all_sessions(store.state)) if store else 0,
                 "active_connections": len(self.sse_connections)
             }
+
+        # ========== Session Control Endpoints ==========
         
-        @self.app.post("/control")
-        async def control_command(request: Request):
-            """控制指令端點"""
+        @self.app.get(f"/{routes['SESSION_STATUS']}/{{session_id}}")
+        async def get_session_status(session_id: str):
+            """獲取 session 狀態"""
             try:
-                data = await request.json()
-                command = data.get("command")
-                session_id = data.get("session_id")
-                params = data.get("params", {})
+                state = store.state if store else None
+                session = sessions_selectors.get_session(session_id)(state) if state else None
                 
-                if not command or not session_id:
-                    raise HTTPException(status_code=400, detail="Missing command or session_id")
+                if not session:
+                    raise HTTPException(status_code=404, detail="Session not found")
                 
-                response = await self.handle_control_command(command, session_id, params)
-                return response.to_dict()
-                
+                current_state = session.get("state", "IDLE")
+                return {
+                    "status": "success",
+                    "session_id": session_id,
+                    "state": translate_fsm_state(current_state),
+                    "state_code": current_state,
+                    "created_at": session.get("created_at", datetime.now()).isoformat() if isinstance(session.get("created_at"), datetime) else session.get("created_at"),
+                    "last_activity": session.get("last_activity", datetime.now()).isoformat() if isinstance(session.get("last_activity"), datetime) else session.get("last_activity")
+                }
+            except HTTPException:
+                raise
             except Exception as e:
-                logger.error(f"控制指令錯誤：{e}")
+                logger.error(f"獲取狀態錯誤：{e}")
                 raise HTTPException(status_code=500, detail=str(e))
         
-        @self.app.get("/transcribe/{session_id}")
+        @self.app.post(f"/{routes['SESSION_WAKE']}/{{session_id}}")
+        async def wake_session(session_id: str, request: Request):
+            """喚醒 session"""
+            try:
+                data = await request.json() if request.headers.get("content-type") == "application/json" else {}
+                source = data.get("source", "ui")
+                wake_timeout = data.get("wake_timeout")
+                
+                # 使用 Store dispatch 喚醒 session
+                store.dispatch(sessions_actions.wake_session(
+                    session_id, 
+                    source=source, 
+                    wake_timeout=wake_timeout
+                ))
+                
+                # 重新獲取 session
+                state = store.state if store else None
+                session = sessions_selectors.get_session(session_id)(state) if state else None
+                
+                if session:
+                    await self._send_sse_event(session_id, "wake_word", {
+                        "source": source,
+                        "wake_time": session.get("wake_time").isoformat() if isinstance(session.get("wake_time"), datetime) else session.get("wake_time"),
+                        "wake_timeout": session.get("wake_timeout", 30.0)
+                    })
+                    return {
+                        "status": "success",
+                        "message": f"Session awakened from {source}",
+                        "wake_timeout": session.get("wake_timeout", 30.0)
+                    }
+                else:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                    
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"喚醒 session 錯誤：{e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.post(f"/{routes['SESSION_SLEEP']}/{{session_id}}")
+        async def sleep_session(session_id: str):
+            """休眠 session"""
+            try:
+                state = store.state if store else None
+                session = sessions_selectors.get_session(session_id)(state) if state else None
+                
+                if not session:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                
+                # 使用 Store dispatch 清除喚醒狀態
+                store.dispatch(sessions_actions.clear_wake_state(session_id))
+                
+                await self._send_sse_event(session_id, "state_change", {
+                    "old_state": session.get("state", "IDLE"),
+                    "new_state": "IDLE",
+                    "event": "sleep"
+                })
+                
+                return {
+                    "status": "success",
+                    "message": "Session set to sleep"
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"休眠 session 錯誤：{e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.put(f"/{routes['SESSION_WAKE_TIMEOUT']}/{{session_id}}")
+        async def set_wake_timeout(session_id: str, request: Request):
+            """設定喚醒超時"""
+            try:
+                data = await request.json()
+                timeout = data.get("timeout")
+                
+                if timeout is None:
+                    raise HTTPException(status_code=400, detail="Missing timeout parameter")
+                
+                timeout = float(timeout)
+                if timeout <= 0:
+                    raise HTTPException(status_code=400, detail="Timeout must be positive")
+                
+                state = store.state if store else None
+                session = sessions_selectors.get_session(session_id)(state) if state else None
+                
+                if not session:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                
+                # 更新 wake_timeout
+                store.dispatch(sessions_actions.update_session_metadata(
+                    session_id, 
+                    {"wake_timeout": timeout}
+                ))
+                
+                return {
+                    "status": "success",
+                    "message": f"Wake timeout set to {timeout} seconds",
+                    "wake_timeout": timeout
+                }
+                
+            except HTTPException:
+                raise
+            except (ValueError, TypeError) as e:
+                raise HTTPException(status_code=400, detail="Invalid timeout value")
+            except Exception as e:
+                logger.error(f"設定喚醒超時錯誤：{e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.get(f"/{routes['SESSION_WAKE_STATUS']}/{{session_id}}")
+        async def get_wake_status(session_id: str):
+            """獲取喚醒狀態"""
+            try:
+                # 獲取系統狀態
+                system_state = "IDLE"  # 暫時硬編碼，之後應該從 SystemListener 獲取
+                
+                # 使用 selector 獲取活躍的喚醒 sessions
+                state = store.state if store else None
+                active_wake_sessions = sessions_selectors.get_active_wake_sessions()(state) if state else []
+                wake_stats = sessions_selectors.get_wake_stats()(state) if state else {}
+                
+                return {
+                    "status": "success",
+                    "system_state": system_state,
+                    "active_wake_sessions": [
+                        {
+                            "id": s.get("id"),
+                            "wake_source": s.get("wake_source"),
+                            "wake_time": s.get("wake_time").isoformat() if isinstance(s.get("wake_time"), datetime) else s.get("wake_time"),
+                            "wake_timeout": s.get("wake_timeout", 30.0),
+                            "is_wake_expired": self._is_wake_expired(s)
+                        }
+                        for s in active_wake_sessions
+                    ],
+                    "stats": wake_stats
+                }
+                
+            except Exception as e:
+                logger.error(f"獲取喚醒狀態錯誤：{e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.post(f"/{routes['SESSION_BUSY_START']}/{{session_id}}")
+        async def start_busy_mode(session_id: str):
+            """進入忙碌模式"""
+            try:
+                state = store.state if store else None
+                session = sessions_selectors.get_session(session_id)(state) if state else None
+                
+                if not session:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                
+                # 更新狀態為 BUSY
+                store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
+                
+                await self._send_sse_event(session_id, "status", {
+                    "state": translate_fsm_state("BUSY"),
+                    "state_code": "BUSY",
+                    "message": "Entered busy mode"
+                })
+                
+                return {
+                    "status": "success",
+                    "state": translate_fsm_state("BUSY"),
+                    "message": "Entered busy mode"
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"進入忙碌模式錯誤：{e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.post(f"/{routes['SESSION_BUSY_END']}/{{session_id}}")
+        async def end_busy_mode(session_id: str):
+            """結束忙碌模式"""
+            try:
+                state = store.state if store else None
+                session = sessions_selectors.get_session(session_id)(state) if state else None
+                
+                if not session:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                
+                # 更新狀態為 LISTENING
+                store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
+                
+                await self._send_sse_event(session_id, "status", {
+                    "state": translate_fsm_state("LISTENING"),
+                    "state_code": "LISTENING",
+                    "message": "Exited busy mode"
+                })
+                
+                return {
+                    "status": "success",
+                    "state": translate_fsm_state("LISTENING"),
+                    "message": "Exited busy mode"
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"結束忙碌模式錯誤：{e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get(f"/{routes['TRANSCRIBE']}/{{session_id}}")
         async def transcribe_sse(session_id: str, request: Request):
             """SSE 轉譯端點"""
             # 檢查 session
@@ -280,14 +656,32 @@ class SSEServer(APIBase):
                     "X-Accel-Buffering": "no"  # 停用 Nginx 緩衝
                 }
             )
-        
-        @self.app.post("/audio/{session_id}")
+
+        @self.app.post(f"/{routes['UPLOAD']}/{{session_id}}")
         async def upload_audio(session_id: str, request: Request):
             """音訊上傳端點"""
             try:
-                # 檢查 session
-                if not self.validate_session(session_id):
-                    raise HTTPException(status_code=404, detail="Session not found")
+                # 檢查 session，如果不存在則創建
+                state = store.state if store else None
+                session = sessions_selectors.get_session(session_id)(state) if state else None
+                
+                if not session:
+                    # 自動創建 session
+                    logger.info(f"Session {session_id} 不存在，自動創建 (來自音訊上傳)")
+                    store.dispatch(sessions_actions.create_session(session_id, "batch"))
+                    # 再次確認 session 已創建
+                    state = store.state
+                    session = sessions_selectors.get_session(session_id)(state)
+                
+                # 清理之前的處理狀態，允許新的上傳
+                if session_id in self.processed_sessions:
+                    self.processed_sessions.remove(session_id)
+                    logger.info(f"清理已處理標記，允許新上傳 - Session: {session_id}")
+                
+                # 清理舊的音訊緩衝區
+                if session_id in self.audio_buffers:
+                    self.audio_buffers[session_id] = bytearray()
+                    logger.info(f"清理舊的音訊緩衝區 - Session: {session_id}")
                 
                 # 解析 multipart form data
                 form = await request.form()
@@ -364,6 +758,20 @@ class SSEServer(APIBase):
                     await audio_queue_manager.push(session_id, audio_data)
                     logger.debug(f"已添加 {len(audio_data)} bytes 到 AudioQueueManager - Session: {session_id}")
                 
+                # 設置音訊元數據 - 這是關鍵！
+                store.dispatch(sessions_actions.update_session_metadata(
+                    session_id,
+                    {
+                        "audio_metadata": {
+                            "format": audio_params['format'],
+                            "sample_rate": audio_params['sample_rate'],
+                            "filename": filename,
+                            "content_type": content_type,
+                            "size": len(audio_data)
+                        }
+                    }
+                ))
+                
                 # 如果有 SSE 連線，發送音訊進行處理
                 if session_id in self.sse_connections:
                     await self._process_audio_chunk(session_id, audio_data)
@@ -373,8 +781,8 @@ class SSEServer(APIBase):
             except Exception as e:
                 logger.error(f"音訊上傳錯誤：{e}")
                 raise HTTPException(status_code=500, detail=str(e))
-        
-        @self.app.post("/session")
+
+        @self.app.post(f"/{routes['SESSION']}")
         async def create_session(request: Request):
             """建立新 Session"""
             try:
@@ -410,8 +818,8 @@ class SSEServer(APIBase):
             except Exception as e:
                 logger.error(f"建立 session 錯誤：{e}")
                 raise HTTPException(status_code=500, detail=str(e))
-        
-        @self.app.get("/session/{session_id}")
+
+        @self.app.get(f"/{routes['SESSION']}/{{session_id}}")
         async def get_session(session_id: str):
             """獲取 Session 資訊"""
             # 使用 selector 獲取 session
@@ -422,8 +830,8 @@ class SSEServer(APIBase):
                 raise HTTPException(status_code=404, detail="Session not found")
             
             return session
-        
-        @self.app.delete("/session/{session_id}")
+
+        @self.app.delete(f"/{routes['SESSION']}/{{session_id}}")
         async def delete_session(session_id: str):
             """刪除 Session"""
             if not self.validate_session(session_id):
@@ -441,8 +849,8 @@ class SSEServer(APIBase):
             store.dispatch(sessions_actions.destroy_session(session_id))
             
             return {"status": "success", "message": "Session deleted"}
-        
-        @self.app.post("/v1/transcribe")
+
+        @self.app.post(f"/{routes['TRANSCRIBE_V1']}")
         async def transcribe_audio(request: Request):
             """一次性音訊轉譯端點（同步模式）"""
             try:
@@ -1262,187 +1670,14 @@ class SSEServer(APIBase):
         self._running = False
         logger.success("SSE Server 已停止")
     
-    async def handle_control_command(self, 
-                                   command: str, 
-                                   session_id: str, 
-                                   params: Optional[Dict[str, Any]] = None) -> APIResponse:
-        """
-        處理控制指令
-        
-        Args:
-            command: 指令名稱
-            session_id: Session ID
-            params: 額外參數
-            
-        Returns:
-            API 回應
-        """
-        try:
-            # 使用 selector 獲取 session
-            state = store.state if store else None
-            session = sessions_selectors.get_session(session_id)(state) if state else None
-            if not session:
-                return self.create_error_response("Session not found", session_id)
-            
-            # 處理不同的指令
-            if command == "start":
-                store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
-                await self._send_sse_event(session_id, "status", {
-                    "state": translate_fsm_state("LISTENING"),
-                    "state_code": "LISTENING",
-                    "message": "Started listening"
-                })
-                return self.create_success_response({"state": translate_fsm_state("LISTENING")}, session_id)
-                
-            elif command == "stop":
-                store.dispatch(sessions_actions.update_session_state(session_id, "IDLE"))
-                
-                # 處理緩衝區中的所有音訊
-                if session_id in self.audio_buffers and len(self.audio_buffers[session_id]) > 0:
-                    logger.info(f"處理緩衝區音訊，大小: {len(self.audio_buffers[session_id])} bytes")
-                    # 強制處理所有音訊資料
-                    await self._process_all_audio(session_id)
-                
-                await self._send_sse_event(session_id, "status", {
-                    "state": translate_fsm_state("IDLE"),
-                    "state_code": "IDLE",
-                    "message": "Stopped listening"
-                })
-                return self.create_success_response({"state": translate_fsm_state("IDLE")}, session_id)
-                
-            elif command == "status":
-                current_state = session.get("state", "IDLE")
-                return self.create_success_response({
-                    "state": translate_fsm_state(current_state),
-                    "state_code": current_state,
-                    "created_at": session.get("created_at", datetime.now()).isoformat() if isinstance(session.get("created_at"), datetime) else session.get("created_at"),
-                    "last_activity": session.get("last_activity", datetime.now()).isoformat() if isinstance(session.get("last_activity"), datetime) else session.get("last_activity")
-                }, session_id)
-                
-            elif command == "busy_start":
-                store.dispatch(sessions_actions.update_session_state(session_id, "BUSY"))
-                await self._send_sse_event(session_id, "status", {
-                    "state": translate_fsm_state("BUSY"),
-                    "state_code": "BUSY",
-                    "message": "Entered busy mode"
-                })
-                return self.create_success_response({"state": translate_fsm_state("BUSY")}, session_id)
-                
-            elif command == "busy_end":
-                store.dispatch(sessions_actions.update_session_state(session_id, "LISTENING"))
-                await self._send_sse_event(session_id, "status", {
-                    "state": translate_fsm_state("LISTENING"),
-                    "state_code": "LISTENING",
-                    "message": "Exited busy mode"
-                })
-                return self.create_success_response({"state": translate_fsm_state("LISTENING")}, session_id)
-            
-            # 喚醒詞相關指令
-            elif command == "wake":
-                source = params.get("source", "ui") if params else "ui"
-                wake_timeout = params.get("wake_timeout") if params else None
-                
-                # 使用 Store dispatch 喚醒 session
-                store.dispatch(sessions_actions.wake_session(
-                    session_id, 
-                    source=source, 
-                    wake_timeout=wake_timeout
-                ))
-                success = True  # dispatch 本身不返回值，我們假設成功
-                
-                if success:
-                    # 重新獲取 session
-                    state = store.state if store else None
-                    session = sessions_selectors.get_session(session_id)(state) if state else None
-                    await self._send_sse_event(session_id, "wake_word", {
-                        "source": source,
-                        "wake_time": session.get("wake_time").isoformat() if isinstance(session.get("wake_time"), datetime) else session.get("wake_time"),
-                        "wake_timeout": session.get("wake_timeout", 30.0)
-                    })
-                    return self.create_success_response({
-                        "message": f"Session awakened from {source}",
-                        "wake_timeout": session.get("wake_timeout", 30.0)
-                    }, session_id)
-                else:
-                    return self.create_error_response("Failed to wake session", session_id)
-            
-            elif command == "sleep":
-                # 使用 selector 獲取 session
-                state = store.state if store else None
-                session = sessions_selectors.get_session(session_id)(state) if state else None
-                if session:
-                    # 使用 Store dispatch 清除喚醒狀態
-                    store.dispatch(sessions_actions.clear_wake_state(session_id))
-                    await self._send_sse_event(session_id, "state_change", {
-                        "old_state": session.get("state", "IDLE"),
-                        "new_state": "IDLE",
-                        "event": "sleep"
-                    })
-                    return self.create_success_response({
-                        "message": "Session set to sleep"
-                    }, session_id)
-                else:
-                    return self.create_error_response("Session not found", session_id)
-            
-            elif command == "set_wake_timeout":
-                if not params or "timeout" not in params:
-                    return self.create_error_response("Missing timeout parameter", session_id)
-                
-                try:
-                    timeout = float(params["timeout"])
-                    if timeout <= 0:
-                        return self.create_error_response("Timeout must be positive", session_id)
-                    
-                    # 使用 selector 獲取 session
-                    state = store.state if store else None
-                    session = sessions_selectors.get_session(session_id)(state) if state else None
-                    if session:
-                        # 更新 wake_timeout
-                        store.dispatch(sessions_actions.update_session_metadata(
-                            session_id, 
-                            {"wake_timeout": timeout}
-                        ))
-                        return self.create_success_response({
-                            "message": f"Wake timeout set to {timeout} seconds",
-                            "wake_timeout": timeout
-                        }, session_id)
-                    else:
-                        return self.create_error_response("Session not found", session_id)
-                        
-                except (ValueError, TypeError):
-                    return self.create_error_response("Invalid timeout value", session_id)
-            
-            elif command == "get_wake_status":
-                # 獲取系統狀態（這裡需要 SystemListener 的支援）
-                system_state = "IDLE"  # 暫時硬編碼，之後應該從 SystemListener 獲取
-                
-                # 使用 selector 獲取活躍的喚醒 sessions
-                state = store.state if store else None
-                active_wake_sessions = sessions_selectors.get_active_wake_sessions()(state) if state else []
-                
-                wake_stats = sessions_selectors.get_wake_stats()(state) if state else {}
-                
-                return self.create_success_response({
-                    "system_state": system_state,
-                    "active_wake_sessions": [
-                        {
-                            "id": s.get("id"),
-                            "wake_source": s.get("wake_source"),
-                            "wake_time": s.get("wake_time").isoformat() if isinstance(s.get("wake_time"), datetime) else s.get("wake_time"),
-                            "wake_timeout": s.get("wake_timeout", 30.0),
-                            "is_wake_expired": self._is_wake_expired(s)
-                        }
-                        for s in active_wake_sessions
-                    ],
-                    "stats": wake_stats
-                }, session_id)
-                
-            else:
-                return self.create_error_response(f"Unknown command: {command}", session_id)
-                
-        except Exception as e:
-            logger.error(f"處理控制指令錯誤：{e}")
-            return self.create_error_response(str(e), session_id)
+    # handle_control_command 已移除 - 功能已拆分為專用端點：
+    # - GET /session/status/{session_id} - 獲取狀態
+    # - POST /session/wake/{session_id} - 喚醒 session
+    # - POST /session/sleep/{session_id} - 休眠 session
+    # - PUT /session/wake/timeout/{session_id} - 設定喚醒超時
+    # - GET /session/wake/status/{session_id} - 獲取喚醒狀態
+    # - POST /session/busy/start/{session_id} - 進入忙碌模式
+    # - POST /session/busy/end/{session_id} - 結束忙碌模式
     
     async def handle_transcribe(self, 
                               session_id: str, 

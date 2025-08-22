@@ -278,6 +278,10 @@ class AudioFormatDetector:
         Returns:
             True 如果需要解压缩
         """
+        # MP3 需要解压缩
+        if format_info['format'] == AudioContainerFormat.MP3:
+            return True
+            
         # WebM/Opus 总是需要解压缩
         if (format_info['format'] == AudioContainerFormat.WEBM and 
             format_info.get('encoding') == 'opus'):
@@ -333,20 +337,71 @@ class AudioFormatDetector:
         return params
 
 
-def detect_and_prepare_audio_for_whisper(audio_data: bytes) -> Tuple[bytes, Dict[str, Any]]:
+def detect_and_prepare_audio_for_whisper(audio_data: bytes, metadata: Optional[Dict[str, Any]] = None) -> Tuple[bytes, Dict[str, Any]]:
     """
     检测音频格式并准备给 Whisper 使用
     
     Args:
         audio_data: 原始音频数据
+        metadata: 客戶端提供的音訊元資料（可選）
         
     Returns:
         (处理后的音频数据, 处理信息)
     """
     from src.audio.converter import AudioConverter
     
-    # 检测格式
-    format_info = AudioFormatDetector.detect_format_advanced(audio_data)
+    # 如果有客戶端提供的元資料，優先使用
+    if metadata:
+        logger.info(f"使用客戶端提供的音訊元資料: {metadata}")
+        
+        # 處理 camelCase 和 snake_case 的欄位映射
+        # 支援前端的 camelCase 欄位名稱
+        format_value = metadata.get('format') or metadata.get('detectedFormat')
+        sample_rate_value = metadata.get('sample_rate') or metadata.get('sampleRate')
+        channels_value = metadata.get('channels', 1)
+        
+        # 檢查必要欄位
+        if not format_value:
+            error_msg = "缺少必要的音訊格式資訊 (format/detectedFormat)"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        if not sample_rate_value:
+            error_msg = "缺少必要的取樣率資訊 (sample_rate/sampleRate)"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        # 從元資料構建格式資訊
+        format_info = {
+            'format': None,
+            'encoding': format_value,
+            'confidence': 1.0,  # 客戶端提供的資料有最高信心度
+            'sample_rate': sample_rate_value,
+            'channels': channels_value,
+            'client_provided': True
+        }
+        
+        # 根據客戶端提供的格式設定容器格式
+        client_format = format_value.lower()
+        if 'webm' in client_format or 'opus' in client_format:
+            format_info['format'] = AudioContainerFormat.WEBM
+            format_info['encoding'] = 'opus'
+        elif 'mp3' in client_format:
+            format_info['format'] = AudioContainerFormat.MP3
+        elif 'wav' in client_format:
+            format_info['format'] = AudioContainerFormat.WAV
+        elif 'pcm' in client_format:
+            format_info['format'] = AudioContainerFormat.PCM
+        else:
+            # 如果格式未知，不進行自動推論，直接報錯
+            error_msg = f"不支援的音訊格式: {client_format}。支援的格式: webm/opus, mp3, wav, pcm"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+    else:
+        # 沒有元資料時，拒絕處理
+        error_msg = "未提供音訊元資料，無法處理音訊。請確保客戶端傳送完整的 audio_metadata"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
     
     processing_info = {
         'detected_format': format_info,
