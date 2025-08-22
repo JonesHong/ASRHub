@@ -56,64 +56,108 @@ ASRHub 是一個企業級的統一語音識別中介軟體系統，旨在簡化�
 - **自動重連機制** - 網路異常自動恢復
 - **錯誤處理與重試** - 穩定可靠的服務
 
+### 🚀 最新架構改進 (v0.2.0)
+- **路由系統重構** - 每個協議獨立的路由模組，降低耦合度
+- **SSEManager 引入** - 完整的 SSE 連接生命週期管理
+- **Session 智能管理** - 前端自動判斷是否需要新 Session
+- **Metadata 差異化處理** - 各協議根據特性優化傳輸方式
+- **統一路由移除** - 刪除過度設計的 unified_router，簡化架構
+
 ## 🏗️ 系統架構
+
+### 事件驅動架構設計
+
+ASRHub 採用**事件驅動架構 (Event-Driven Architecture)** 結合 **Redux-like 狀態管理模式**，確保系統狀態的可預測性和可追蹤性。
 
 ```mermaid
 graph TB
-    subgraph "客戶端應用"
+    subgraph "客戶端層"
         WEB[Web 應用]
         MOBILE[移動應用]
         IOT[IoT 設備]
     end
     
-    subgraph "ASRHub 中介層"
-        subgraph "API 層"
-            SSE[HTTP SSE]
-            WS[WebSocket]
-            SIO[Socket.IO]
+    subgraph "ASRHub 統一中介層"
+        subgraph "API 協議層"
+            SSE["HTTP SSE<br/>+ SSEManager<br/>+ Session 重用"]
+            WS["WebSocket<br/>+ 二進制傳輸<br/>+ 低延遲"]
+            SIO["Socket.IO<br/>+ 自動重連<br/>+ 房間管理"]
         end
         
-        subgraph "核心系統"
-            CORE[ASRHub Core]
-            FSM[FSM 狀態管理]
-            STORE[PyStoreX Store]
+        subgraph "路由系統"
+            R1[SSE Routes]
+            R2[WS Routes]
+            R3[SIO Routes]
         end
         
-        subgraph "Pipeline 處理"
+        subgraph "核心狀態管理"
+            STORE["PyStoreX Store<br/>(單一真相來源)"]
+            REDUCER[Sessions Reducer]
+            EFFECTS["Session Effects<br/>(副作用處理)"]
+        end
+        
+        subgraph "FSM 狀態機"
+            FSM["FSM Controller<br/>IDLE→LISTENING→BUSY"]
+            STRATEGY["策略模式<br/>BATCH/NON_STREAMING/STREAMING"]
+        end
+        
+        subgraph "音訊 Pipeline"
+            QUEUE[AudioQueueManager]
             VAD[VAD 偵測]
-            DENOISE[降噪]
-            RESAMPLE[重採樣]
+            DENOISE[降噪處理]
+            RESAMPLE[取樣率調整]
             FORMAT[格式轉換]
+            WAKEWORD[喚醒詞偵測]
         end
         
-        subgraph "ASR 提供者"
-            WHISPER[Whisper]
-            FUNASR[FunASR]
-            VOSK[Vosk]
-            GOOGLE[Google STT]
+        subgraph "ASR 提供者管理"
+            PM[ProviderManager]
+            WHISPER[Whisper Provider]
+            FUNASR[FunASR Provider]
+            VOSK[Vosk Provider]
+            GOOGLE[Google STT Provider]
         end
     end
     
-    WEB --> SSE
-    MOBILE --> WS
-    IOT --> SIO
+    WEB -->|協議選擇| SSE
+    MOBILE -->|協議選擇| WS
+    IOT -->|協議選擇| SIO
     
-    SSE --> CORE
-    WS --> CORE
-    SIO --> CORE
+    SSE --> R1
+    WS --> R2
+    SIO --> R3
     
-    CORE --> FSM
-    CORE --> STORE
-    CORE --> VAD
+    R1 -->|Action| STORE
+    R2 -->|Action| STORE
+    R3 -->|Action| STORE
     
+    STORE --> REDUCER
+    REDUCER --> EFFECTS
+    EFFECTS --> FSM
+    
+    FSM --> STRATEGY
+    STRATEGY --> QUEUE
+    
+    QUEUE --> VAD
     VAD --> DENOISE
     DENOISE --> RESAMPLE
     RESAMPLE --> FORMAT
+    FORMAT --> WAKEWORD
     
-    FORMAT --> WHISPER
-    FORMAT --> FUNASR
-    FORMAT --> VOSK
-    FORMAT --> GOOGLE
+    WAKEWORD --> PM
+    PM --> WHISPER
+    PM --> FUNASR
+    PM --> VOSK
+    PM --> GOOGLE
+    
+    WHISPER -->|結果| EFFECTS
+    FUNASR -->|結果| EFFECTS
+    VOSK -->|結果| EFFECTS
+    GOOGLE -->|結果| EFFECTS
+    
+    EFFECTS -->|事件推送| SSE
+    EFFECTS -->|事件推送| WS
+    EFFECTS -->|事件推送| SIO
 ```
 
 ### 📁 專案結構
@@ -121,33 +165,102 @@ graph TB
 ```
 ASRHub/
 ├── src/
-│   ├── core/              # 核心系統
-│   │   ├── asr_hub.py     # 主要入口點
-│   │   └── fsm.py         # 有限狀態機
-│   ├── api/               # 各協議實現
-│   │   ├── http_sse/      # HTTP SSE 伺服器
-│   │   ├── websocket/     # WebSocket 伺服器
-│   │   └── socketio/      # Socket.IO 伺服器
-│   ├── operators/         # 音訊處理運算子
-│   │   ├── vad.py         # 語音活動偵測
-│   │   ├── denoiser.py    # 降噪處理
-│   │   └── resampler.py   # 取樣率調整
-│   ├── providers/         # ASR 提供者實現
-│   │   ├── whisper.py     # Whisper 整合
-│   │   ├── funasr.py      # FunASR 整合
-│   │   └── vosk.py        # Vosk 整合
-│   ├── store/             # PyStoreX 狀態管理
-│   │   ├── actions.py     # 動作定義
-│   │   ├── reducers.py    # 狀態更新邏輯
-│   │   └── effects.py     # 副作用處理
-│   └── stream/            # 音訊串流處理
-│       └── controller.py  # 串流控制器
-├── frontend/
-│   ├── protocol-test/     # 協議測試前端
-│   └── realtime-streaming/# 實時串流前端
-├── config/                # 配置檔案
-│   └── config.yaml        # 主配置檔
-└── tests/                 # 測試檔案
+│   ├── core/                    # 🎯 核心系統
+│   │   ├── asr_hub.py          # 系統入口點與初始化
+│   │   ├── fsm.py              # FSM 狀態機控制器
+│   │   └── exceptions.py       # 自定義例外處理
+│   │
+│   ├── api/                     # 📡 API 協議層
+│   │   ├── base.py             # API 基類定義
+│   │   ├── http_sse/           # HTTP SSE 實現
+│   │   │   ├── server.py       # SSE 伺服器
+│   │   │   ├── handlers.py     # 請求處理器
+│   │   │   ├── routes.py       # 路由定義（新）
+│   │   │   └── sse_manager.py  # SSE 連接管理（新）
+│   │   ├── websocket/          # WebSocket 實現
+│   │   │   ├── server.py       # WS 伺服器
+│   │   │   ├── handlers.py     # 消息處理器
+│   │   │   └── routes.py       # 路由定義（新）
+│   │   └── socketio/           # Socket.IO 實現
+│   │       ├── server.py       # SIO 伺服器
+│   │       ├── __init__.py     # 事件註冊
+│   │       └── routes.py       # 路由定義（新）
+│   │
+│   ├── store/                   # 🗄️ PyStoreX 狀態管理
+│   │   ├── __init__.py         # Store 初始化
+│   │   ├── sessions/           # Session 管理
+│   │   │   ├── sessions_actions.py    # Action 定義
+│   │   │   ├── sessions_reducer.py    # Reducer 邏輯
+│   │   │   ├── sessions_effects.py    # Effects 處理
+│   │   │   └── sessions_selectors.py  # 狀態選擇器
+│   │   └── global_store.py     # 全域 Store 實例
+│   │
+│   ├── operators/               # ⚙️ 音訊處理運算子
+│   │   ├── base.py             # Operator 基類
+│   │   ├── vad/                # VAD 偵測
+│   │   │   ├── silero_vad.py  # Silero VAD 實現
+│   │   │   └── webrtc_vad.py  # WebRTC VAD 實現
+│   │   ├── denoiser.py         # 降噪處理
+│   │   ├── sample_rate.py      # 取樣率調整
+│   │   ├── format_converter.py # 格式轉換
+│   │   ├── recording.py        # 錄音功能
+│   │   └── wakeword.py         # 喚醒詞偵測
+│   │
+│   ├── providers/               # 🎙️ ASR 提供者
+│   │   ├── base.py             # Provider 基類
+│   │   ├── whisper.py          # Whisper 本地實現
+│   │   ├── funasr.py           # FunASR 實現
+│   │   ├── vosk.py             # Vosk 實現
+│   │   ├── google_stt.py       # Google STT
+│   │   └── openai.py           # OpenAI API
+│   │
+│   ├── stream/                  # 🌊 串流處理
+│   │   ├── audio_queue.py      # 音訊佇列管理
+│   │   ├── buffer_manager.py   # 緩衝區管理
+│   │   └── stream_controller.py # 串流控制器
+│   │
+│   ├── utils/                   # 🛠️ 工具模組
+│   │   ├── logger.py           # pretty-loguru 日誌
+│   │   ├── audio_format_detector.py # 格式檢測
+│   │   └── validators.py       # 資料驗證
+│   │
+│   └── models/                  # 📦 資料模型
+│       ├── audio.py            # 音訊資料模型
+│       ├── transcript.py       # 轉譯結果模型
+│       └── session.py          # Session 模型
+│
+├── frontend/                    # 🖥️ 前端應用
+│   ├── protocol-test/          # 協議測試工具
+│   │   ├── index.html          # 主頁面
+│   │   ├── app.js              # 主應用邏輯
+│   │   └── modules/            # 模組化元件
+│   │       ├── protocol-adapters.js  # 協議適配器
+│   │       ├── ui-manager.js         # UI 管理
+│   │       ├── audio-recorder.js     # 錄音功能
+│   │       └── audio-uploader.js     # 上傳功能
+│   │
+│   └── realtime-streaming/     # 實時串流應用
+│       ├── index.html          # 主頁面
+│       ├── app.js              # 主應用邏輯
+│       └── modules/            # 模組化元件
+│           ├── protocol-adapters.js     # 擴展協議適配器
+│           ├── realtime-ui-manager.js   # 實時 UI 管理
+│           ├── audio-stream-manager.js  # 音訊串流管理
+│           ├── vad-display.js          # VAD 視覺化
+│           └── wakeword-manager.js     # 喚醒詞管理
+│
+├── config/                      # ⚙️ 配置管理
+│   ├── config.yaml             # 主配置檔（不納入版控）
+│   └── config.sample.yaml      # 配置範例
+│
+├── models/                      # 🧠 AI 模型檔案
+│   ├── whisper/                # Whisper 模型
+│   ├── vosk/                   # Vosk 模型
+│   └── wakeword/               # 喚醒詞模型
+│
+└── tests/                       # 🧪 測試檔案
+    ├── test_whisper_sse.py     # Whisper SSE 測試
+    └── test_http_sse_session_reuse.html # Session 重用測試
 ```
 
 ## 🚀 快速開始
@@ -223,101 +336,193 @@ http://localhost:8080/realtime-streaming/
 
 ### 後端 API 端點
 
-#### HTTP SSE API
+#### HTTP SSE API (Port: 8000)
 
-**控制端點**
+**Session 管理端點**
 ```http
-POST /api/sse/control
+# 創建 Session
+POST /control/create-session
 Content-Type: application/json
-
 {
-    "command": "start",
     "session_id": "unique-session-id",
-    "config": {
-        "provider": "whisper",
-        "language": "zh",
-        "pipeline": ["vad", "sample_rate"]
-    }
+    "strategy": "batch"  # batch/non_streaming/streaming
+}
+
+# 銷毀 Session
+POST /control/destroy-session
+Content-Type: application/json
+{
+    "session_id": "unique-session-id"
 }
 ```
 
 **音訊上傳端點**
 ```http
-POST /api/sse/audio
-Content-Type: application/octet-stream
-X-Session-ID: unique-session-id
+# 上傳音訊檔案（自動觸發辨識）
+POST /audio/{session_id}
+Content-Type: multipart/form-data
 
-[Binary Audio Data]
+FormData:
+  - audio: [音訊檔案]
+  - session_id: "unique-session-id"
+
+# 分塊上傳開始
+POST /upload/chunk-start/{session_id}
+
+# 分塊上傳結束
+POST /upload/chunk-done/{session_id}
 ```
 
 **SSE 事件串流**
 ```http
-GET /api/sse/events?session_id=unique-session-id
+GET /events/{session_id}
 
-# 事件格式
+# 事件類型
+event: session/create
+data: {"session_id": "...", "timestamp": "..."}
+
 event: transcript
-data: {"text": "識別結果", "is_final": false}
+data: {"text": "識別結果", "is_final": true, "confidence": 0.95}
 
-event: metadata
-data: {"session_id": "...", "state": "LISTENING"}
+event: status
+data: {"state": "LISTENING", "message": "正在處理..."}
 
 event: error
-data: {"error": "錯誤訊息"}
+data: {"error": "錯誤訊息", "code": "ERROR_CODE"}
 ```
 
-#### WebSocket API
+#### WebSocket API (Port: 8765)
 
 ```javascript
 // 連線
-const ws = new WebSocket('ws://localhost:8081/ws');
+const ws = new WebSocket('ws://localhost:8765/ws');
 
-// 發送控制命令
+// 創建 Session
 ws.send(JSON.stringify({
-    type: 'control',
-    command: 'start',
-    config: {
-        provider: 'whisper',
-        language: 'zh'
+    type: 'session/create',
+    payload: {
+        session_id: 'unique-session-id',
+        strategy: 'batch'
+    }
+}));
+
+// 發送音訊 Metadata（必須）
+ws.send(JSON.stringify({
+    type: 'audio/metadata',
+    payload: {
+        session_id: 'unique-session-id',
+        audio_metadata: {
+            format: 'webm',
+            sampleRate: 48000,
+            channels: 1
+        }
     }
 }));
 
 // 發送音訊資料
-ws.send(audioBlob);
+ws.send(audioBlob);  // 二進制數據
 
-// 接收訊息
+// 接收事件
 ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
-    if (data.type === 'transcript') {
-        console.log('識別結果:', data.text);
+    switch(data.type) {
+        case 'transcript':
+            console.log('識別結果:', data.text);
+            break;
+        case 'status':
+            console.log('狀態:', data.state);
+            break;
+        case 'error':
+            console.error('錯誤:', data.error);
+            break;
     }
 };
 ```
 
-#### Socket.IO API
+#### Socket.IO API (Port: 8766)
 
 ```javascript
 // 連線
-const socket = io('http://localhost:8082');
+const socket = io('http://localhost:8766');
 
-// 開始識別
-socket.emit('start_recognition', {
-    provider: 'whisper',
-    language: 'zh'
+// 創建 Session
+socket.emit('session/create', {
+    session_id: 'unique-session-id',
+    strategy: 'batch'
 });
 
-// 發送音訊
-socket.emit('audio_data', audioBuffer);
+// 發送音訊 Metadata（必須）
+socket.emit('audio/metadata', {
+    session_id: 'unique-session-id',
+    audio_metadata: {
+        format: 'webm',
+        sampleRate: 48000,
+        channels: 1
+    }
+});
 
-// 接收結果
+// 上傳音訊檔案
+socket.emit('file/upload', {
+    session_id: 'unique-session-id',
+    audio_data: audioBase64,  // Base64 編碼
+    filename: 'audio.webm'
+});
+
+// 監聽事件
 socket.on('transcript', (data) => {
-    console.log('識別結果:', data.text);
+    console.log('識別結果:', data.text, '最終:', data.is_final);
 });
 
-// 錯誤處理
-socket.on('error', (error) => {
-    console.error('錯誤:', error);
+socket.on('status', (data) => {
+    console.log('狀態更新:', data.state, data.message);
 });
+
+socket.on('error', (error) => {
+    console.error('錯誤:', error.message);
+});
+
+// 房間功能（Socket.IO 特有）
+socket.emit('join_room', { room: 'transcription_room_1' });
+socket.emit('leave_room', { room: 'transcription_room_1' });
 ```
+
+### 📊 協議選擇指南
+
+選擇適合的協議對系統性能和用戶體驗至關重要。以下是詳細的對比和選擇建議：
+
+| 特性 | HTTP SSE | WebSocket | Socket.IO |
+|------|----------|-----------|-----------|
+| **連接模式** | 單向推送 | 雙向通信 | 雙向+房間管理 |
+| **Session 管理** | 自動創建與重用 | 手動管理 | 事件驅動 |
+| **音訊傳輸** | Base64 JSON | 二進制分塊 | Base64 事件 |
+| **Metadata 處理** | 內嵌傳輸 | 單獨發送 | 單獨事件 |
+| **重連機制** | 瀏覽器自動 | 手動實現 | 內建支援 |
+| **延遲** | 中等 | 最低 | 低 |
+| **資源消耗** | 低 | 中 | 較高 |
+| **複雜度** | 簡單 | 中等 | 較複雜 |
+
+#### 使用建議
+
+**選擇 HTTP SSE 當：**
+- ✅ 需要簡單的服務器推送
+- ✅ 客戶端主要是瀏覽器
+- ✅ 不需要頻繁的雙向通信
+- ✅ 希望簡化實現和維護
+- 📝 範例：簡單的語音轉文字應用
+
+**選擇 WebSocket 當：**
+- ✅ 需要低延遲的雙向通信
+- ✅ 傳輸大量二進制數據
+- ✅ 需要自定義通信協議
+- ✅ 對性能要求較高
+- 📝 範例：實時對話系統、即時翻譯
+
+**選擇 Socket.IO 當：**
+- ✅ 需要房間/命名空間功能
+- ✅ 需要可靠的自動重連
+- ✅ 需要廣播和群組功能
+- ✅ 跨瀏覽器兼容性重要
+- 📝 範例：多人協作平台、會議系統
 
 ### 前端測試介面
 
