@@ -22,8 +22,8 @@ class ProtocolAdapter {
         throw new Error('disconnect() 方法必須在子類中實現');
     }
     
-    async sendAction(action) {
-        throw new Error('sendAction() 方法必須在子類中實現');
+    async sendEvent(eventType, payload) {
+        throw new Error('sendEvent() 方法必須在子類中實現');
     }
     
     async sendAudioChunk(sessionId, chunk, chunkId) {
@@ -152,11 +152,13 @@ class WebSocketAdapter extends ProtocolAdapter {
         this.isConnected = false;
     }
     
-    async sendAction(action) {
+    async sendEvent(eventType, payload) {
         if (this.connection && this.connection.readyState === WebSocket.OPEN) {
+            // 發送包含 event 和 data 的結構
+            // WebSocket 需要 event 欄位來識別事件類型
             this.connection.send(JSON.stringify({
-                type: 'action',
-                action: action
+                event: eventType,
+                data: payload
             }));
         } else {
             throw new Error('WebSocket 未連接');
@@ -165,13 +167,16 @@ class WebSocketAdapter extends ProtocolAdapter {
     
     async sendAudioChunk(sessionId, chunk, chunkId) {
         if (this.connection && this.connection.readyState === WebSocket.OPEN) {
-            const message = {
-                type: 'audio_chunk',
+            // 發送包含 event 和 data 的結構
+            const payload = {
                 session_id: sessionId,
                 audio: this.arrayBufferToBase64(chunk),
                 chunk_id: chunkId
             };
-            this.connection.send(JSON.stringify(message));
+            this.connection.send(JSON.stringify({
+                event: 'chunk/data',
+                data: payload
+            }));
         } else {
             throw new Error('WebSocket 未連接');
         }
@@ -186,13 +191,12 @@ class WebSocketAdapter extends ProtocolAdapter {
         try {
             const message = JSON.parse(data);
             
-            if (message.type === 'action' || message.type === 'event') {
-                if (this.onMessage) {
-                    this.onMessage(message.action || message);
-                }
-            } else {
-                console.log(`收到 WebSocket 訊息: ${message.type}`);
+            // 處理新的事件結構
+            if (this.onMessage) {
+                this.onMessage(message);
             }
+            
+            console.log(`收到 WebSocket 訊息: ${message.type}`);
         } catch (error) {
             if (this.onError) {
                 this.onError(`解析 WebSocket 訊息失敗: ${error.message}`);
@@ -236,17 +240,24 @@ class SocketIOAdapter extends ProtocolAdapter {
                     reject(error);
                 });
                 
-                // 監聽事件驅動的 actions
-                this.connection.on('action', (data) => {
-                    if (this.onMessage) {
-                        this.onMessage(data);
-                    }
-                });
+                // 監聽新的獨立事件類型
+                const eventTypes = [
+                    'session/create', 'session/start', 'session/stop', 'session/destroy',
+                    'recording/start', 'recording/end',
+                    'chunk/upload/start', 'chunk/upload/done', 'chunk/data',
+                    'file/upload', 'file/upload/done',
+                    'transcript', 'status', 'error'
+                ];
                 
-                this.connection.on('event', (data) => {
-                    if (this.onMessage) {
-                        this.onMessage(data);
-                    }
+                eventTypes.forEach(eventType => {
+                    this.connection.on(eventType, (data) => {
+                        if (this.onMessage) {
+                            this.onMessage({
+                                type: eventType,
+                                payload: data
+                            });
+                        }
+                    });
                 });
                 
                 // 向後兼容：監聽 final_result 事件
@@ -299,9 +310,10 @@ class SocketIOAdapter extends ProtocolAdapter {
         this.isConnected = false;
     }
     
-    async sendAction(action) {
+    async sendEvent(eventType, payload) {
         if (this.connection && this.connection.connected) {
-            this.connection.emit('action', action);
+            // 包裝 payload 以符合後端期望的格式
+            this.connection.emit(eventType, { payload });
         } else {
             throw new Error('Socket.IO 未連接');
         }
@@ -309,7 +321,8 @@ class SocketIOAdapter extends ProtocolAdapter {
     
     async sendAudioChunk(sessionId, chunk, chunkId) {
         if (this.connection && this.connection.connected) {
-            this.connection.emit('audio_chunk', {
+            // 使用正確的事件名稱 audio/chunk（後端路由定義）
+            this.connection.emit('audio/chunk', {
                 session_id: sessionId,
                 audio: this.arrayBufferToBase64(chunk),
                 chunk_id: chunkId
@@ -334,6 +347,7 @@ class HTTPSSEAdapter extends ProtocolAdapter {
         this.sseConnection = null;
         this.sseReconnectTimer = null;
         this.manuallyDisconnected = false;
+        this.activeSseSessionId = null; // 追蹤當前 SSE 連接對應的 session ID
     }
     
     async connect() {
@@ -349,27 +363,83 @@ class HTTPSSEAdapter extends ProtocolAdapter {
         this.isConnected = false;
     }
     
-    async sendAction(action) {
+    async sendEvent(eventType, payload) {
         try {
-            const response = await fetch(`${this.httpSSEUrl}/action`, {
+            // HTTP SSE 特殊處理：session/create 事件透過建立 SSE 連接自動創建
+            if (eventType === 'session/create') {
+                const sessionId = payload.session_id;
+                console.log(`[HTTP SSE] 自動創建 session: ${sessionId}`);
+                
+                // 建立 SSE 連接時會自動創建 session
+                await this.createSSEConnection(sessionId);
+                
+                // 模擬成功回應
+                return {
+                    status: 'success',
+                    action: 'create_session',
+                    session_id: sessionId,
+                    timestamp: new Date().toISOString()
+                };
+            }
+            
+            // HTTP SSE 特殊處理：session/destroy 事件關閉 SSE 連接
+            if (eventType === 'session/destroy') {
+                console.log(`[HTTP SSE] 銷毀 session: ${payload.session_id}`);
+                this.closeSSEConnection();
+                
+                // 模擬成功回應
+                return {
+                    status: 'success',
+                    action: 'destroy_session',
+                    session_id: payload.session_id,
+                    timestamp: new Date().toISOString()
+                };
+            }
+            
+            // 將事件類型轉換為端點路徑
+            const endpoint = this.eventTypeToEndpoint(eventType);
+            const sessionId = payload.session_id;
+            
+            // 為需要 session_id 的端點構建 URL
+            const url = endpoint.includes('{session_id}') 
+                ? `${this.httpSSEUrl}${endpoint.replace('{session_id}', sessionId)}`
+                : `${this.httpSSEUrl}${endpoint}`;
+            
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(action)
+                body: JSON.stringify(payload)
             });
             
             if (!response.ok) {
-                throw new Error(`Action 分發失敗: ${response.status}`);
+                throw new Error(`事件發送失敗: ${response.status}`);
             }
             
             return await response.json();
         } catch (error) {
             if (this.onError) {
-                this.onError(`HTTP Action 發送失敗: ${error.message}`);
+                this.onError(`HTTP 事件發送失敗: ${error.message}`);
             }
             throw error;
         }
+    }
+    
+    eventTypeToEndpoint(eventType) {
+        // 將事件類型轉換為對應的 HTTP 端點（使用實際的後端路由）
+        const endpointMap = {
+            'session/start': '/session/start-listening/{session_id}',
+            'recording/start': '/recording/start/{session_id}',
+            'recording/end': '/recording/end/{session_id}',
+            'chunk/upload/start': '/upload/chunk-start/{session_id}',
+            'chunk/upload/done': '/upload/chunk-done/{session_id}',
+            'file/upload': '/upload/file/{session_id}',
+            'file/upload/done': '/upload/file-done/{session_id}',
+            'transcription/begin': '/transcription/begin/{session_id}'
+        };
+        
+        return endpointMap[eventType] || '/control';
     }
     
     async sendAudioChunk(sessionId, chunk, chunkId) {
@@ -383,8 +453,8 @@ class HTTPSSEAdapter extends ProtocolAdapter {
         try {
             console.log(`[HTTP SSE] 開始音訊檔案上傳，Session ID: ${sessionId}`);
             
-            // 建立 SSE 連接監聽事件
-            await this.createSSEConnection(sessionId);
+            // 不再在這裡自動建立 SSE 連接
+            // SSE 連接應該在 session 創建時建立，並在整個 session 生命週期中保持
             
             // 準備上傳
             if (progressCallback) {
@@ -435,12 +505,25 @@ class HTTPSSEAdapter extends ProtocolAdapter {
     // uploadAudioFile() 方法已移除以避免重複邏輯
     
     async createSSEConnection(sessionId) {
+        // 檢查是否已經有相同 session 的連接
+        if (this.sseConnection && this.sseConnection.readyState !== EventSource.CLOSED) {
+            if (this.activeSseSessionId === sessionId) {
+                console.log(`[HTTP SSE] SSE 連接已存在且 session 相同 (${sessionId})，重用現有連接`);
+                return Promise.resolve();
+            } else {
+                // 不同的 session，需要關閉舊連接
+                console.log(`[HTTP SSE] 切換 session: ${this.activeSseSessionId} -> ${sessionId}，關閉舊連接`);
+                this.closeSSEConnection();
+            }
+        }
+        
         return new Promise((resolve, reject) => {
             try {
                 const sseUrl = `${this.httpSSEUrl}/events/${sessionId}`;
                 console.log(`建立 SSE 連接到: ${sseUrl}`);
                 
                 this.sseConnection = new EventSource(sseUrl);
+                this.activeSseSessionId = sessionId; // 記錄當前活動的 session ID
                 
                 // 連接成功事件
                 this.sseConnection.onopen = (event) => {
@@ -448,18 +531,31 @@ class HTTPSSEAdapter extends ProtocolAdapter {
                     resolve();
                 };
                 
-                // 設定事件處理器
-                this.sseConnection.addEventListener('action', (event) => {
-                    try {
-                        const action = JSON.parse(event.data);
-                        if (this.onMessage) {
-                            this.onMessage(action);
+                // 設定事件處理器 - 監聽新的獨立事件類型
+                const eventTypes = [
+                    'session/create', 'session/start', 'session/stop', 'session/destroy',
+                    'recording/start', 'recording/end',
+                    'chunk/upload/start', 'chunk/upload/done', 'chunk/data',
+                    'file/upload', 'file/upload/done',
+                    'transcript', 'status', 'error'
+                ];
+                
+                eventTypes.forEach(eventType => {
+                    this.sseConnection.addEventListener(eventType, (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (this.onMessage) {
+                                this.onMessage({
+                                    type: eventType,
+                                    payload: data
+                                });
+                            }
+                        } catch (e) {
+                            if (this.onError) {
+                                this.onError(`解析 ${eventType} 事件失敗: ${e.message}`);
+                            }
                         }
-                    } catch (e) {
-                        if (this.onError) {
-                            this.onError(`解析 action 事件失敗: ${e.message}`);
-                        }
-                    }
+                    });
                 });
                 
                 // 監聽辨識完成事件
@@ -580,6 +676,7 @@ class HTTPSSEAdapter extends ProtocolAdapter {
         if (this.sseConnection) {
             this.sseConnection.close();
             this.sseConnection = null;
+            this.activeSseSessionId = null; // 清除活動的 session ID
             console.log('SSE 連接已手動關閉');
         }
     }

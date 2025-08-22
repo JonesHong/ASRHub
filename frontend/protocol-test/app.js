@@ -23,8 +23,11 @@ class ASRHubClient {
         this.currentAudioSource = null; // 當前的音訊來源 (錄音或檔案)
         this.isFileUpload = false;
         this.audioMetadata = null; // 儲存音訊 metadata，在開始辨識時發送
+        this.debugMode = false; // 除錯模式，控制詳細日誌顯示
+        this.totalChunks = 0; // 總音訊塊數，用於進度顯示
         
         // 事件驅動架構 - 動作類型定義（對應後端 PyStoreX actions）
+        // 保持舊的 action 名稱以維持相容性，但在發送時會轉換為新的獨立事件格式
         this.ACTIONS = {
             CREATE_SESSION: '[Session] Create',
             DESTROY_SESSION: '[Session] Destroy',
@@ -57,7 +60,7 @@ class ASRHubClient {
         this.initializeAutoTranscribeUI();
         
         this.uiManager.addLog('ASR Hub 客戶端初始化完成', 'success');
-        this.uiManager.addLog('符合 PyStoreX 純事件驅動架構', 'info');
+        this.uiManager.addLog('已更新為新的獨立事件架構（移除 action 事件）', 'info');
         
         // 記錄初始辨識模式
         const mode = this.config.auto_transcribe ? '自動辨識' : '手動辨識';
@@ -97,11 +100,31 @@ class ASRHubClient {
             this.currentAudioSource = audioBlob;
             this.isFileUpload = false;
             
+            // 創建錄音的元資料
+            this.audioMetadata = {
+                fileName: `recording_${Date.now()}.webm`,
+                fileSize: audioBlob.size,
+                mimeType: audioBlob.type || 'audio/webm',
+                fileExtension: 'webm',
+                duration: duration,
+                sampleRate: 16000,  // 錄音設定的採樣率
+                channels: 1,         // 錄音設定的單聲道
+                detectedFormat: 'WebM',
+                estimatedCodec: 'Opus',
+                source: 'recording',
+                analyzed_at: new Date().toISOString(),
+                conversionNeeded: {
+                    needed: false,
+                    reasons: []
+                }
+            };
+            
             this.uiManager.setRecordingState(false);
             this.uiManager.displayAudioInfo(audioBlob, false);
             
             const durationText = duration ? ` (${duration.toFixed(1)}s)` : '';
             this.uiManager.addLog(`錄音結束${durationText}`, 'success');
+            this.uiManager.addLog(`錄音元資料: 採樣率 ${this.audioMetadata.sampleRate}Hz, ${this.audioMetadata.channels} 聲道`, 'info');
             
             // 檢查是否啟用自動辨識
             if (this.config.strategy === 'batch' && this.config.auto_transcribe) {
@@ -254,19 +277,87 @@ class ASRHubClient {
     }
     
     /**
+     * 檢查是否需要創建新 session
+     */
+    async checkIfNeedNewSession() {
+        // 如果沒有 sessionId，需要創建新 session
+        if (!this.sessionId) {
+            this.uiManager.addLog('沒有現有 session，需要創建新的', 'info');
+            return true;
+        }
+        
+        // 對於不同協議的檢查邏輯
+        switch (this.currentProtocol) {
+            case 'http_sse':
+                // HTTP SSE: 檢查 SSE 連接是否仍然有效
+                const adapter = this.protocolAdapter;
+                if (!adapter.sseConnection || 
+                    adapter.sseConnection.readyState === EventSource.CLOSED ||
+                    adapter.activeSseSessionId !== this.sessionId) {
+                    this.uiManager.addLog('SSE 連接無效或 session 不匹配，需要新 session', 'info');
+                    return true;
+                }
+                // SSE 連接有效且 session 匹配，可以重用
+                return false;
+                
+            case 'websocket':
+            case 'socketio':
+                // WebSocket 和 Socket.IO: 檢查連接是否仍然有效
+                if (!this.protocolAdapter || !this.protocolAdapter.isConnected) {
+                    this.uiManager.addLog('連接已斷開，需要新 session', 'info');
+                    return true;
+                }
+                // 連接有效，可以重用 session
+                return false;
+                
+            default:
+                // 默認：總是創建新 session
+                return true;
+        }
+    }
+    
+    /**
+     * 創建新的 session
+     */
+    async createNewSession() {
+        try {
+            // 確保已連接 (isConnected 是屬性，不是方法)
+            if (!this.protocolAdapter || !this.protocolAdapter.isConnected) {
+                await this.protocolAdapter.connect();
+            }
+            
+            // 生成新的 session ID
+            this.sessionId = this.protocolAdapter.generateSessionId();
+            
+            // 發送創建 session 事件給後端
+            await this.dispatchEvent(this.ACTIONS.CREATE_SESSION, {
+                session_id: this.sessionId,
+                strategy: this.config.strategy
+            });
+            
+            // 對於 HTTP SSE，創建 SSE 連接
+            if (this.currentProtocol === 'http_sse') {
+                await this.protocolAdapter.createSSEConnection(this.sessionId);
+                this.uiManager.addLog(`SSE 連接已建立 (Session: ${this.sessionId})`, 'success');
+            }
+            
+            this.uiManager.addLog(`Session 已創建: ${this.sessionId}`, 'info');
+            return this.sessionId;
+        } catch (error) {
+            console.error('創建 session 失敗:', error);
+            throw error;
+        }
+    }
+    
+    /**
      * 處理開始錄音
      */
     async handleStartRecording() {
         try {
+            // 純前端錄音，不創建 session，不發送事件給後端
+            // Session 只在開始辨識時創建
+            this.uiManager.addLog('前端開始錄音（不通知後端）', 'info');
             await this.audioRecorder.startRecording();
-            
-            // 分發 START_RECORDING action
-            if (this.sessionId) {
-                await this.dispatchAction(this.ACTIONS.START_RECORDING, {
-                    session_id: this.sessionId,
-                    strategy: this.config.strategy
-                });
-            }
         } catch (error) {
             this.uiManager.addLog(`錄音失敗: ${error.message}`, 'error');
             this.uiManager.updateStatus('錄音失敗', 'error');
@@ -277,16 +368,10 @@ class ASRHubClient {
      * 處理停止錄音
      */
     async handleStopRecording() {
+        // 純前端停止錄音，不發送事件給後端
+        this.uiManager.addLog('前端停止錄音（不通知後端）', 'info');
         if (this.audioRecorder.stopRecording()) {
-            // 分發 END_RECORDING action
-            if (this.sessionId) {
-                const duration = this.audioRecorder.getRecordingDuration();
-                await this.dispatchAction(this.ACTIONS.END_RECORDING, {
-                    session_id: this.sessionId,
-                    trigger: 'manual',
-                    duration: duration
-                });
-            }
+            // 錄音停止成功，元資料會在 onRecordingStop 回調中生成
         }
     }
     
@@ -315,29 +400,42 @@ class ASRHubClient {
             this.uiManager.clearResults();
             this.uiManager.setProcessingState(true);
             
-            // 連接到後端
-            await this.protocolAdapter.connect();
+            // 檢查是否需要創建新 session
+            // 對於 HTTP SSE，如果已有 session 且 SSE 連接仍然有效，則重用
+            const needNewSession = await this.checkIfNeedNewSession();
             
-            // 總是創建新的 session 以確保狀態乾淨
-            this.sessionId = this.protocolAdapter.generateSessionId();
+            if (needNewSession) {
+                // 創建新 session
+                await this.createNewSession();
+                await this.sleep(100); // 等待 session 創建完成
+                this.uiManager.addLog(`新 Session 已創建: ${this.sessionId}`, 'success');
+            } else {
+                // 重用現有 session
+                this.uiManager.addLog(`重用現有 Session: ${this.sessionId}`, 'info');
+                
+                // 對於 HTTP SSE，確保 SSE 連接仍然有效
+                if (this.currentProtocol === 'http_sse') {
+                    const adapter = this.protocolAdapter;
+                    if (!adapter.sseConnection || adapter.sseConnection.readyState === EventSource.CLOSED) {
+                        // SSE 連接已關閉，需要重新建立
+                        this.uiManager.addLog('SSE 連接已關閉，重新建立連接', 'warning');
+                        await adapter.createSSEConnection(this.sessionId);
+                    }
+                }
+            }
             
-            // 創建 session
-            await this.dispatchAction(this.ACTIONS.CREATE_SESSION, {
-                session_id: this.sessionId,
-                strategy: this.config.strategy
-            });
-            
-            await this.sleep(100); // 等待 session 創建完成
-            
-            this.uiManager.addLog(`Session 創建成功: ${this.sessionId}`, 'success');
-            
-            // 如果有 metadata（檔案上傳），先發送 metadata
-            if (this.audioMetadata && this.isFileUpload) {
-                try {
-                    await this.sendAudioMetadata(this.audioMetadata);
-                    this.uiManager.addLog('音訊 metadata 已發送', 'success');
-                } catch (error) {
-                    this.uiManager.addLog(`發送 metadata 失敗: ${error.message}`, 'error');
+            // WebSocket 和 Socket.IO 需要單獨發送 metadata
+            // HTTP SSE 不需要，因為已經在上傳時包含
+            if (this.currentProtocol !== 'http_sse') {
+                if (this.audioMetadata) {
+                    try {
+                        await this.sendAudioMetadata(this.audioMetadata);
+                        this.uiManager.addLog(`音訊 metadata 已發送 (來源: ${this.audioMetadata.source || 'unknown'})`, 'success');
+                    } catch (error) {
+                        this.uiManager.addLog(`發送 metadata 失敗: ${error.message}`, 'error');
+                    }
+                } else {
+                    this.uiManager.addLog('⚠️ 警告：沒有音訊元資料，後端可能無法正確處理', 'warning');
                 }
             }
             
@@ -354,23 +452,44 @@ class ASRHubClient {
     // ==================== 協議通訊方法 ====================
     
     /**
-     * 分發 action 到後端
+     * 分發事件到後端
      */
-    async dispatchAction(actionType, payload = {}) {
-        const action = {
-            type: actionType,
-            payload: payload,
-            timestamp: new Date().toISOString()
-        };
+    async dispatchEvent(eventType, payload = {}) {
+        // 轉換為新的事件類型格式
+        const newEventType = this.convertToNewEventType(eventType);
         
-        this.uiManager.addLog(`分發 Action: ${actionType}`, 'info');
+        this.uiManager.addLog(`分發事件: ${newEventType}`, 'info');
         
         try {
-            await this.protocolAdapter.sendAction(action);
+            await this.protocolAdapter.sendEvent(newEventType, payload);
         } catch (error) {
-            this.uiManager.addLog(`Action 分發失敗: ${error.message}`, 'error');
+            this.uiManager.addLog(`事件分發失敗: ${error.message}`, 'error');
             throw error;
         }
+    }
+    
+    /**
+     * 將舊的 action 類型轉換為新的事件類型
+     */
+    convertToNewEventType(actionType) {
+        const actionMap = {
+            '[Session] Create': 'session/create',
+            '[Session] Destroy': 'session/destroy',
+            '[Session] Start Listening': 'session/start',
+            '[Session] Upload File': 'file/upload',
+            '[Session] Upload File Done': 'file/upload/done',
+            '[Session] Chunk Upload Start': 'chunk/upload/start',
+            '[Session] Chunk Upload Done': 'chunk/upload/done',
+            '[Session] Start Recording': 'recording/start',
+            '[Session] End Recording': 'recording/end',
+            '[Session] Audio Chunk Received': 'chunk/received',
+            '[Session] Begin Transcription': 'transcription/start',
+            '[Session] Transcription Done': 'transcription/done',
+            '[Session] Audio Metadata': 'audio/metadata',
+            '[Session] Error': 'error'
+        };
+        
+        return actionMap[actionType] || actionType;
     }
     
     /**
@@ -383,7 +502,7 @@ class ASRHubClient {
             
             // ===== 統一的前置處理 =====
             // 所有協議都執行相同的 chunk upload 開始流程
-            await this.dispatchAction(this.ACTIONS.CHUNK_UPLOAD_START, {
+            await this.dispatchEvent(this.ACTIONS.CHUNK_UPLOAD_START, {
                 session_id: this.sessionId
             });
             
@@ -408,7 +527,7 @@ class ASRHubClient {
             
             // ===== 統一的後置處理 =====
             // 所有協議都執行相同的 chunk upload 完成流程
-            await this.dispatchAction(this.ACTIONS.CHUNK_UPLOAD_DONE, {
+            await this.dispatchEvent(this.ACTIONS.CHUNK_UPLOAD_DONE, {
                 session_id: this.sessionId
             });
             
@@ -426,9 +545,13 @@ class ASRHubClient {
      * 處理協議訊息
      */
     handleProtocolMessage(message) {
-        this.uiManager.addLog(`收到 Message: ${message.type || 'unknown'}`, 'info');
+        const eventType = message.type || 'unknown';
+        this.uiManager.addLog(`收到事件: ${eventType}`, 'info');
         
-        switch (message.type) {
+        // 轉換為舊的 action 類型以保持相容性
+        const actionType = this.convertFromNewEventType(eventType);
+        
+        switch (actionType) {
             case this.ACTIONS.BEGIN_TRANSCRIPTION:
                 this.uiManager.updateStatus('開始辨識', 'processing');
                 break;
@@ -456,22 +579,68 @@ class ASRHubClient {
                 this.handleError(message.payload);
                 break;
                 
+            // 直接處理新的事件類型
+            case 'transcript':
+                // WebSocket 的 transcript 訊息沒有 payload 欄位，整個 message 就是資料
+                // Socket.IO 的 transcript 訊息會有 payload 欄位
+                this.handleTranscriptEvent(message.payload || message);
+                break;
+                
+            case 'status':
+                // WebSocket 的 status 訊息可能沒有 payload 欄位
+                this.handleStatusEvent(message.payload || message);
+                break;
+                
+            case 'error':
+                // WebSocket 的 error 訊息沒有 payload 欄位，error 在 message.error
+                this.handleError(message.payload || message);
+                break;
+            
+            // 音訊相關事件
+            case 'audio/received':
+                this.handleAudioReceived(message);
+                break;
+            
+            case 'audio_metadata_ack':
+                this.handleAudioMetadataAck(message);
+                break;
+                
             // 向後兼容
             case 'final_result':
                 this.handleLegacyFinalResult(message.payload);
                 break;
                 
-            case 'transcript':
-                this.handleTranscriptEvent(message.payload);
-                break;
-                
-            case 'status':
-                this.handleStatusEvent(message.payload);
-                break;
-                
             default:
-                this.uiManager.addLog(`未處理的訊息: ${message.type}`, 'warning');
+                // 只對真正未處理的事件顯示警告
+                if (!this.isKnownButIgnoredEvent(eventType)) {
+                    this.uiManager.addLog(`未處理的事件: ${eventType}`, 'warning');
+                }
         }
+    }
+    
+    /**
+     * 將新的事件類型轉換為舊的 action 類型
+     */
+    convertFromNewEventType(eventType) {
+        const eventMap = {
+            'session/create': this.ACTIONS.CREATE_SESSION,
+            'session/destroy': this.ACTIONS.DESTROY_SESSION,
+            'session/start': this.ACTIONS.START_LISTENING,
+            'session/stop': this.ACTIONS.START_LISTENING, // 停止監聽
+            'file/upload': this.ACTIONS.UPLOAD_FILE,
+            'file/upload/done': this.ACTIONS.UPLOAD_FILE_DONE,
+            'chunk/upload/start': this.ACTIONS.CHUNK_UPLOAD_START,
+            'chunk/upload/done': this.ACTIONS.CHUNK_UPLOAD_DONE,
+            'recording/start': this.ACTIONS.START_RECORDING,
+            'recording/end': this.ACTIONS.END_RECORDING,
+            'chunk/received': this.ACTIONS.AUDIO_CHUNK_RECEIVED,
+            'transcription/start': this.ACTIONS.BEGIN_TRANSCRIPTION,
+            'transcription/done': this.ACTIONS.TRANSCRIPTION_DONE,
+            'audio/metadata': this.ACTIONS.AUDIO_METADATA,
+            'error': this.ACTIONS.ERROR
+        };
+        
+        return eventMap[eventType] || eventType;
     }
     
     /**
@@ -516,7 +685,8 @@ class ASRHubClient {
     handleError(payload) {
         this.uiManager.updateStatus('發生錯誤', 'error');
         this.uiManager.setProcessingState(false);
-        const errorMessage = payload.error || payload.message || '未知錯誤';
+        // 支援不同的錯誤訊息格式
+        const errorMessage = payload.error || payload.message || payload || '未知錯誤';
         this.uiManager.addLog(`錯誤: ${errorMessage}`, 'error');
     }
     
@@ -537,8 +707,26 @@ class ASRHubClient {
      * 處理 transcript 事件
      */
     handleTranscriptEvent(data) {
-        this.uiManager.addLog(`收到辨識結果: ${data.text}`, 'success');
-        this.uiManager.displayResults(data.text);
+        // WebSocket 協議的 transcript 訊息包含 result 物件
+        const result = data.result || data;
+        const text = result.text || '';
+        
+        if (text) {
+            this.uiManager.addLog(`收到辨識結果: ${text}`, 'success');
+            this.uiManager.displayResults(text);
+            
+            // 顯示其他資訊
+            if (result.confidence !== undefined) {
+                this.uiManager.addLog(`信心度: ${(result.confidence * 100).toFixed(1)}%`, 'info');
+            }
+            if (result.language) {
+                this.uiManager.addLog(`語言: ${result.language}`, 'info');
+            }
+        } else {
+            this.uiManager.addLog('收到空的辨識結果', 'warning');
+            this.uiManager.displayResults('（無辨識結果）');
+        }
+        
         this.uiManager.updateStatus('辨識完成', 'complete');
         this.uiManager.setProcessingState(false);
     }
@@ -559,6 +747,53 @@ class ASRHubClient {
         this.uiManager.updateStatus(statusText, 'processing');
     }
     
+    /**
+     * 處理音訊接收確認事件
+     */
+    handleAudioReceived(message) {
+        // audio/received 訊息包含 size 和 chunk_id
+        const size = message.size || 0;
+        const chunkId = message.chunk_id;
+        
+        // 只在 debug 模式下顯示，避免刷屏
+        if (this.debugMode) {
+            this.uiManager.addLog(`音訊塊 #${chunkId} 已接收 (${size} bytes)`, 'debug');
+        }
+        
+        // 更新進度（如果有進度條的話）
+        if (this.totalChunks && chunkId !== undefined) {
+            const progress = ((chunkId + 1) / this.totalChunks) * 100;
+            this.uiManager.updateProgress(progress);
+        }
+    }
+    
+    /**
+     * 處理音訊元資料確認事件
+     */
+    handleAudioMetadataAck(message) {
+        if (message.status === 'success') {
+            this.uiManager.addLog('音訊元資料已成功處理', 'success');
+        } else {
+            this.uiManager.addLog('音訊元資料處理失敗', 'error');
+        }
+    }
+    
+    /**
+     * 檢查是否為已知但可忽略的事件
+     */
+    isKnownButIgnoredEvent(eventType) {
+        const ignoredEvents = [
+            'welcome',           // 歡迎訊息
+            'session/create',    // 會話創建確認
+            'session/destroy',   // 會話銷毀確認
+            'chunk/upload/start', // 分塊上傳開始確認
+            'chunk/upload/done', // 分塊上傳完成確認
+            'audio_config_ack'   // 音訊配置確認
+        ];
+        
+        return ignoredEvents.includes(eventType);
+    }
+    
     // ==================== 輔助方法 ====================
     
     /**
@@ -570,7 +805,7 @@ class ASRHubClient {
                 throw new Error('Session ID 不存在，無法發送 metadata');
             }
             
-            await this.dispatchAction(this.ACTIONS.AUDIO_METADATA, {
+            await this.dispatchEvent(this.ACTIONS.AUDIO_METADATA, {
                 session_id: this.sessionId,
                 audio_metadata: metadata
             });
@@ -692,5 +927,5 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('- 音訊上傳模組 (AudioUploader)');
     console.log('- UI 管理模組 (UIManager)');
     console.log('- 協議適配器模組 (ProtocolAdapters)');
-    console.log('- 統一的事件驅動架構');
+    console.log('- 新的獨立事件架構：session/*, recording/*, chunk/*, file/*');
 });
