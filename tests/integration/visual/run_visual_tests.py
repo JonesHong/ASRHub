@@ -1,69 +1,92 @@
 #!/usr/bin/env python3
 """
-視覺化測試運行器
-提供統一的介面來運行各種視覺化測試
+ASRHub 視覺化測試啟動器
+
+執行各種服務的視覺化測試，無需輸入時長，
+測試會持續運行直到使用者關閉視窗。
 """
 
-import os
 import sys
 import subprocess
-from pathlib import Path
+import os
 
-# 確保能找到專案根目錄
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../..'))
+def print_menu():
+    """顯示選單"""
+    print("=" * 50)
+    print("       ASRHub 視覺化測試工具")
+    print("=" * 50)
+    print()
+    print("請選擇要執行的測試：")
+    print()
+    print("  1) 🎙️  錄音服務測試 (Recording)")
+    print("  2) 🎤  VAD 服務測試 (Voice Activity Detection)")
+    print("  3) 🎯  喚醒詞服務測試 (OpenWakeWord)")
+    print("  0) 退出")
+    print()
+    print("📌 提示：測試會持續運行直到您關閉視窗")
+    print()
 
+def run_test(script_name, description):
+    """執行測試腳本"""
+    print()
+    print(f"正在啟動{description}...")
+    print("關閉視窗即可停止測試")
+    print("-" * 50)
+    
+    try:
+        # 取得當前腳本所在目錄
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        script_path = os.path.join(current_dir, script_name)
+        
+        # 執行測試腳本
+        result = subprocess.run([sys.executable, script_path])
+        
+        if result.returncode == 0:
+            print()
+            print(f"✅ {description}完成")
+        else:
+            print()
+            print(f"❌ {description}失敗 (錯誤碼: {result.returncode})")
+    except FileNotFoundError:
+        print(f"❌ 找不到測試腳本: {script_name}")
+    except KeyboardInterrupt:
+        print()
+        print("⚠️  測試被使用者中斷")
+    except Exception as e:
+        print(f"❌ 執行錯誤: {e}")
 
 def main():
     """主函數"""
-    # 檢查是否在正確的位置執行
-    project_root = Path(__file__).parent.parent.parent.parent
-    if not (project_root / 'src').exists():
-        print("⚠️  請從專案根目錄執行此腳本")
-        print(f"例如: python {Path(__file__).relative_to(project_root)}")
-        sys.exit(1)
-    
-    print("=" * 60)
-    print("🎯 ASR Hub 視覺化測試運行器")
-    print("=" * 60)
-    print("\n請選擇要運行的測試：")
-    print("1. VAD (語音活動檢測) 視覺化測試")
-    print("2. Wake Word (喚醒詞) 視覺化測試")
-    print("3. Recording (錄音) 視覺化測試 - 包含聲譜圖")
-    print("4. 退出")
-    
-    choice = input("\n請輸入選擇 (1-4): ").strip()
-    
-    # 測試檔案路徑
-    test_dir = Path(__file__).parent
-    
-    # 切換到專案根目錄
-    os.chdir(project_root)
-    
-    if choice == "1":
-        print("\n啟動 VAD 視覺化測試...")
-        print("請對著麥克風說話，觀察語音檢測效果")
-        subprocess.run([sys.executable, str(test_dir / "test_vad_visual.py")])
-    elif choice == "2":
-        print("\n啟動喚醒詞視覺化測試...")
-        # 檢查 HF_TOKEN
-        if not os.environ.get("HF_TOKEN"):
-            print("⚠️  警告: 未設定 HF_TOKEN 環境變數")
-            print("如果需要下載 HuggingFace 模型，請設定此變數")
-            print("export HF_TOKEN=your_token_here\n")
-        print("請說 '嗨，高醫' 或 'hi kmu' 來觸發喚醒詞")
-        subprocess.run([sys.executable, str(test_dir / "test_wakeword_visual.py")])
-    elif choice == "3":
-        print("\n啟動錄音視覺化測試...")
-        print("包含即時聲譜圖顯示")
-        print("開始錄音，關閉視窗結束")
-        subprocess.run([sys.executable, str(test_dir / "test_recording_visual.py")])
-    elif choice == "4":
-        print("\n再見！")
-        sys.exit(0)
-    else:
-        print("\n無效的選擇，請重新執行")
-        sys.exit(1)
-
+    while True:
+        print_menu()
+        
+        try:
+            choice = input("請輸入選項 [0-3]: ").strip()
+            
+            if choice == "1":
+                run_test("test_recording_visual.py", "錄音服務視覺化測試")
+            elif choice == "2":
+                run_test("test_vad_visual.py", "VAD 服務視覺化測試")
+            elif choice == "3":
+                run_test("test_wakeword_visual.py", "喚醒詞服務視覺化測試")
+            elif choice == "0":
+                print()
+                print("退出測試工具")
+                break
+            else:
+                print()
+                print("❌ 無效的選項，請重新選擇")
+                input("按 Enter 繼續...")
+                
+        except KeyboardInterrupt:
+            print()
+            print()
+            print("⚠️  程式被使用者中斷")
+            break
+        except Exception as e:
+            print()
+            print(f"❌ 發生錯誤: {e}")
+            input("按 Enter 繼續...")
 
 if __name__ == "__main__":
     main()

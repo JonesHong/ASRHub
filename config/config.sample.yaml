@@ -1,421 +1,413 @@
-# ASR Hub 優化配置檔案範例
-# 根據 PyStoreX 重構後的架構調整
-# 生成時間: 2025-08-19
-# 將此檔案複製為 config.yaml 並根據您的需求修改設定值
+# ================================
+# ASR Hub 配置檔案
+# ================================
+# 版本: 0.3.0
+# 更新日期: 2025-08-23
+#
+# 使用說明:
+# 1. 將此檔案複製為 config.yaml
+# 2. 根據您的需求修改設定值
+# 3. 使用 ${ENV_VAR:default} 語法設定環境變數
 
-# ===== 系統核心設定 =====
+# ================================
+# 系統設定
+# ================================
 system:
   name: "ASR_Hub"
-  version: "0.2.0"  # 重構後版本
-  mode: ${APP_ENV:development}  # development, production, testing
+  version: "0.3.0"
+  mode: ${APP_ENV:development} # development, production, testing
   debug: ${DEBUG:true}
 
-# ===== 日誌設定 =====
+# ================================
+# 日誌設定
+# ================================
 logging:
   path: "./logs"
-  rotation: "100 MB"      # 日誌輪替：可用 "daily", "100 MB", "7 days" 等
-  retention: "30 days"    # 日誌保留期限
-  level: "INFO"  # TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL
-  format: "detailed"      # detailed, simple, json
+  level: ${LOG_LEVEL:DEBUG} # TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL
+  rotation: "100 MB" # 日誌輪替: "daily", "100 MB", "7 days"
+  retention: "30 days" # 日誌保留期限
+  format: "detailed" # detailed, simple, json
 
-# ===== API 設定 =====
+# ================================
+# API 協議設定
+# ================================
 api:
   # HTTP SSE (Server-Sent Events)
   http_sse:
-    enabled: true
+    http_sse_enabled: true
     host: ${API_HOST:0.0.0.0}
     port: ${API_PORT:8000}
     cors_enabled: true
-    host: ${API_HOST:0.0.0.0}
-    port: ${API_PORT:8000}
     max_connections: 100
-    request_timeout: 300  # 秒
-    
+    request_timeout: 300 # 秒
+
   # WebSocket
   websocket:
-    enabled: true
+    websocket_enabled: true
     host: ${WS_HOST:0.0.0.0}
     port: ${WS_PORT:8765}
-    max_message_size: 10485760  # 10 MB
-    ping_interval: 30
-    
-  # gRPC (保留但預設關閉)
-  grpc:
-    enabled: false
-    host: ${GRPC_HOST:0.0.0.0}
-    port: ${GRPC_PORT:50051}
-    max_receive_message_length: 10485760
-    
+    max_message_size: 10485760 # 10 MB
+    ping_interval: 30 # 秒
+
   # Socket.IO
   socketio:
-    enabled: true
+    socketio_enabled: true
     host: ${SOCKETIO_HOST:0.0.0.0}
     port: ${SOCKETIO_PORT:8766}
     cors_allowed_origins: "*"
-    
-  # Redis (保留但預設關閉)
+
+  # Redis 配置
   redis:
-    enabled: false
+    redis_enabled: false
     host: ${REDIS_HOST:localhost}
     port: ${REDIS_PORT:6379}
     db: ${REDIS_DB:0}
-    password: ${REDIS_PASSWORD:}  # 空字串表示無密碼
+    password: ${REDIS_PASSWORD:} # 空字串表示無密碼
     channel_prefix: "asr_hub:"
 
-# ===== Pipeline 設定 =====
-pipeline:
+# ================================
+# 音訊設定
+# ================================
+audio:
   default_sample_rate: 16000
-  channels: 1  # 單聲道
-  encoding: "int16"  # 音訊編碼格式
+  default_channels: 1 # 1=單聲道, 2=立體聲
+  default_encoding: "int16" # int16, float32
   buffer_size: 4096
-  max_pipeline_length: 10  # 最大 operator 數量
   
-  # Pipeline Operators 配置
-  operators:
-    # 喚醒詞偵測
-    wakeword:
-      enabled: true
-      type: "openWakeWord"  # openWakeWord, asr_keyword
-      # OpenWakeWord 特定配置
-      model_path: "models/hi_kmu_0721.onnx"
-      threshold: 0.5
-      debounce_time: 2.0  # 去抖動時間（秒）
-      continuous_detection: true  # 連續偵測模式
-      # 效能設定
-      inference_threads: 1  # 推論執行緒數
-      use_quantized_model: false  # 使用量化模型
-      
-    # VAD (Voice Activity Detection) 語音活動偵測
-    vad:
-      enabled: true
-      type: "silero"  # webrtc, silero
-      # Silero VAD 設定
-      silero:
-        enabled: true
-        threshold: 0.5
-        min_silence_duration: 0.5
-        min_speech_duration: 0.25
-        model_path: "models/silero_vad.onnx"
-        model_name: "silero_vad_v4"  # 模型版本
-        use_gpu: false
-        adaptive_threshold: false  # 避免過度敏感
-        threshold_window_size: 50
-        smoothing_window: 10  # 增大以減少抖動
-      # WebRTC VAD 設定（備選）
-      webrtc:
-        enabled: false
-        aggressiveness: 2  # 0-3
-        frame_duration: 30  # ms
-        padding_duration: 300  # ms
-      
-    # 降噪
-    denoise:
-      enabled: false
-      type: "rnnoise"  # rnnoise, noisereduce
-      strength: 0.7
-      
-    # 取樣率調整
-    sample_rate_adjustment:
-      enabled: true
-      target_rate: 16000
-      quality: "high"  # low, medium, high
-      
-    # 格式轉換
-    format_conversion:
-      enabled: true
-      target_format: "pcm"  # pcm, wav, mp3
-      channels: 1  # 1 (mono) 或 2 (stereo)
-      bits_per_sample: 16
-      
-    # 錄音功能
-    recording:
-      enabled: true
-      format: "wav"
-      sample_rate: 48000
-      channels: 2
-      max_duration: 60  # seconds
-      max_file_size: 100  # MB
-      storage:
-        type: "file"  # memory, file, s3
-        path: "./recordings"
-      # VAD 控制設定
-      vad_control:
-        enabled: true
-        silence_countdown: 1.8  # 靜音倒數秒數
-        min_recording_duration: 0.5  # 最短錄音時長
-        pre_speech_buffer: 0.3  # 語音前緩衝秒數
-        post_speech_buffer: 0.2  # 語音後緩衝秒數
-      # 分段錄音
-      segmentation:
-        enabled: false
-        segment_duration: 30.0  # 每段時長（秒）
-        overlap_duration: 0.5  # 段落重疊時長
-      # 元數據
-      metadata:
-        enabled: true
-        include_vad_info: true
-        include_timestamps: true
-        save_path: "./recordings/metadata"
+  # 音訊處理參數
+  silence_threshold: 0.01  # 靜音闾值
+  silence_duration: 0.5  # 靜音持續時間（秒）
+  min_silence_ms: 100  # 最小靜音毫秒數
 
-# ===== ASR Provider 設定 =====
+# ================================
+# 服務設定 (Stateless Services)
+# ================================
+services:
+  # 音訊佇列管理
+  audio_queue:
+    max_queue_size: 1000
+    ttl_seconds: 3600
+    queue_cleanup_interval: 600
+    blocking_timeout: 0.1
+    blocking_sleep_interval: 0.01
+    # 預錄和尾部填充設定（用於 Session Effects）
+    pre_roll_duration: 0.5      # 預錄緩衝時間（秒）- 喚醒詞前的音訊
+    tail_padding_duration: 0.3  # 尾部填充時間（秒）- 語音結束後的音訊
+
+  # 音訊轉換服務
+  audio_converter:
+    ffmpeg:
+      enabled: true
+      path: ${FFMPEG_PATH:ffmpeg}
+      timeout: 30
+    scipy:
+      enabled: true
+      use_gpu: ${USE_GPU:false}
+      batch_size: 50
+      quality: "high"  # low, medium, high
+    defaults:
+      target_sample_rate: 16000
+      target_channels: 1
+      target_format: "pcm_s16le"
+
+  # 音訊緩衝管理
+  buffer_manager:
+    default_sample_rate: 16000
+    default_channels: 1
+    default_sample_width: 2  # int16
+    max_buffer_size: 1048576  # 1MB
+    vad_buffer:
+      window_ms: 400
+      mode: "fixed"
+    wakeword_buffer:
+      frame_samples: 1280
+      mode: "fixed"
+    funasr_buffer:
+      frames_per_buffer: 9600
+      mode: "fixed"
+    whisper_buffer:
+      window_seconds: 5
+      step_seconds: 1
+      overlap: 0.8
+      mode: "sliding"
+
+  # 喚醒詞服務
+  wakeword:
+    wakeword_enabled: true
+    type: "openwakeword"  # openwakeword, porcupine, snowboy
+    openwakeword:
+      wakeword_model_path: ${WAKEWORD_MODEL:./models/hi_kmu_0721.onnx}
+      wakeword_threshold: 0.5
+      wakeword_chunk_size: 1280
+      wakeword_sample_rate: 16000
+      debounce_time: 2.0
+      max_buffer_size: 100
+      continuous_detection: true
+      wakeword_use_gpu: false
+
+  # 錄音服務
+  recording:
+    # 基本設定
+    output_dir: ${RECORDING_DIR:./recordings}
+    file_format: "wav" # wav, mp3, flac
+
+    # 檔案命名
+    filename_pattern: "{session_id}_{timestamp}" # 支援: {session_id}, {timestamp}, {date}, {time}
+    timestamp_format: "%Y%m%d_%H%M%S"
+
+    # 音訊參數
+    sample_rate: 16000
+    channels: 1
+    sample_width: 2 # 2=16-bit, 4=32-bit
+
+    # 處理設定
+    recording_max_workers: 10 # 最大並行錄音數
+    recording_batch_size: 10 # 批次處理 chunk 數量
+    wait_timeout: 0.1 # 等待資料超時（秒）
+
+    # 檔案管理
+    recording_auto_cleanup: true # 自動清理舊檔案
+    cleanup_days: 7 # 保留天數
+    cleanup_schedule: "03:00" # 清理時間 (HH:MM)
+    max_file_size_mb: 500 # 單檔最大大小 (MB)
+
+  # VAD (Voice Activity Detection) 服務
+  vad:
+    vad_enabled: true
+    type: "silero"  # silero, webrtc
+    silence_threshold: 2.0  # 靜音閾值（秒）- 超過此時間判定為語音結束
+
+    # Silero VAD
+    silero:
+      silero_model_path: ${VAD_MODEL_PATH:}
+      threshold: 0.5
+      min_silence_duration: 0.5
+      min_speech_duration: 0.25
+      silero_sample_rate: 16000
+      silero_chunk_size: 512
+      window_size: 512
+      silero_use_gpu: false
+      speech_pad_ms: 30
+      return_seconds: false
+      max_speech_duration: 60.0
+
+    webrtc:
+      aggressiveness: 2  # 0-3
+      frame_duration: 30  # 10, 20, 30 ms
+      webrtc_sample_rate: 16000
+
+  # 計時器服務
+  timer:
+    enabled: true
+    max_timers_per_session: 50
+    max_total_timers: 1000
+    cleanup_interval: 3600
+    auto_cleanup: true
+    default_timeout: 60.0
+    min_duration: 0.1
+    max_duration: 86400.0  # 24小時
+    precision: 0.01
+
+  # 降噪服務
+  denoiser:
+    enabled: true
+    type: "deepfilternet"  # deepfilternet, rnnoise, spectral_subtraction
+    strength: 0.7  # 0.0-1.0，降噪強度
+    
+    # DeepFilterNet 配置
+    deepfilternet:
+      model_base_dir: "DeepFilterNet3"  # DeepFilterNet2, DeepFilterNet3
+      post_filter: true  # 啟用後處理濾波器
+      auto_init: true   # 啟動時自動初始化模型
+      device: "auto"    # auto, cpu, cuda - 自動選擇最佳設備
+      chunk_size: 16000 # 處理音訊塊大小 (樣本數，1秒@16kHz)
+
+  # 音訊增強服務 (MVP 版本)
+  audio_enhancer:
+    enabled: true
+    
+    # RMS 門檻值
+    min_rms_threshold: 0.08  # -22 dBFS，低於此值才增強
+    target_rms: 0.1  # -20 dBFS，目標 RMS
+    
+    # 增益限制
+    max_gain: 5.0  # 最大增益倍數 (約 14 dB)
+    
+    # 高通濾波器
+    highpass_alpha: 0.95  # 濾波係數 (0.9-0.99)
+    
+    # 限幅器
+    limiter_threshold: 0.95  # 硬限幅閾值
+    
+    vad_enhancer:
+      dc_remove: true
+      highpass: true
+      normalize: false
+      limit: false
+    
+    asr_enhancer:
+      dc_remove: true
+      highpass: true
+      normalize: true
+      limit: true
+
+  # 麥克風擷取服務
+  microphone:
+    mic_enabled: true
+    backend: "auto"  # auto, sounddevice, pyaudio
+    mic_sample_rate: 16000
+    mic_channels: 1  # 1=單聲道, 2=立體聲
+    mic_chunk_size: 1024
+    dtype: "float32"  # float32, int16
+    queue_size: 100
+    device_index: null  # null=預設裝置
+
+# ================================
+# ASR 提供者設定
+# ================================
 providers:
   default: "whisper"
-  
-  # 通用池化配置模板
-  pool_defaults:
-    min_size: 1
-    max_size: 3
-    idle_timeout: 300.0
-    acquire_timeout: 30.0
-    health_check_interval: 60.0
-    auto_scale:
-      enabled: true
-      scale_up_threshold: 0.8
-      scale_down_threshold: 0.3
-      scale_interval: 60.0
-  
-  # Local Whisper
+
+  # Whisper (OpenAI)
   whisper:
-    enabled: true
+    whisper_enabled: true
     model_size: ${WHISPER_MODEL:base}  # tiny, base, small, medium, large
-    language: "zh"  # 語言代碼，null 表示自動偵測
-    device: ${WHISPER_DEVICE:cpu}  # cpu, cuda, mps
+    language: "zh"
+    whisper_device: ${WHISPER_DEVICE:cpu}  # cpu, cuda, mps
     compute_type: "float32"  # float32, float16, int8
-    beam_size: 5
-    best_of: 5
-    temperature: 0.0
-    use_faster_whisper: true  # 使用 faster-whisper 引擎
-    initial_prompt: null  # 初始提示詞，可選
-    vad_filter: false  # 是否使用 VAD 過濾
-    # 模型下載路徑
-    model_path: "./models/whisper"
-    
-    pool:
-      enabled: false
-      min_size: 1
-      max_size: 3
-    
+    use_faster_whisper: true
+    whisper_model_path: "./models/whisper"
+
   # FunASR
   funasr:
-    enabled: false
-    model: "paraformer"  # paraformer, conformer
+    funasr_enabled: false
+    model: "paraformer"
     language: "zh"
-    device: "cpu"
-    model_path: "./models/funasr"
-    
+    funasr_device: "cpu"
+    funasr_model_path: "./models/funasr"
+
   # Vosk
   vosk:
-    enabled: false
-    model_path: "./models/vosk/vosk-model-cn-0.22"
-    sample_rate: 16000
-    
-  # Google Cloud Speech-to-Text
+    vosk_enabled: false
+    vosk_model_path: "./models/vosk/vosk-model-cn-0.22"
+    vosk_sample_rate: 16000
+
+  # Google STT
   google_stt:
-    enabled: false
+    google_enabled: false
     credentials_path: ${GOOGLE_APPLICATION_CREDENTIALS:}
     language_code: "zh-TW"
-    encoding: "LINEAR16"
-    sample_rate: 16000
-    enable_automatic_punctuation: true
-    
+
   # OpenAI API
   openai:
-    enabled: false
+    openai_enabled: false
     api_key: ${OPENAI_API_KEY:}
     model: "whisper-1"
     language: "zh"
-    temperature: 0.0
-    base_url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
 
-# ===== 喚醒詞設定 =====
-wake_word_detection:
-  enabled: true
-  # 系統層監聽器設定
-  system_listener:
-    enabled: true
-    always_on: true  # 系統層持續監聽
-    buffer_size: 4096
-    min_resource_mode: true  # 最小資源消耗模式
-  
-  wake_timeout: 3.0  # 喚醒後的超時時間（秒）
-  cooldown: 2.0  # 喚醒後的冷卻時間（秒）
-  
-  # 喚醒詞模型設定
-  models:
-    # OpenWakeWord 模型
-    - type: openWakeWord
-      enabled: true
-      model_path: "models/hi_kmu_0721.onnx"
-      threshold: 0.5  # 偵測閾值 (0.0 - 1.0)
-      language: "zh-TW"  # 語言代碼
-      # HuggingFace 模型下載設定（當 model_path 不存在時使用）
-      hf_repo_id: "JTBTechnology/kmu_wakeword"  # HuggingFace repo ID
-      hf_filename: "hi_kmu_0721.onnx"  # 模型檔案名稱
-      hf_token: ${HF_TOKEN:}  # HuggingFace token（可選，用於私有模型）
-      # 模型特定設定
-      inference_framework: "onnxruntime"  # onnxruntime, tflite
-      use_gpu: false  # 是否使用 GPU 加速
-      batch_size: 1  # 批次推論大小
-      # 音訊處理設定
-      sample_rate: 16000  # 取樣率
-      window_size: 1280  # 滑動視窗大小（樣本數）
-      score_queue_size: 60  # 評分佇列大小
-      # 效能優化
-      cache_embeddings: true  # 快取嵌入
-      preload_model: true  # 預先載入模型
-      
-    # 可以加入更多模型（未來擴充）
-    # - type: asr_keyword
-    #   enabled: false
-    #   keywords:
-    #     - "你好小明"
-    #     - "Hey Assistant"
-    #   similarity_threshold: 0.8
+  # Provider Pool 設定
+  pool:
+    # 基本配置
+    min_size: 2  # 最小池大小
+    max_size: 5  # 最大池大小
+    per_session_quota: 2  # 每個 session 最大租用數量
     
-  # 喚醒事件設定
-  wake_events:
-    publish_to_api: true  # 是否推送喚醒事件到 API
-    include_audio_context: false  # 是否包含喚醒時的音訊上下文
-    context_duration: 2.0  # 音訊上下文時間（秒）
+    # 健康檢查
+    health_check_enabled: true  # 啟用健康檢查
+    max_consecutive_failures: 3  # 連續失敗次數閾值（超過則標記為不健康）
     
-  # 多源喚醒支援（未來擴充）
-  multi_source:
-    ui_wake: false  # UI 喚醒
-    visual_wake: false  # 視覺喚醒
-    gesture_wake: false  # 手勢喚醒
+    # 超時設定
+    initialization_timeout: 30.0  # 初始化超時（秒）
+    lease_timeout: 10.0  # 租用超時（秒）
+    
+    # 清理設定  
+    cleanup_interval: 300  # 清理間隔（秒）
+    auto_cleanup_unhealthy: true  # 自動清理不健康的 provider
+    
+    # ThreadPoolExecutor 設定（用於 Session Effects）
+    thread_pool_max_workers: 5  # 最大工作線程數
 
-# ===== 串流設定 =====
-stream:
-  # 音訊參數
-  sample_rate: 16000
-  channels: 1
-  
-  # 超時設定
-  silence_timeout: 3.0  # 秒，靜音超過此時間後自動停止
-  initial_silence_timeout: 10.0  # 初始靜音超時
-  max_segment_duration: 30.0  # 最大片段持續時間（秒）
-  enable_vad: true  # 是否啟用語音活動偵測
-  
-  # 手動終止
-  manual_termination: true
-  termination_phrase: "結束辨識"  # 說出此詞彙時停止辨識
-  
-  # Busy 模式設定
-  busy_mode:
-    enabled: true
-    continue_listening: true  # busy 狀態時是否繼續聆聽
-    buffer_audio: true  # 是否緩存 busy 期間的音訊
-    max_buffer_duration: 30.0  # 最大緩存時長（秒）
-    
-  # 串流緩衝設定
-  buffer:
-    size: 8192
-    max_chunks: 1000
-    overflow_strategy: "drop_oldest"  # drop_oldest, drop_newest, block
 
-# ===== FSM (狀態機) 設定 =====
+# ================================
+# FSM 狀態機設定
+# ================================
 fsm:
-  # 通用設定
-  default_strategy: "NON_STREAMING"  # BATCH, NON_STREAMING, STREAMING
-  keep_awake_after_reply: true
-  
-  # 統一的超時配置（毫秒）
+  default_strategy: "NON_STREAMING" # BATCH, NON_STREAMING, STREAMING
+
+  # 超時配置（毫秒）
   timeout_configs:
-    # BATCH 模式
     batch:
       processing: 60000
-      
-    # NON_STREAMING 模式
+
     non_streaming:
-      activated: 5000
-      recording: 10000
+      non_streaming_activated: 5000
+      non_streaming_recording: 10000
       transcribing: 5000
-      llm_claim: 5000
-      tts_claim: 5000
-      session_idle: 600000
-      
-    # STREAMING 模式
+      non_streaming_session_idle: 600000
+
     streaming:
-      activated: 5000
-      streaming: 30000
-      llm_claim: 5000
-      tts_claim: 5000
-      session_idle: 600000
-  
-  # 狀態回復設定
+      streaming_activated: 5000
+      streaming_timeout: 30000
+      streaming_session_idle: 600000
+
+  # 狀態回復
   recovery:
     max_retry_attempts: 3
     retry_delay_ms: 1000
     auto_recover_from_error: true
-    
-  # 事件優先級設定
-  event_priorities:
-    reset: 100
-    error: 90
-    recover: 90
-    interrupt_reply: 60
-    llm_reply_started: 50
-    tts_playback_started: 50
-    tts_playback_finished: 40
-    timeout: 30
-    default: 0
 
-# ===== 以下區塊已確認未使用，建議移除 =====
-# 如果未來需要這些功能，可以重新加入
+# ================================
+# Provider Pool 設定（全域）
+# ================================
+provider_pool:
+  # Provider 類型
+  provider_type: "whisper"  # whisper, funasr, vosk, google_stt, openai
+  
+  # 池大小設定
+  min_size: 1  # 池的最小大小
+  max_size: 5  # 池的最大大小
+  
+  # 租借設定
+  lease_timeout: 10.0  # 租借超時（秒）
+  max_wait_time: 30.0  # 最大等待時間（秒）
+  
+  # 配額管理
+  per_session_quota: 2  # 每個 session 最大同時租借數
+  
+  # 健康檢查
+  max_consecutive_failures: 3  # 最大連續失敗次數（之後標記為不健康）
+  health_check_interval: 60.0  # 健康檢查間隔（秒）
+  
+  # 老化防止機制
+  aging_prevention: true  # 啟用老化防止
+  aging_factor: 0.001  # 老化因子（每毫秒增加的優先級）
+  default_priority: 5  # 預設優先級（1-10）
+  
+  # 自動擴展
+  auto_scaling: true  # 自動擴展池大小
+  scale_up_threshold: 0.8  # 使用率超過此值時擴展
+  scale_down_threshold: 0.3  # 使用率低於此值時縮減
+  scale_cooldown: 30.0  # 擴展冷卻時間（秒）
 
-# # 效能設定（未使用）
-# performance:
-#   thread_pool:
-#     min_workers: 2
-#     max_workers: 10
-#   memory:
-#     max_usage_mb: 2048
-#     gc_threshold: 0.8
-#   batch:
-#     enabled: false
-#     size: 10
-#     timeout: 1.0
+# ================================
+# 效能設定
+# ================================
+performance:
+  # 執行緒池
+  thread_pool:
+    min_workers: 2
+    max_workers: 10
 
-# # 安全設定（未使用）
-# security:
-#   auth:
-#     enabled: false
-#     type: "api_key"
-#     api_keys: []
-#   rate_limit:
-#     enabled: true
-#     requests_per_minute: 60
-#     requests_per_hour: 1000
-#   ssl:
-#     enabled: false
-#     cert_file: ${SSL_CERT_FILE:}
-#     key_file: ${SSL_KEY_FILE:}
+  # 記憶體管理
+  memory:
+    max_usage_mb: 2048
+    gc_threshold: 0.8
 
-# # 監控設定（未使用）
-# monitoring:
-#   metrics:
-#     enabled: false
-#     export_interval: 60
-#   health_check:
-#     enabled: true
-#     endpoint: "/health"
-#     check_interval: 30
-#   tracing:
-#     enabled: false
-#     service_name: "asr-hub"
-
-# # 資料庫設定（未使用）
-# database:
-#   enabled: false
-#   type: "sqlite"
-#   sqlite:
-#     path: "./data/asr_hub.db"
-#   host: ${DB_HOST:localhost}
-#   port: ${DB_PORT:5432}
-#   name: ${DB_NAME:asr_hub}
-#   user: ${DB_USER:postgres}
-#   password: ${DB_PASSWORD:}
-#   pool:
-#     size: 10
-#     max_overflow: 20
-#     timeout: 30
+  # 批次處理
+  batch:
+    batch_enabled: true
+    batch_size: 10
+    batch_timeout: 1.0
+  
+  # 處理限制
+  max_iterations: 1000  # 最大迭代次數（防止無限循環）

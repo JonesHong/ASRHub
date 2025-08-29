@@ -21,11 +21,17 @@ aiohttp
 
 # 音訊處理
 numpy
-scipy
+scipy>=1.11.0  # 高品質音訊重新取樣
 soundfile
 librosa
 pydub
 pyaudio
+sounddevice>=0.4.6  # 主要音訊後端
+gradio>=4.0.0  # Web UI 視覺化
+
+# GPU 加速 (選用 - 需要 CUDA)
+# cupy-cuda12x  # 取消註解以啟用 GPU 支援 (需要 CUDA 12.x)
+# cupy-cuda11x  # 或使用這個 for CUDA 11.x
 
 # 視覺化和系統監控
 matplotlib
@@ -49,8 +55,5 @@ coverage
 colorama
 matplotlib
 
-# 開發工具（選用）
-black
-flake8
-mypy
-pre-commit
+
+uuid6

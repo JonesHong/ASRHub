@@ -24,7 +24,7 @@ ASRHub 是一個企業級的統一語音識別中介軟體系統，旨在簡化�
 - **統一的 ASR API 介面**：透過標準化的 API，整合多家語音識別服務，降低切換成本
 - **多協議支援**：支援現代 Web 應用所需的各種通訊協議，滿足不同場景需求
 - **事件驅動架構**：採用 PyStoreX 狀態管理，確保系統狀態的可預測性和可追蹤性
-- **模組化設計**：Pipeline 架構設計，可靈活組合音訊處理運算子
+- **模組化設計**：無狀態服務（Stateless Services）架構，簡單清晰的功能組合
 
 ## ✨ 主要特性
 
@@ -42,26 +42,39 @@ ASRHub 是一個企業級的統一語音識別中介軟體系統，旨在簡化�
 - **gRPC** - 高效能 RPC 框架（規劃中）
 - **Redis Pub/Sub** - 分散式訊息傳遞（規劃中）
 
-### 🎨 音訊處理 Pipeline
-- **VAD (Voice Activity Detection)** - 語音活動偵測
-- **降噪處理** - 環境噪音過濾
-- **取樣率調整** - 自動適配不同 ASR 需求
-- **格式轉換** - 支援多種音訊格式
-- **喚醒詞偵測** - 自訂喚醒詞觸發
+### 🎨 音訊處理服務
+- **音訊佇列管理** - 儲存轉換後的 16kHz 音訊，供下游服務使用
+- **緩衝區管理** - 智慧音訊切窗，支援 fixed/sliding/dynamic 三種模式
+- **音訊增強** - 自動調整音量、動態壓縮、軟限幅，解決麥克風音量問題
+- **深度降噪** - DeepFilterNet 深度學習降噪，消除白噪音、增強人聲
+- **VAD (Voice Activity Detection)** - Silero VAD 語音活動偵測
+- **喚醒詞偵測** - OpenWakeWord 自訂喚醒詞觸發
+- **格式轉換** - FFmpeg/SciPy 雙引擎，支援 GPU 加速
 
 ### 🔄 進階功能
+- **Provider 池化管理** - 並行處理多個 Session，最大化硬體資源利用
 - **FSM 狀態管理** - IDLE、LISTENING、BUSY 三態管理
-- **Session 重用機制** - 減少連線開銷，提升效能
+- **Session 重用機制** - 減少連線開銷，提升效能  
 - **實時串流支援** - 低延遲音訊處理
-- **自動重連機制** - 網路異常自動恢復
+- **智慧資源分配** - 租借機制、老化防止、配額管理
+- **健康檢查機制** - 自動移除不健康的 Provider 實例
 - **錯誤處理與重試** - 穩定可靠的服務
 
-### 🚀 最新架構改進 (v0.2.0)
-- **路由系統重構** - 每個協議獨立的路由模組，降低耦合度
-- **SSEManager 引入** - 完整的 SSE 連接生命週期管理
-- **Session 智能管理** - 前端自動判斷是否需要新 Session
-- **Metadata 差異化處理** - 各協議根據特性優化傳輸方式
-- **統一路由移除** - 刪除過度設計的 unified_router，簡化架構
+### 🚀 最新架構改進 (v0.4.0)
+- **FSM + PyStoreX 整合** - 狀態機驗證結合響應式狀態管理，確保狀態轉換合法性
+- **時間戳協調機制** - 非破壞性多讀取器，解決服務競爭問題  
+- **SessionEffects 實作** - 整合現有服務，遵循 KISS 原則
+- **批量後處理管線** - 錄音結束後統一降噪增強，提升品質
+- **Pre-roll 與 Tail Padding** - 喚醒前 500ms 預錄，靜音後 300ms 延續
+- **服務職責分離** - FSM 定義規則、Validator 驗證、Effects 處理副作用、Reducer 純函數更新
+
+### 🎯 時間戳音訊佇列系統 (v0.3.1)
+- **非破壞性多讀取器** - 多個服務可同時讀取相同音訊，避免競爭
+- **Pre-roll 預錄緩衝** - 喚醒詞檢測後回溯 500ms，確保完整捕獲第一個字
+- **Tail Padding 尾部填充** - 靜音檢測後延續 300ms，確保不截斷最後字尾
+- **獨立讀取位置** - 每個服務（喚醒詞、VAD、錄音）維護獨立的讀取進度
+- **時間戳索引** - 精確的音訊片段時間定位，支援範圍查詢
+- **向後相容** - 保留原有 pop() 介面，新增 pull_from_timestamp() 等時間戳介面
 
 ## 🏗️ 系統架構
 
@@ -101,21 +114,21 @@ graph TB
             STRATEGY["策略模式<br/>BATCH/NON_STREAMING/STREAMING"]
         end
         
-        subgraph "音訊 Pipeline"
-            QUEUE[AudioQueueManager]
-            VAD[VAD 偵測]
-            DENOISE[降噪處理]
-            RESAMPLE[取樣率調整]
-            FORMAT[格式轉換]
-            WAKEWORD[喚醒詞偵測]
+        subgraph "音訊處理管線"
+            QUEUE["AudioQueueManager<br/>(存儲 16kHz 轉換音訊)"]
+            BUFFER["BufferManager<br/>(智慧切窗)"]
+            ENHANCE["AudioEnhancer<br/>(音量增強)"]
+            DENOISE["DeepFilterNet<br/>(深度降噪)"]
+            VAD["Silero VAD<br/>(語音偵測)"]
+            WAKEWORD["OpenWakeWord<br/>(喚醒詞)"]
         end
         
-        subgraph "ASR 提供者管理"
-            PM[ProviderManager]
-            WHISPER[Whisper Provider]
-            FUNASR[FunASR Provider]
-            VOSK[Vosk Provider]
-            GOOGLE[Google STT Provider]
+        subgraph "ASR 提供者池"
+            POOL["Provider Pool Manager<br/>(並行處理管理)"]
+            WHISPER["Whisper Instances[]"]
+            FUNASR["FunASR Instances[]"]
+            VOSK["Vosk Instances[]"]
+            GOOGLE["Google STT Instances[]"]
         end
     end
     
@@ -138,17 +151,17 @@ graph TB
     FSM --> STRATEGY
     STRATEGY --> QUEUE
     
-    QUEUE --> VAD
-    VAD --> DENOISE
-    DENOISE --> RESAMPLE
-    RESAMPLE --> FORMAT
-    FORMAT --> WAKEWORD
+    QUEUE --> BUFFER
+    BUFFER --> ENHANCE
+    ENHANCE --> DENOISE
+    DENOISE --> VAD
+    VAD --> WAKEWORD
     
-    WAKEWORD --> PM
-    PM --> WHISPER
-    PM --> FUNASR
-    PM --> VOSK
-    PM --> GOOGLE
+    WAKEWORD --> POOL
+    POOL --> WHISPER
+    POOL --> FUNASR
+    POOL --> VOSK
+    POOL --> GOOGLE
     
     WHISPER -->|結果| EFFECTS
     FUNASR -->|結果| EFFECTS
@@ -167,8 +180,10 @@ ASRHub/
 ├── src/
 │   ├── core/                    # 🎯 核心系統
 │   │   ├── asr_hub.py          # 系統入口點與初始化
-│   │   ├── fsm.py              # FSM 狀態機控制器
-│   │   └── exceptions.py       # 自定義例外處理
+│   │   ├── audio_queue_manager.py  # 音訊佇列管理（應移至 service/）
+│   │   ├── buffer_manager.py       # 緩衝區管理（應移至 service/）
+│   │   ├── fsm_transitions.py      # FSM 狀態轉換定義（StrategyPlugin）
+│   │   └── exceptions.py           # 自定義例外處理
 │   │
 │   ├── api/                     # 📡 API 協議層
 │   │   ├── base.py             # API 基類定義
@@ -190,34 +205,39 @@ ASRHub/
 │   │   ├── __init__.py         # Store 初始化
 │   │   ├── sessions/           # Session 管理
 │   │   │   ├── sessions_actions.py    # Action 定義
-│   │   │   ├── sessions_reducer.py    # Reducer 邏輯
-│   │   │   ├── sessions_effects.py    # Effects 處理
+│   │   │   ├── sessions_reducer.py    # Reducer 邏輯（支援時間戳）
+│   │   │   ├── sessions_effects.py    # Effects 處理（原版）
+│   │   │   ├── sessions_effect_v2.py  # SessionEffects（時間戳版+FSM驗證）
 │   │   │   └── sessions_selectors.py  # 狀態選擇器
 │   │   └── global_store.py     # 全域 Store 實例
 │   │
-│   ├── operators/               # ⚙️ 音訊處理運算子
-│   │   ├── base.py             # Operator 基類
-│   │   ├── vad/                # VAD 偵測
-│   │   │   ├── silero_vad.py  # Silero VAD 實現
-│   │   │   └── webrtc_vad.py  # WebRTC VAD 實現
-│   │   ├── denoiser.py         # 降噪處理
-│   │   ├── sample_rate.py      # 取樣率調整
-│   │   ├── format_converter.py # 格式轉換
-│   │   ├── recording.py        # 錄音功能
-│   │   └── wakeword.py         # 喚醒詞偵測
+│   ├── service/                 # ⚙️ 無狀態服務層（Stateless Services）
+│   │   ├── audio_converter/        # 音訊格式轉換
+│   │   │   ├── scipy_converter.py  # SciPy 轉換器（GPU 支援）
+│   │   │   └── ffmpeg_converter.py # FFmpeg 轉換器
+│   │   ├── audio_enhancer.py       # 音訊增強（音量調整、動態壓縮）
+│   │   ├── denoise/                 # 降噪服務
+│   │   │   └── deepfilternet_denoiser.py # DeepFilterNet 深度降噪
+│   │   ├── vad/                     # VAD 偵測服務
+│   │   │   └── silero_vad.py       # Silero VAD 實現
+│   │   ├── wakeword/                # 喚醒詞偵測
+│   │   │   └── openwakeword.py     # OpenWakeWord 實現
+│   │   └── recording/               # 錄音服務
 │   │
-│   ├── providers/               # 🎙️ ASR 提供者
-│   │   ├── base.py             # Provider 基類
-│   │   ├── whisper.py          # Whisper 本地實現
-│   │   ├── funasr.py           # FunASR 實現
-│   │   ├── vosk.py             # Vosk 實現
-│   │   ├── google_stt.py       # Google STT
-│   │   └── openai.py           # OpenAI API
+│   ├── provider/                # 🎙️ ASR 提供者 (注意：是 provider 不是 providers)
+│   │   ├── provider_manager.py # Provider Pool 管理器（並行處理）
+│   │   ├── whisper/            # Whisper 實現
+│   │   ├── funasr/             # FunASR 實現
+│   │   ├── vosk/               # Vosk 實現
+│   │   ├── google_stt/         # Google STT
+│   │   └── openai/             # OpenAI API
 │   │
-│   ├── stream/                  # 🌊 串流處理
-│   │   ├── audio_queue.py      # 音訊佇列管理
-│   │   ├── buffer_manager.py   # 緩衝區管理
-│   │   └── stream_controller.py # 串流控制器
+│   ├── interface/               # 📐 服務介面定義
+│   │   ├── audio_queue.py      # 音訊佇列介面
+│   │   ├── buffer.py           # 緩衝區管理介面
+│   │   ├── audio_converter.py  # 音訊轉換介面
+│   │   ├── asr_provider.py     # ASR Provider 基礎介面
+│   │   └── provider_pool_interfaces.py # Provider Pool 相關介面
 │   │
 │   ├── utils/                   # 🛠️ 工具模組
 │   │   ├── logger.py           # pretty-loguru 日誌
@@ -229,39 +249,95 @@ ASRHub/
 │       ├── transcript.py       # 轉譯結果模型
 │       └── session.py          # Session 模型
 │
-├── frontend/                    # 🖥️ 前端應用
-│   ├── protocol-test/          # 協議測試工具
-│   │   ├── index.html          # 主頁面
-│   │   ├── app.js              # 主應用邏輯
-│   │   └── modules/            # 模組化元件
-│   │       ├── protocol-adapters.js  # 協議適配器
-│   │       ├── ui-manager.js         # UI 管理
-│   │       ├── audio-recorder.js     # 錄音功能
-│   │       └── audio-uploader.js     # 上傳功能
-│   │
-│   └── realtime-streaming/     # 實時串流應用
-│       ├── index.html          # 主頁面
-│       ├── app.js              # 主應用邏輯
-│       └── modules/            # 模組化元件
-│           ├── protocol-adapters.js     # 擴展協議適配器
-│           ├── realtime-ui-manager.js   # 實時 UI 管理
-│           ├── audio-stream-manager.js  # 音訊串流管理
-│           ├── vad-display.js          # VAD 視覺化
-│           └── wakeword-manager.js     # 喚醒詞管理
-│
 ├── config/                      # ⚙️ 配置管理
 │   ├── config.yaml             # 主配置檔（不納入版控）
 │   └── config.sample.yaml      # 配置範例
 │
-├── models/                      # 🧠 AI 模型檔案
-│   ├── whisper/                # Whisper 模型
-│   ├── vosk/                   # Vosk 模型
-│   └── wakeword/               # 喚醒詞模型
-│
-└── tests/                       # 🧪 測試檔案
-    ├── test_whisper_sse.py     # Whisper SSE 測試
-    └── test_http_sse_session_reuse.html # Session 重用測試
+└── models/                      # 🧠 AI 模型檔案
+    ├── whisper/                # Whisper 模型
+    ├── vosk/                   # Vosk 模型
+    └── wakeword/               # 喚醒詞模型
 ```
+
+## 🔧 音訊處理流程
+
+### 完整處理管線
+
+```mermaid
+flowchart LR
+    subgraph "Input"
+        RAW[原始音訊]
+    end
+    
+    subgraph "Pre-Processing"
+        CONV[AudioConverter<br/>轉換 16kHz]
+        QUEUE[AudioQueue<br/>儲存轉換音訊]
+        BUFFER[BufferManager<br/>智慧切窗]
+    end
+    
+    subgraph "Enhancement"
+        ENHANCE[AudioEnhancer<br/>音量調整]
+        DENOISE[DeepFilterNet<br/>深度降噪]
+    end
+    
+    subgraph "Detection"
+        VAD[Silero VAD<br/>語音偵測]
+        WAKE[OpenWakeWord<br/>喚醒詞]
+    end
+    
+    subgraph "ASR"
+        POOL[Provider Pool]
+        ASR1[Whisper]
+        ASR2[FunASR]
+        ASR3[其他]
+    end
+    
+    RAW --> CONV
+    CONV --> QUEUE
+    QUEUE --> BUFFER
+    BUFFER --> ENHANCE
+    ENHANCE --> DENOISE
+    DENOISE --> VAD
+    VAD --> WAKE
+    WAKE --> POOL
+    POOL --> ASR1
+    POOL --> ASR2
+    POOL --> ASR3
+```
+
+### 關鍵組件說明
+
+1. **AudioQueueManager**: 
+   - 儲存已轉換的 16kHz 音訊
+   - Thread-safe 佇列操作
+   - 支援多 Session 並行
+
+2. **BufferManager**:
+   - Fixed 模式：固定大小窗口（VAD 使用）
+   - Sliding 模式：滑動窗口（Whisper 使用）
+   - Dynamic 模式：動態聚合
+
+3. **AudioEnhancer**:
+   - 自動音量調整（解決麥克風音量過小）
+   - 動態壓縮、軟限幅
+   - 智慧處理系統 auto_enhance()
+
+4. **DeepFilterNet**:
+   - 深度學習降噪
+   - 消除背景噪音
+   - 增強人聲品質
+
+5. **Provider Pool Manager**:
+   - 租借機制（Lease）分配 provider
+   - 老化機制防止飢餓
+   - 配額管理防止壟斷
+   - 健康檢查自動修復
+
+## 📚 核心設計文件
+
+- **[AUDIO_PROCESSING_PIPELINE_DESIGN.md](./AUDIO_PROCESSING_PIPELINE_DESIGN.md)** - 音訊處理管線設計與實作狀態
+- **[FSM_PYSTOREX_INTEGRATION.md](./FSM_PYSTOREX_INTEGRATION.md)** - FSM 與 PyStoreX 整合架構詳解
+- **[CLAUDE.md](./CLAUDE.md)** - Claude Code 開發指引與架構原則
 
 ## 🚀 快速開始
 
@@ -318,235 +394,70 @@ python -m src.core.asr_hub
 make run
 ```
 
-### 🧪 測試前端介面
+### 🕐 時間戳音訊佇列使用
 
-1. **協議測試介面**
+#### 啟用方式
+
 ```bash
-# 開啟瀏覽器訪問
-http://localhost:8080/protocol-test/
+# 方式一：環境變數
+export USE_TIMESTAMP_EFFECTS=true
+python -m src.core.asr_hub
+
+# 方式二：使用專用啟動腳本
+python run_with_timestamp.py
 ```
 
-2. **實時串流介面**
-```bash
-# 開啟瀏覽器訪問
-http://localhost:8080/realtime-streaming/
+#### 程式碼使用範例
+
+```python
+from src.core.audio_queue_manager import audio_queue
+
+# 推送音訊並獲取時間戳
+timestamp = audio_queue.push(session_id, audio_chunk)
+
+# 多讀取器非破壞性讀取
+wake_chunks = audio_queue.pull_from_timestamp(
+    session_id, 
+    reader_id="wake_word",
+    from_timestamp=start_time
+)
+
+# 獲取時間範圍內的音訊（用於錄音）
+recording = audio_queue.get_audio_between_timestamps(
+    session_id,
+    start_timestamp=wake_time - 0.5,  # Pre-roll
+    end_timestamp=silence_time + 0.3   # Tail padding
+)
+
+# 阻塞式讀取（用於實時處理）
+timestamped = audio_queue.pull_blocking_timestamp(
+    session_id,
+    reader_id="vad",
+    timeout=1.0
+)
 ```
 
-## 📖 詳細使用說明
+#### 處理流程
 
-### 後端 API 端點
-
-#### HTTP SSE API (Port: 8000)
-
-**Session 管理端點**
-```http
-# 創建 Session
-POST /control/create-session
-Content-Type: application/json
-{
-    "session_id": "unique-session-id",
-    "strategy": "batch"  # batch/non_streaming/streaming
-}
-
-# 銷毀 Session
-POST /control/destroy-session
-Content-Type: application/json
-{
-    "session_id": "unique-session-id"
-}
+```mermaid
+sequenceDiagram
+    participant Audio as 音訊輸入
+    participant Queue as 時間戳佇列
+    participant Wake as 喚醒詞檢測
+    participant VAD as VAD檢測
+    participant Rec as 錄音服務
+    participant ASR as ASR服務
+    
+    Audio->>Queue: push(audio) → timestamp
+    Queue->>Wake: pull_from_timestamp("wake_word")
+    Wake-->>Queue: 檢測到喚醒詞 at T
+    Queue->>Rec: get_audio_between(T-0.5, ...)
+    Queue->>VAD: pull_from_timestamp("vad", T-0.5)
+    VAD-->>Queue: 檢測到靜音 at T2
+    Queue->>Rec: get_audio_between(..., T2+0.3)
+    Rec->>ASR: 完整錄音（含 pre-roll + tail padding）
 ```
 
-**音訊上傳端點**
-```http
-# 上傳音訊檔案（自動觸發辨識）
-POST /audio/{session_id}
-Content-Type: multipart/form-data
-
-FormData:
-  - audio: [音訊檔案]
-  - session_id: "unique-session-id"
-
-# 分塊上傳開始
-POST /upload/chunk-start/{session_id}
-
-# 分塊上傳結束
-POST /upload/chunk-done/{session_id}
-```
-
-**SSE 事件串流**
-```http
-GET /events/{session_id}
-
-# 事件類型
-event: session/create
-data: {"session_id": "...", "timestamp": "..."}
-
-event: transcript
-data: {"text": "識別結果", "is_final": true, "confidence": 0.95}
-
-event: status
-data: {"state": "LISTENING", "message": "正在處理..."}
-
-event: error
-data: {"error": "錯誤訊息", "code": "ERROR_CODE"}
-```
-
-#### WebSocket API (Port: 8765)
-
-```javascript
-// 連線
-const ws = new WebSocket('ws://localhost:8765/ws');
-
-// 創建 Session
-ws.send(JSON.stringify({
-    type: 'session/create',
-    payload: {
-        session_id: 'unique-session-id',
-        strategy: 'batch'
-    }
-}));
-
-// 發送音訊 Metadata（必須）
-ws.send(JSON.stringify({
-    type: 'audio/metadata',
-    payload: {
-        session_id: 'unique-session-id',
-        audio_metadata: {
-            format: 'webm',
-            sampleRate: 48000,
-            channels: 1
-        }
-    }
-}));
-
-// 發送音訊資料
-ws.send(audioBlob);  // 二進制數據
-
-// 接收事件
-ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    switch(data.type) {
-        case 'transcript':
-            console.log('識別結果:', data.text);
-            break;
-        case 'status':
-            console.log('狀態:', data.state);
-            break;
-        case 'error':
-            console.error('錯誤:', data.error);
-            break;
-    }
-};
-```
-
-#### Socket.IO API (Port: 8766)
-
-```javascript
-// 連線
-const socket = io('http://localhost:8766');
-
-// 創建 Session
-socket.emit('session/create', {
-    session_id: 'unique-session-id',
-    strategy: 'batch'
-});
-
-// 發送音訊 Metadata（必須）
-socket.emit('audio/metadata', {
-    session_id: 'unique-session-id',
-    audio_metadata: {
-        format: 'webm',
-        sampleRate: 48000,
-        channels: 1
-    }
-});
-
-// 上傳音訊檔案
-socket.emit('file/upload', {
-    session_id: 'unique-session-id',
-    audio_data: audioBase64,  // Base64 編碼
-    filename: 'audio.webm'
-});
-
-// 監聽事件
-socket.on('transcript', (data) => {
-    console.log('識別結果:', data.text, '最終:', data.is_final);
-});
-
-socket.on('status', (data) => {
-    console.log('狀態更新:', data.state, data.message);
-});
-
-socket.on('error', (error) => {
-    console.error('錯誤:', error.message);
-});
-
-// 房間功能（Socket.IO 特有）
-socket.emit('join_room', { room: 'transcription_room_1' });
-socket.emit('leave_room', { room: 'transcription_room_1' });
-```
-
-### 📊 協議選擇指南
-
-選擇適合的協議對系統性能和用戶體驗至關重要。以下是詳細的對比和選擇建議：
-
-| 特性 | HTTP SSE | WebSocket | Socket.IO |
-|------|----------|-----------|-----------|
-| **連接模式** | 單向推送 | 雙向通信 | 雙向+房間管理 |
-| **Session 管理** | 自動創建與重用 | 手動管理 | 事件驅動 |
-| **音訊傳輸** | Base64 JSON | 二進制分塊 | Base64 事件 |
-| **Metadata 處理** | 內嵌傳輸 | 單獨發送 | 單獨事件 |
-| **重連機制** | 瀏覽器自動 | 手動實現 | 內建支援 |
-| **延遲** | 中等 | 最低 | 低 |
-| **資源消耗** | 低 | 中 | 較高 |
-| **複雜度** | 簡單 | 中等 | 較複雜 |
-
-#### 使用建議
-
-**選擇 HTTP SSE 當：**
-- ✅ 需要簡單的服務器推送
-- ✅ 客戶端主要是瀏覽器
-- ✅ 不需要頻繁的雙向通信
-- ✅ 希望簡化實現和維護
-- 📝 範例：簡單的語音轉文字應用
-
-**選擇 WebSocket 當：**
-- ✅ 需要低延遲的雙向通信
-- ✅ 傳輸大量二進制數據
-- ✅ 需要自定義通信協議
-- ✅ 對性能要求較高
-- 📝 範例：實時對話系統、即時翻譯
-
-**選擇 Socket.IO 當：**
-- ✅ 需要房間/命名空間功能
-- ✅ 需要可靠的自動重連
-- ✅ 需要廣播和群組功能
-- ✅ 跨瀏覽器兼容性重要
-- 📝 範例：多人協作平台、會議系統
-
-### 前端測試介面
-
-#### 協議測試介面功能
-- 支援三種協議切換測試
-- 即時音訊錄製與傳送
-- 識別結果即時顯示
-- 連線狀態監控
-- 錯誤訊息顯示
-
-#### 實時串流介面功能
-- 連續語音識別
-- VAD 狀態顯示
-- 喚醒詞偵測
-- 倒數計時器
-- 實時轉譯結果
-
-### 協議選擇指南
-
-| 協議 | 適用場景 | 優點 | 缺點 |
-|------|---------|------|------|
-| HTTP SSE | Web 應用、單向串流 | 簡單、防火牆友好、Session 重用 | 單向通訊 |
-| WebSocket | 即時雙向通訊 | 低延遲、全雙工 | 需要特殊配置 |
-| Socket.IO | 需要高可靠性 | 自動重連、房間功能 | 額外開銷 |
 
 ## ⚙️ 配置管理
 
@@ -600,7 +511,7 @@ providers:
   google:
     credentials_path: "./credentials/google.json"
 
-pipeline:
+operators:
   vad:
     enabled: true
     threshold: 0.5
@@ -656,7 +567,7 @@ api:
 
 - **src/core**: 核心系統，包含 ASRHub 主類別和 FSM 狀態機
 - **src/api**: 各種通訊協議的實現
-- **src/operators**: Pipeline 運算子，處理音訊串流
+- **src/operators**: 音訊處理運算子，由 SessionEffects 管理
 - **src/providers**: ASR 服務提供者的適配器
 - **src/store**: PyStoreX 事件驅動狀態管理
 - **src/stream**: 音訊串流控制和緩衝管理
@@ -684,19 +595,7 @@ make test-cov
 pytest tests/test_whisper.py
 ```
 
-3. **程式碼品質檢查**
-```bash
-# 執行 linting
-make lint
-
-# 格式化程式碼
-make format
-
-# 類型檢查
-make type-check
-```
-
-4. **新增 ASR 提供者**
+3. **新增 ASR 提供者**
 ```python
 # src/providers/custom_provider.py
 from src.providers.base import ProviderBase
@@ -711,7 +610,7 @@ class CustomProvider(ProviderBase):
         return transcript
 ```
 
-5. **新增 Pipeline 運算子**
+4. **新增音訊處理運算子**
 ```python
 # src/operators/custom_operator.py
 from src.operators.base import OperatorBase
@@ -722,163 +621,6 @@ class CustomOperator(OperatorBase):
         return processed_stream
 ```
 
-### 測試方法
-
-```bash
-# HTTP SSE 測試
-python test_http_sse_fixed.py
-
-# WebSocket 測試
-python test_websocket.py
-
-# 整合測試
-python -m pytest tests/integration/
-
-# 壓力測試
-locust -f tests/performance/locustfile.py
-```
-
-### 貢獻指南
-
-1. Fork 專案
-2. 建立功能分支 (`git checkout -b feature/amazing-feature`)
-3. 遵循程式碼規範
-4. 撰寫測試案例
-5. 提交變更 (`git commit -m 'feat: 新增驚人功能'`)
-6. 推送分支 (`git push origin feature/amazing-feature`)
-7. 開啟 Pull Request
-
-#### Commit 訊息規範
-- `feat:` 新功能
-- `fix:` 錯誤修復
-- `docs:` 文件更新
-- `style:` 程式碼格式調整
-- `refactor:` 重構
-- `test:` 測試相關
-- `chore:` 建構流程或輔助工具的變更
-
-## 📚 API 文件
-
-### HTTP SSE API 詳細文件
-
-完整的 HTTP SSE API 文件請參考 [HTTP SSE API 文件](./docs/api/http_sse.md)
-
-主要端點：
-- `/api/sse/control` - 控制命令（開始/停止/配置）
-- `/api/sse/audio` - 音訊資料上傳
-- `/api/sse/events` - SSE 事件串流
-- `/api/sse/status` - 系統狀態查詢
-
-### WebSocket API 詳細文件
-
-完整的 WebSocket API 文件請參考 [WebSocket API 文件](./docs/api/websocket.md)
-
-訊息類型：
-- `control` - 控制訊息
-- `audio` - 音訊資料
-- `transcript` - 識別結果
-- `metadata` - 中繼資料
-- `error` - 錯誤訊息
-
-### Socket.IO API 詳細文件
-
-完整的 Socket.IO API 文件請參考 [Socket.IO API 文件](./docs/api/socketio.md)
-
-事件：
-- `start_recognition` - 開始識別
-- `stop_recognition` - 停止識別
-- `audio_data` - 音訊資料
-- `transcript` - 識別結果
-- `state_change` - 狀態變更
-
-## 🚢 部署說明
-
-### 生產環境配置
-
-1. **環境變數設定**
-```bash
-export ASR_HUB_ENV=production
-export ASR_HUB_CONFIG=/path/to/production/config.yaml
-export ASR_HUB_LOG_LEVEL=INFO
-```
-
-2. **使用 Docker 部署**
-```dockerfile
-FROM python:3.8-slim
-
-WORKDIR /app
-COPY . .
-
-RUN pip install -r requirements.txt
-RUN pip install gunicorn
-
-EXPOSE 8080 8081 8082
-
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8080", "src.core.asr_hub:app"]
-```
-
-3. **使用 Docker Compose**
-```yaml
-version: '3.8'
-
-services:
-  asrhub:
-    build: .
-    ports:
-      - "8080:8080"
-      - "8081:8081"
-      - "8082:8082"
-    environment:
-      - ASR_HUB_ENV=production
-    volumes:
-      - ./config:/app/config
-      - ./models:/app/models
-    restart: unless-stopped
-```
-
-### 效能優化
-
-1. **ASR 模型優化**
-   - 使用 GPU 加速（CUDA）
-   - 選擇適當的模型大小
-   - 啟用批次處理
-
-2. **網路優化**
-   - 啟用 HTTP/2
-   - 配置適當的緩衝區大小
-   - 使用 CDN 加速靜態資源
-
-3. **系統優化**
-   - 調整 Python GIL 設定
-   - 使用多程序架構
-   - 配置適當的記憶體限制
-
-### 監控設定
-
-1. **日誌配置**
-```yaml
-logging:
-  level: INFO
-  format: json
-  output: 
-    - file: /var/log/asrhub/app.log
-    - stdout
-```
-
-2. **指標收集**
-```python
-# 整合 Prometheus
-from prometheus_client import Counter, Histogram
-
-request_count = Counter('asrhub_requests_total', 'Total requests')
-request_duration = Histogram('asrhub_request_duration_seconds', 'Request duration')
-```
-
-3. **健康檢查**
-```http
-GET /health
-Response: {"status": "healthy", "version": "1.0.0"}
-```
 
 ## ❓ 常見問題
 
@@ -926,21 +668,27 @@ Response: {"status": "healthy", "version": "1.0.0"}
 - M4A
 - WebM（瀏覽器錄音）
 
+## 🎯 開發原則
+
+### 核心設計理念
+- **KISS (Keep It Simple, Stupid)**: 保持簡單，避免過度設計
+- **無狀態服務**: 所有服務都是無狀態的，可並行處理多個 session
+- **單一職責**: 每個服務只做一件事，並把它做好
+- **組合優於繼承**: 使用組合模式構建複雜功能
+
+### 架構準則
+- **簡單工具**: 撰寫簡單、獨立的工具，之後再進行組合
+- **明確介面**: 定義清晰的服務介面，確保可測試性
+- **避免智能化**: 不做自動判斷，由調用者明確指定行為
+- **錯誤透明**: 錯誤應該明確且易於理解
+
+### 程式碼規範
+- **模組級單例**: 使用 `__new__` 實現單例，模組級變數直接使用
+- **直接調用**: 在 Effects 中直接 import 並調用服務方法
+- **避免 Action 濫用**: 只在必要時創建新的 Action
+- **設計模式適度**: 可以使用設計模式，但不要過度設計
+
 ## 📝 更新日誌
-
-### v1.0.0-beta (2024-01)
-- ✅ HTTP SSE Session 重用機制實現
-- ✅ 修復所有協議的 metadata 發送問題
-- ✅ API 路由系統重構完成
-- ✅ 前端協議測試介面完善
-- ✅ WebSocket 和 Socket.IO 協議實現
-- ✅ PyStoreX 狀態管理整合
-
-### v0.9.0-alpha (2023-12)
-- ✅ 基礎架構建立
-- ✅ Whisper 提供者整合
-- ✅ HTTP SSE 協議實現
-- ✅ Pipeline 運算子框架
 
 ## 📄 授權條款
 
@@ -973,6 +721,6 @@ Response: {"status": "healthy", "version": "1.0.0"}
 
 Made with ❤️ by ASRHub Team
 
-Copyright © 2024 ASRHub. All rights reserved.
+Copyright © 2025 ASRHub. All rights reserved.
 
 </div>

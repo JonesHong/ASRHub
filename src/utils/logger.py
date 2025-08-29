@@ -48,13 +48,6 @@ else:
         level=os.getenv("LOG_LEVEL", "INFO")
     )
 
-# 確保 logger 有所有標準的日誌方法
-# pretty-loguru 基於 loguru，應該有這些方法，但為了安全起見我們檢查一下
-if not hasattr(logger, 'debug'):
-    # 如果沒有 debug 方法，可能是版本問題，我們提供一個簡單的包裝
-    import loguru
-    logger.debug = lambda msg, *args, **kwargs: logger.log("DEBUG", msg, *args, **kwargs)
-
 
 def setup_global_exception_handler():
     """
