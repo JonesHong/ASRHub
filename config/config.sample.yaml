@@ -23,7 +23,7 @@ system:
 # ================================
 logging:
   path: "./logs"
-  level: ${LOG_LEVEL:DEBUG} # TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: ${LOG_LEVEL:INFO} # TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL
   rotation: "100 MB" # 日誌輪替: "daily", "100 MB", "7 days"
   retention: "30 days" # 日誌保留期限
   format: "detailed" # detailed, simple, json
@@ -34,7 +34,7 @@ logging:
 api:
   # HTTP SSE (Server-Sent Events)
   http_sse:
-    http_sse_enabled: true
+    enabled: false
     host: ${API_HOST:0.0.0.0}
     port: ${API_PORT:8000}
     cors_enabled: true
@@ -43,23 +43,23 @@ api:
 
   # WebSocket
   websocket:
-    websocket_enabled: true
+    enabled: false
     host: ${WS_HOST:0.0.0.0}
-    port: ${WS_PORT:8765}
+    port: ${WS_PORT:8001}
     max_message_size: 10485760 # 10 MB
     ping_interval: 30 # 秒
 
   # Socket.IO
   socketio:
-    socketio_enabled: true
+    enabled: false
     host: ${SOCKETIO_HOST:0.0.0.0}
-    port: ${SOCKETIO_PORT:8766}
+    port: ${SOCKETIO_PORT:8002}
     cors_allowed_origins: "*"
 
   # Redis 配置
   redis:
-    redis_enabled: false
-    host: ${REDIS_HOST:localhost}
+    enabled: true
+    host: ${REDIS_HOST:127.0.0.1}
     port: ${REDIS_PORT:6379}
     db: ${REDIS_DB:0}
     password: ${REDIS_PASSWORD:} # 空字串表示無密碼
@@ -102,7 +102,7 @@ services:
       timeout: 30
     scipy:
       enabled: true
-      use_gpu: ${USE_GPU:false}
+      use_gpu: ${USE_GPU:true}
       batch_size: 50
       quality: "high"  # low, medium, high
     defaults:
@@ -126,27 +126,29 @@ services:
       frames_per_buffer: 9600
       mode: "fixed"
     whisper_buffer:
-      window_seconds: 5
-      step_seconds: 1
+      window_seconds: 8
+      step_seconds: 2
       overlap: 0.8
       mode: "sliding"
 
   # 喚醒詞服務
   wakeword:
-    wakeword_enabled: true
+    enabled: true
     type: "openwakeword"  # openwakeword, porcupine, snowboy
     openwakeword:
-      wakeword_model_path: ${WAKEWORD_MODEL:./models/hi_kmu_0721.onnx}
-      wakeword_threshold: 0.5
-      wakeword_chunk_size: 1280
-      wakeword_sample_rate: 16000
+      model_path: ${WAKEWORD_MODEL:./models/hi_kmu_0721.onnx}
+      threshold: 0.7
+      chunk_size: 1280
+      sample_rate: 16000
       debounce_time: 2.0
       max_buffer_size: 100
       continuous_detection: true
-      wakeword_use_gpu: false
+      use_gpu: false
 
   # 錄音服務
   recording:
+    enabled: true # 是否啟用錄音服務
+    
     # 基本設定
     output_dir: ${RECORDING_DIR:./recordings}
     file_format: "wav" # wav, mp3, flac
@@ -161,32 +163,32 @@ services:
     sample_width: 2 # 2=16-bit, 4=32-bit
 
     # 處理設定
-    recording_max_workers: 10 # 最大並行錄音數
-    recording_batch_size: 10 # 批次處理 chunk 數量
+    max_workers: 10 # 最大並行錄音數（原 recording_max_workers）
+    batch_size: 10 # 批次處理 chunk 數量（原 recording_batch_size）
     wait_timeout: 0.1 # 等待資料超時（秒）
 
     # 檔案管理
-    recording_auto_cleanup: true # 自動清理舊檔案
+    auto_cleanup: true # 自動清理舊檔案（原 recording_auto_cleanup）
     cleanup_days: 7 # 保留天數
     cleanup_schedule: "03:00" # 清理時間 (HH:MM)
     max_file_size_mb: 500 # 單檔最大大小 (MB)
 
   # VAD (Voice Activity Detection) 服務
   vad:
-    vad_enabled: true
+    enabled: true
     type: "silero"  # silero, webrtc
-    silence_threshold: 2.0  # 靜音閾值（秒）- 超過此時間判定為語音結束
+    silence_threshold: 1.2  # 靜音閾值（秒）- 減少到 1.2 秒以提升響應速度
 
     # Silero VAD
     silero:
-      silero_model_path: ${VAD_MODEL_PATH:}
-      threshold: 0.5
-      min_silence_duration: 0.5
-      min_speech_duration: 0.25
-      silero_sample_rate: 16000
-      silero_chunk_size: 512
-      window_size: 512
-      silero_use_gpu: false
+      model_path: ${VAD_MODEL_PATH:}
+      threshold: 0.4  # 降低闾值以更快檢測到語音
+      min_silence_duration: 0.4  # 減少最小靜音時間
+      min_speech_duration: 0.25  # 減少最小語音時間
+      sample_rate: 16000
+      chunk_size: 256  # 減小 chunk size 以提升響應速度
+      window_size: 256  # 減小 window size
+      use_gpu: false
       speech_pad_ms: 30
       return_seconds: false
       max_speech_duration: 60.0
@@ -194,7 +196,7 @@ services:
     webrtc:
       aggressiveness: 2  # 0-3
       frame_duration: 30  # 10, 20, 30 ms
-      webrtc_sample_rate: 16000
+      sample_rate: 16000
 
   # 計時器服務
   timer:
@@ -210,7 +212,7 @@ services:
 
   # 降噪服務
   denoiser:
-    enabled: true
+    enabled: false
     type: "deepfilternet"  # deepfilternet, rnnoise, spectral_subtraction
     strength: 0.7  # 0.0-1.0，降噪強度
     
@@ -219,23 +221,19 @@ services:
       model_base_dir: "DeepFilterNet3"  # DeepFilterNet2, DeepFilterNet3
       post_filter: true  # 啟用後處理濾波器
       auto_init: true   # 啟動時自動初始化模型
-      device: "auto"    # auto, cpu, cuda - 自動選擇最佳設備
+      device: "cuda"    # auto, cpu, cuda - 自動選擇最佳設備
       chunk_size: 16000 # 處理音訊塊大小 (樣本數，1秒@16kHz)
 
   # 音訊增強服務 (MVP 版本)
   audio_enhancer:
-    enabled: true
-    
+    enabled: false
     # RMS 門檻值
-    min_rms_threshold: 0.08  # -22 dBFS，低於此值才增強
-    target_rms: 0.1  # -20 dBFS，目標 RMS
-    
+    min_rms_threshold: 0.005  # 更嚴格的觸發條件
+    target_rms: 0.05          # 更低的目標音量
     # 增益限制
-    max_gain: 5.0  # 最大增益倍數 (約 14 dB)
-    
+    max_gain: 2.0             # 更保守的增益
     # 高通濾波器
     highpass_alpha: 0.95  # 濾波係數 (0.9-0.99)
-    
     # 限幅器
     limiter_threshold: 0.95  # 硬限幅閾值
     
@@ -253,11 +251,11 @@ services:
 
   # 麥克風擷取服務
   microphone:
-    mic_enabled: true
+    enabled: true
     backend: "auto"  # auto, sounddevice, pyaudio
-    mic_sample_rate: 16000
-    mic_channels: 1  # 1=單聲道, 2=立體聲
-    mic_chunk_size: 1024
+    sample_rate: 16000
+    channels: 1  # 1=單聲道, 2=立體聲
+    chunk_size: 1024
     dtype: "float32"  # float32, int16
     queue_size: 100
     device_index: null  # null=預設裝置
@@ -270,17 +268,17 @@ providers:
 
   # Whisper (OpenAI)
   whisper:
-    whisper_enabled: true
-    model_size: ${WHISPER_MODEL:base}  # tiny, base, small, medium, large
+    enabled: true
+    model_size: ${WHISPER_MODEL:turbo}  # tiny, base, small, medium, large, large-v3, turbo
     language: "zh"
-    whisper_device: ${WHISPER_DEVICE:cpu}  # cpu, cuda, mps
-    compute_type: "float32"  # float32, float16, int8
+    whisper_device: ${WHISPER_DEVICE:cuda}  # cpu, cuda, mps
+    compute_type: "int8_float16"  # float32, float16, int8, int8_float16
     use_faster_whisper: true
     whisper_model_path: "./models/whisper"
 
   # FunASR
   funasr:
-    funasr_enabled: false
+    enabled: false
     model: "paraformer"
     language: "zh"
     funasr_device: "cpu"
@@ -288,19 +286,19 @@ providers:
 
   # Vosk
   vosk:
-    vosk_enabled: false
+    enabled: false
     vosk_model_path: "./models/vosk/vosk-model-cn-0.22"
     vosk_sample_rate: 16000
 
   # Google STT
   google_stt:
-    google_enabled: false
+    enabled: false
     credentials_path: ${GOOGLE_APPLICATION_CREDENTIALS:}
     language_code: "zh-TW"
 
   # OpenAI API
   openai:
-    openai_enabled: false
+    enabled: false
     api_key: ${OPENAI_API_KEY:}
     model: "whisper-1"
     language: "zh"
@@ -313,7 +311,7 @@ providers:
     per_session_quota: 2  # 每個 session 最大租用數量
     
     # 健康檢查
-    health_check_enabled: true  # 啟用健康檢查
+    enabled: true  # 啟用健康檢查
     max_consecutive_failures: 3  # 連續失敗次數閾值（超過則標記為不健康）
     
     # 超時設定
@@ -405,7 +403,7 @@ performance:
 
   # 批次處理
   batch:
-    batch_enabled: true
+    enabled: true
     batch_size: 10
     batch_timeout: 1.0
   

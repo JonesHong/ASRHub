@@ -34,8 +34,7 @@ from src.store.sessions.sessions_action import (
     silence_timeout,
     record_started,
     record_stopped,
-    start_asr_sound_effect,
-    stop_asr_sound_effect,
+    play_asr_feedback,
     transcribe_started,
     transcribe_done,
     asr_stream_started,
@@ -128,17 +127,30 @@ def handle_create_session(state: Map, action) -> Map:
     注意：FSM 實例的創建是在 SessionEffects 中處理，
     這裡只處理純粹的狀態更新。
     
-    create_session action 只需要 strategy 參數
+    create_session action 包含 strategy 和 request_id
     audio_config 會在 START_LISTENING 時設定
     """
-    session_id = new_id()
     
-    # 從 payload 取得 strategy
-    # create_session action 現在只傳送 strategy (不是 dict)
-    strategy = action.payload if action.payload else "non_streaming"
+    # 從 payload 取得 strategy, request_id 和 session_id
+    # 處理 immutables.Map 和 dict 兩種格式
+    if hasattr(action.payload, 'get'):  # Map 或 dict 都有 get 方法
+        strategy = action.payload.get('strategy', 'non_streaming')
+        request_id = action.payload.get('request_id')
+        session_id = action.payload.get('session_id')
+    else:
+        # 舊格式相容
+        strategy = action.payload if action.payload else "non_streaming"
+        request_id = None
+        session_id = None
     
-    # 建立新 session
-    new_session = create_initial_session_state(session_id, strategy)
+    # Reducer 是唯一的 session_id 生成點
+    # Reducer 是 session_id 的唯一生成點
+    # 如果沒有提供 session_id，生成新的
+    if not session_id:
+        session_id = new_id()
+    
+    # 建立新 session（包含 request_id 以便 effect 可以建立映射）
+    new_session = create_initial_session_state(session_id, strategy, request_id)
     
     # audio_config 會在 START_LISTENING 時設定，這裡不處理
     
@@ -332,7 +344,10 @@ def handle_transcribe_started(state: Map, action) -> Map:
 
 def handle_transcribe_done(state: Map, action) -> Map:
     """處理轉譯完成"""
-    session_id = action.payload
+    payload = action.payload
+    session_id = payload.get("session_id")
+    result = payload.get("result")  # TranscriptionResult
+    
     session = get_session(state, session_id)
     
     if not session:
@@ -341,11 +356,35 @@ def handle_transcribe_done(state: Map, action) -> Map:
     # 更新統計
     transcriptions_count = session.get("transcriptions_count", 0) + 1
     
-    return update_session(state, session_id, {
+    # 準備更新資料
+    update_data = {
         "is_transcribing": False,
         "status": SessionStatus.IDLE,
         "transcriptions_count": transcriptions_count
-    })
+    }
+    
+    # 如果有轉譯結果，儲存它
+    if result:
+        # 處理 segments
+        segments = []
+        if hasattr(result, 'segments') and result.segments:
+            for seg in result.segments:
+                segments.append({
+                    "text": seg.text if hasattr(seg, 'text') else "",
+                    "start_time": seg.start_time if hasattr(seg, 'start_time') else 0,
+                    "end_time": seg.end_time if hasattr(seg, 'end_time') else 0,
+                    "confidence": seg.confidence if hasattr(seg, 'confidence') else None,
+                })
+        
+        update_data["last_transcription"] = {
+            "full_text": result.full_text if hasattr(result, 'full_text') else None,
+            "language": result.language if hasattr(result, 'language') else None,
+            "duration": result.duration if hasattr(result, 'duration') else None,
+            "processing_time": result.processing_time if hasattr(result, 'processing_time') else None,
+            "segments": segments,
+        }
+    
+    return update_session(state, session_id, update_data)
 
 
 def handle_upload_started(state: Map, action) -> Map:

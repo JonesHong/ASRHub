@@ -411,6 +411,31 @@ get_sessions_with_audio_config = create_selector(
     ]
 )
 
+# === Transcription Selectors ===
+
+def get_session_last_transcription(session_id: str):
+    """取得特定 session 的最後轉譯結果（參數化選擇器）"""
+    def selector(state):
+        # 處理 PyStoreX 的 (old, new) tuple 格式
+        if isinstance(state, tuple) and len(state) == 2:
+            state = state[1]
+        sessions_state = get_sessions_state(state)
+        session = _get_session_by_id_impl(sessions_state, session_id)
+        
+        if not session:
+            return None
+        
+        return session.get("last_transcription")
+    return selector
+
+get_sessions_with_transcriptions = create_selector(
+    get_all_sessions,
+    result_fn=lambda sessions: [
+        s for s in sessions.values()
+        if s.get("last_transcription") is not None
+    ]
+)
+
 # === Audio Processing Selectors ===
 
 get_sessions_needing_processing = create_selector(

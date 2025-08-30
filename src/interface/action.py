@@ -54,10 +54,8 @@ class Action:
     """錄音停止 (必選參數: session_id)"""
     
     # Playback
-    START_ASR_SOUND_EFFECT = "start_asr_sound_effect"
-    """開始播放 ASR 音效 (必選參數: session_id)"""
-    STOP_ASR_SOUND_EFFECT = "stop_asr_sound_effect"
-    """停止播放 ASR 音效 (必選參數: session_id)"""
+    PLAY_ASR_FEEDBACK = "play_asr_feedback"
+    """播放 ASR 回饋音 (必選參數: session_id, command)"""
 
     # Transcription
     TRANSCRIBE_STARTED = "transcribe_started"
@@ -189,10 +187,8 @@ class OutputAction(Action):
     """
     系統輸出，要發給 client 或其他服務的事件（結果、通知）
     """
-    START_ASR_SOUND_EFFECT = Action.START_ASR_SOUND_EFFECT
-    """開始播放 ASR 音效 (必選參數: session_id)"""
-    STOP_ASR_SOUND_EFFECT = Action.STOP_ASR_SOUND_EFFECT
-    """停止播放 ASR 音效 (必選參數: session_id)"""
+    PLAY_ASR_FEEDBACK = Action.PLAY_ASR_FEEDBACK
+    """播放 ASR 回饋音 (必選參數: session_id, command)"""
     TRANSCRIBE_DONE = Action.TRANSCRIBE_DONE
     """完成轉譯 (必選參數: session_id)"""
     ERROR_REPORTED = Action.ERROR_REPORTED

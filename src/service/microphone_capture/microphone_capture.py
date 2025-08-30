@@ -43,11 +43,20 @@ class MicrophoneCapture(SingletonMixin,IMicrophoneService):
     def __init__(self):
         """初始化麥克風服務。"""
         if not hasattr(self, '_initialized'):
-            self._initialized = True
+            self._initialized = False
             
             # 載入配置
             config = ConfigManager()
-            self.mic_config = config.services.microphone
+            if hasattr(config, 'services') and hasattr(config.services, 'microphone'):
+                self.mic_config = config.services.microphone
+            else:
+                logger.warning("麥克風配置不存在")
+                return
+            
+            # 檢查是否啟用
+            if not self.mic_config.enabled:
+                logger.info("Microphone 服務已停用 (enabled: false)")
+                return
             
             # 選擇後端
             backend_preference = self.mic_config.backend
@@ -78,10 +87,10 @@ class MicrophoneCapture(SingletonMixin,IMicrophoneService):
                     logger.error(f"Requested backend {backend_preference} not available")
                     self._backend = None
             
-            # 音訊參數 - 從配置載入
-            self._sample_rate = self.mic_config.mic_sample_rate
-            self._channels = self.mic_config.mic_channels
-            self._chunk_size = self.mic_config.mic_chunk_size
+            # 音訊參數 - 使用統一後的欄位名稱（移除 mic_ 前綴）
+            self._sample_rate = self.mic_config.sample_rate
+            self._channels = self.mic_config.channels
+            self._chunk_size = self.mic_config.chunk_size
             # 強制使用 int16 格式，提供更好的 OpenWakeWord 相容性
             self._dtype = np.int16
             logger.info(f"Microphone capture forced to use int16 format for optimal compatibility")
@@ -97,6 +106,7 @@ class MicrophoneCapture(SingletonMixin,IMicrophoneService):
             self._audio_queue = queue.Queue(maxsize=self.mic_config.queue_size)
             self._lock = threading.Lock()
             
+            self._initialized = True
             logger.info(f"MicrophoneCapture initialized with backend: {self._backend}")
     
     def start_capture(self, callback: Optional[Callable] = None) -> bool:
@@ -259,9 +269,9 @@ class MicrophoneCapture(SingletonMixin,IMicrophoneService):
             return False
         
         # 使用配置預設值
-        self._sample_rate = sample_rate or self.mic_config.mic_sample_rate
-        self._channels = channels or self.mic_config.mic_channels
-        self._chunk_size = chunk_size or self.mic_config.mic_chunk_size
+        self._sample_rate = sample_rate or self.mic_config.sample_rate
+        self._channels = channels or self.mic_config.channels
+        self._chunk_size = chunk_size or self.mic_config.chunk_size
         
         # 確保 dtype 始終是 int16
         self._dtype = np.int16
@@ -306,9 +316,9 @@ class MicrophoneCapture(SingletonMixin,IMicrophoneService):
             if self._callback:
                 try:
                     # 記錄發送的音訊格式（只記錄第一次）
-                    if not hasattr(self, '_first_callback_logged'):
-                        self._first_callback_logged = True
-                        logger.info(f"📤 [MIC_CAPTURE->CALLBACK] First audio sent: shape={audio_data.shape}, dtype={audio_data.dtype}, sample_rate={self._sample_rate}")
+                    # if not hasattr(self, '_first_callback_logged'):
+                    #     self._first_callback_logged = True
+                    #     logger.info(f"📤 [MIC_CAPTURE->CALLBACK] First audio sent: shape={audio_data.shape}, dtype={audio_data.dtype}, sample_rate={self._sample_rate}")
                     self._callback(audio_data, self._sample_rate)
                 except Exception as e:
                     logger.error(f"Callback error: {e}")

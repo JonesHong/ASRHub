@@ -115,11 +115,15 @@ class ProviderPoolManager:
             'queue_wait_times': [],  # 最近100次等待時間
         }
         
-        # 預創建最小數量的 providers
-        self._initialize_pool()
+        # 延遲載入標記
+        self._pool_initialized = False
+        self._initialization_lock = Lock()
+        
+        # 延遲載入：不在 __init__ 中創建 providers
+        # self._initialize_pool()  # 改為第一次 lease 時才初始化
         
         logger.info(
-            f"🚀 ProviderPoolManager 初始化: "
+            f"🚀 ProviderPoolManager 初始化 (延遲載入模式): "
             f"min={self.config.min_size}, max={self.config.max_size}, "
             f"type={self.config.provider_type}"
         )
@@ -178,6 +182,147 @@ class ProviderPoolManager:
         )
         return provider
     
+    def _ensure_pool_initialized(self):
+        """確保 pool 已初始化（延遲載入）"""
+        if not self._pool_initialized:
+            with self._initialization_lock:
+                # Double-check locking pattern
+                if not self._pool_initialized:
+                    logger.info("🔄 第一次使用，開始延遲載入 provider pool...")
+                    
+                    # 只創建一個 provider（而不是 min_size 個）
+                    # 這樣可以更快啟動，其他的按需創建
+                    if self.config.min_size > 0:
+                        try:
+                            provider = self._create_provider()
+                            self._available.append(provider)
+                            logger.info("✅ 延遲載入：創建第一個 provider 成功")
+                        except Exception as e:
+                            logger.error(f"❌ 延遲載入失敗: {e}")
+                    
+                    self._pool_initialized = True
+    
+    def warm_up(self, wait_for_completion: bool = False):
+        """主動 warm up - 創建第一個 provider 並載入模型
+        
+        Args:
+            wait_for_completion: 是否等待模型載入完成才返回
+        
+        這個方法可以在服務啟動後立即調用，在背景預載模型。
+        不會阻塞主執行緒，返回後模型會在背景載入。
+        """
+        try:
+            # 1. 確保 pool 已初始化
+            self._ensure_pool_initialized()
+            
+            # 2. 如果池是空的，創建第一個 provider
+            with self._lock:
+                if len(self._available) == 0 and len(self._all_providers) < self.config.max_size:
+                    logger.info("🔥 Warm up: 創建第一個 provider...")
+                    try:
+                        provider = self._create_provider()
+                        self._available.append(provider)
+                        logger.info("✅ Warm up provider 創建成功")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Warm up 創建 provider 失敗: {e}")
+                else:
+                    logger.debug(f"Warm up: 已有 {len(self._available)} 個可用 provider")
+            
+            # 3. 同時觸發模型載入（如果使用共享模型）
+            future = None
+            try:
+                from src.provider.whisper.model_loader import model_loader
+                from src.config.manager import ConfigManager
+                
+                config = ConfigManager()
+                if hasattr(config, 'providers') and hasattr(config.providers, 'whisper'):
+                    whisper_config = config.providers.whisper
+                    
+                    # 使用相同的 compute_type 解決邏輯
+                    from src.provider.whisper.faster_whisper_provider import _resolve_compute_type
+                    resolved_compute_type = _resolve_compute_type(
+                        whisper_config.whisper_device or "cpu",
+                        whisper_config.compute_type
+                    )
+                    
+                    # 檢查模型是否已載入
+                    model_key = model_loader._get_model_key(
+                        "faster-whisper",
+                        whisper_config.model_size or "base",
+                        whisper_config.whisper_device or "cpu",
+                        resolved_compute_type
+                    )
+                    
+                    status = model_loader.get_status()
+                    if model_key not in status['loaded_models']:
+                        logger.info(f"🔥 Warm up: 觸發模型載入 ({model_key})...")
+                        # 背景載入模型
+                        future = model_loader.preload_model_async(
+                            model_type="faster-whisper",
+                            model_name=whisper_config.model_size or "base",
+                            device=whisper_config.whisper_device or "cpu",
+                            compute_type=resolved_compute_type
+                        )
+                        logger.info("📋 模型背景載入已啟動")
+                        
+                        # 如果需要等待完成
+                        if wait_for_completion:
+                            return self._wait_for_model_completion(model_loader, whisper_config)
+                    else:
+                        logger.debug(f"模型已載入: {model_key}")
+                        
+            except Exception as e:
+                logger.debug(f"模型預載過程中的錯誤（非關鍵）: {e}")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Warm up 失敗（非關鍵）: {e}")
+            
+        return True
+    
+    def _wait_for_model_completion(self, model_loader, whisper_config):
+        """等待模型載入完成"""
+        import time
+        
+        model_name = whisper_config.model_size or "base"
+        device = whisper_config.whisper_device or "cpu"
+        
+        # 使用相同的 compute_type 解決邏輯
+        from src.provider.whisper.faster_whisper_provider import _resolve_compute_type
+        compute_type = _resolve_compute_type(device, whisper_config.compute_type)
+        
+        logger.info(f"⏳ 等待 Whisper 模型載入: {model_name} on {device}")
+        
+        # 真正等待模型載入完成
+        max_wait_time = 120  # 最大等待 2 分鐘
+        check_interval = 2   # 每 2 秒檢查一次
+        total_checks = max_wait_time // check_interval
+        
+        for i in range(total_checks):
+            # 檢查模型是否已載入
+            is_ready = model_loader.is_model_ready("faster-whisper", model_name, device, compute_type)
+            
+            if is_ready:
+                logger.success(f"✅ 模型載入完成: {model_name} on {device}")
+                return True
+            
+            # 等待並顯示進度
+            time.sleep(check_interval)
+            if (i + 1) % 5 == 0:  # 每 10 秒顯示一次進度
+                elapsed = (i + 1) * check_interval
+                logger.info(f"⏳ 載入中... ({elapsed}/{max_wait_time}s)")
+                
+                # 檢查載入狀態
+                status = model_loader.get_status()
+                if status['loading_status']:
+                    loading_models = [k for k, v in status['loading_status'].items() if v == 'loading']
+                    if loading_models:
+                        logger.info(f"   正在載入: {loading_models[0]}")
+        
+        # 如果超時仍未載入完成，給出警告但繼續
+        logger.warning(f"⚠️ 模型載入超時 ({max_wait_time}s)，將繼續啟動服務")
+        logger.info("   首次 ASR 請求會觸發模型載入")
+        return False
+    
     def lease(self, session_id: str, 
               timeout: float = 5.0) -> Tuple[Optional[IASRProvider], Optional[PoolError]]:
         """租借一個 provider（含優先佇列）
@@ -189,6 +334,9 @@ class ProviderPoolManager:
         Returns:
             (Provider 實例, 錯誤碼) 元組
         """
+        
+        # 延遲載入：確保 pool 已初始化
+        self._ensure_pool_initialized()
         
         # Phase 2: 含優先佇列實作
         with self._lock:
@@ -599,10 +747,14 @@ class ProviderPoolManager:
 # 模組級單例 - 按需創建以避免循環依賴
 # 使用時應該通過 get_provider_manager() 函數取得
 _provider_manager = None
+_provider_manager_lock = Lock()
 
 def get_provider_manager():
-    """獲取 provider manager 單例"""
+    """獲取 provider manager 單例（執行緒安全）"""
     global _provider_manager
     if _provider_manager is None:
-        _provider_manager = ProviderPoolManager()
+        with _provider_manager_lock:
+            # Double-check locking pattern
+            if _provider_manager is None:
+                _provider_manager = ProviderPoolManager()
     return _provider_manager

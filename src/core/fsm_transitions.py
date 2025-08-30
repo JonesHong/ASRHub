@@ -23,7 +23,7 @@ BatchPlugin = StrategyPlugin(
     states=[State.UPLOADING, State.TRANSCRIBING],
     transitions=[
         make_transition(Action.UPLOAD_STARTED, State.IDLE, State.UPLOADING),
-        make_transition(Action.UPLOAD_COMPLETED, State.PROCESSING, State.PROCESSING),
+        make_transition(Action.UPLOAD_COMPLETED, State.UPLOADING, State.PROCESSING),
         make_transition(Action.TRANSCRIBE_STARTED, State.PROCESSING, State.TRANSCRIBING),
         make_transition(Action.TRANSCRIBE_DONE, State.TRANSCRIBING, State.IDLE),
     ],

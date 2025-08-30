@@ -87,7 +87,8 @@ class DeepFilterNetDenoiser(SingletonMixin):
             if hasattr(self, '_initialized'):
                 return
                 
-            self._initialized = True
+            self._initialized = False
+            self.enabled = False
             self._model = None
             self._df_state = None
             self.internal_sample_rate = 48000  # DeepFilterNet 內部處理採樣率
@@ -97,42 +98,56 @@ class DeepFilterNetDenoiser(SingletonMixin):
             # 載入配置
             self._load_config()
             
-            # 初始化 DeepFilterNet 模型 (延遲初始化)
-            if self.enabled and self.auto_init and HAS_TORCH:
-                try:
-                    self._initialize_model()
-                except Exception as e:
-                    logger.warning(f"🔧 DeepFilterNet 模型初始化失敗，將在首次使用時重試: {e}")
-            elif self.enabled and not HAS_TORCH:
-                logger.warning("⚠️ DeepFilterNet 需要 PyTorch，但 PyTorch 未安裝。降噪功能將被停用。")
-                self.enabled = False
+            if self.enabled:
+                # 初始化 DeepFilterNet 模型 (延遲初始化)
+                if self.auto_init and HAS_TORCH:
+                    try:
+                        self._initialize_model()
+                        self._initialized = True
+                    except Exception as e:
+                        logger.warning(f"🔧 DeepFilterNet 模型初始化失敗，將在首次使用時重試: {e}")
+                elif not HAS_TORCH:
+                    logger.warning("⚠️ DeepFilterNet 需要 PyTorch，但 PyTorch 未安裝。降噪功能將被停用。")
+                    self.enabled = False
+                else:
+                    self._initialized = True
                     
-            logger.info("🔇 DeepFilterNet 服務初始化完成")
+                logger.info("🔇 DeepFilterNet 服務初始化完成")
+            else:
+                logger.info("DeepFilterNet 服務已停用 (enabled: false)")
     
     def _load_config(self):
         """載入降噪服務配置"""
         config = ConfigManager()
+        
+        # 檢查配置是否存在
+        if not hasattr(config, 'services') or not hasattr(config.services, 'denoiser'):
+            logger.warning("Denoiser 配置不存在")
+            return
+            
         denoiser_config = config.services.denoiser
         
+        # 使用統一的 enabled 欄位
         self.enabled = denoiser_config.enabled
+        
+        if not self.enabled:
+            return
+            
         self.type = denoiser_config.type
         self.strength = denoiser_config.strength
         
-        # 擴展配置以支援 DeepFilterNet
+        # 擴展配置以支援 DeepFilterNet - 不使用 getattr 預設值
         if hasattr(denoiser_config, 'deepfilternet'):
             dfn_config = denoiser_config.deepfilternet
-            self.model_base_dir = dfn_config.model_base_dir if hasattr(dfn_config, 'model_base_dir') else "DeepFilterNet3"
-            self.post_filter = dfn_config.post_filter if hasattr(dfn_config, 'post_filter') else True
-            self.auto_init = dfn_config.auto_init if hasattr(dfn_config, 'auto_init') else True
-            self.device = dfn_config.device if hasattr(dfn_config, 'device') else 'auto'  # auto, cpu, cuda
-            self.chunk_size = dfn_config.chunk_size if hasattr(dfn_config, 'chunk_size') else 16000  # 1秒音訊塊
+            self.model_base_dir = dfn_config.model_base_dir
+            self.post_filter = dfn_config.post_filter
+            self.auto_init = dfn_config.auto_init
+            self.device = dfn_config.device
+            self.chunk_size = dfn_config.chunk_size
         else:
-            # 預設配置
-            self.model_base_dir = "DeepFilterNet3"
-            self.post_filter = True
-            self.auto_init = True
-            self.device = 'auto'
-            self.chunk_size = 16000
+            logger.error("DeepFilterNet 配置不存在")
+            self.enabled = False
+            return
             
         # 使用改進的設備選擇邏輯
         # 保存原始配置值

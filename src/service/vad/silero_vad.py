@@ -68,15 +68,19 @@ class SileroVAD(SingletonMixin, IVADService):
             
             logger.info("SileroVAD 初始化")
             
-            # 自動初始化
-            try:
-                if self._config and self._config.model_path:
+            # 服務已經通過 service_loader 檢查了 enabled
+            # 如果能到這裡，表示服務已啟用
+            if self._config:
+                # 自動初始化
+                try:
                     self._load_model()
                     self._initialized = True
                     logger.info("Silero VAD 自動初始化成功")
-            except Exception as e:
-                logger.error(f"Silero VAD 自動初始化失敗: {e}")
-                # 允許稍後重試，不拋出錯誤
+                except Exception as e:
+                    logger.error(f"Silero VAD 自動初始化失敗: {e}")
+                    # 允許稍後重試，不拋出錯誤
+            else:
+                logger.warning("Silero VAD 配置載入失敗")
     
     def _load_config(self) -> Optional[VADConfig]:
         """從 ConfigManager 載入設定"""
@@ -84,23 +88,24 @@ class SileroVAD(SingletonMixin, IVADService):
             if hasattr(config_manager, 'services') and hasattr(config_manager.services, 'vad'):
                 vad_config = config_manager.services.vad
                 
-                # 檢查是否啟用且類型為 silero
-                if vad_config.vad_enabled and vad_config.type == "silero":
-                    # 現在可以直接使用 yaml2py 生成的 silero 子配置
+                # 服務已經通過 service_loader 檢查了 enabled
+                # 檢查類型為 silero
+                if vad_config.type == "silero":
+                    # 使用統一後的欄位名稱（移除 silero_ 前綴）
                     cfg = vad_config.silero
                     return VADConfig(
                         threshold=cfg.threshold,
                         min_speech_duration=cfg.min_speech_duration,
                         min_silence_duration=cfg.min_silence_duration,
-                        sample_rate=cfg.silero_sample_rate,
-                        chunk_size=cfg.silero_chunk_size,
-                        use_gpu=cfg.silero_use_gpu,
-                        model_path=cfg.silero_model_path
+                        sample_rate=cfg.sample_rate,
+                        chunk_size=cfg.chunk_size,
+                        use_gpu=cfg.use_gpu,
+                        model_path=cfg.model_path
                     )
-            return VADConfig()  # 使用預設值
+            return None  # 不返回預設配置
         except Exception as e:
             logger.warning(f"載入配置失敗: {e}")
-            return VADConfig()
+            return None
     
     def _ensure_initialized(self) -> bool:
         """確保服務已初始化
@@ -207,12 +212,12 @@ class SileroVAD(SingletonMixin, IVADService):
             raise VADInitializationError("服務尚未初始化")
         
         # 記錄接收到的音訊格式（只記錄第一次）
-        if not hasattr(self, '_first_vad_logged'):
-            self._first_vad_logged = {}
-        if session_id not in self._first_vad_logged:
-            self._first_vad_logged[session_id] = True
-            logger.info(f"🎙️ [VAD_RECEIVED] First audio for VAD session {session_id}: shape={audio_data.shape}, dtype={audio_data.dtype}, "
-                       f"min={audio_data.min():.4f}, max={audio_data.max():.4f}")
+        # if not hasattr(self, '_first_vad_logged'):
+        #     self._first_vad_logged = {}
+        # if session_id not in self._first_vad_logged:
+        #     self._first_vad_logged[session_id] = True
+        #     logger.info(f"🎙️ [VAD_RECEIVED] First audio for VAD session {session_id}: shape={audio_data.shape}, dtype={audio_data.dtype}, "
+        #                f"min={audio_data.min():.4f}, max={audio_data.max():.4f}")
         
         # 驗證輸入
         if not isinstance(audio_data, np.ndarray):

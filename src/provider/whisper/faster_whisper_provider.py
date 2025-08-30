@@ -29,6 +29,25 @@ from src.interface.exceptions import (
 from src.config.manager import ConfigManager
 
 
+def _resolve_compute_type(device: str, compute_type: str) -> str:
+    """解決 compute_type 以確保跨模組一致性
+    
+    Args:
+        device: 設備 (cpu, cuda, mps)
+        compute_type: 原始 compute_type
+        
+    Returns:
+        解決後的 compute_type
+    """
+    if device == "cpu":
+        if compute_type not in ["int8", "float32"]:
+            return "int8"
+    else:  # GPU (cuda, mps)
+        if compute_type not in ["float16", "int8_float16"]:
+            return "float16"
+    return compute_type
+
+
 class FasterWhisperProvider(IASRProvider):
     """簡化版 Faster-Whisper ASR 提供者
     
@@ -69,16 +88,14 @@ class FasterWhisperProvider(IASRProvider):
             self._model = None
             self._config = None
             self._transcribe_lock = threading.Lock()  # 確保執行緒安全
+            self._use_shared_model = True  # 使用共享模型
             
-            # 自動載入配置和模型
+            # 載入配置（但不載入模型）
             self._load_config()
-            if self._config:
-                try:
-                    self._load_model()
-                    self._initialized = True
-                    logger.info(f"FasterWhisperProvider MVP 初始化成功 (singleton={singleton})")
-                except Exception as e:
-                    logger.error(f"模型載入失敗: {e}")
+            self._initialized = True
+            
+            # 不在這裡載入模型，改為使用共享的 model_loader
+            logger.info(f"FasterWhisperProvider 初始化成功 (singleton={singleton}, shared_model={self._use_shared_model})")
     
     def _load_config(self) -> None:
         """從 ConfigManager 載入配置"""
@@ -87,14 +104,11 @@ class FasterWhisperProvider(IASRProvider):
             if hasattr(config_manager, 'providers') and hasattr(config_manager.providers, 'whisper'):
                 whisper_config = config_manager.providers.whisper
                 
-                # 決定 compute_type
-                compute_type = whisper_config.compute_type
-                if whisper_config.whisper_device == "cpu":
-                    if compute_type not in ["int8", "float32"]:
-                        compute_type = "int8"
-                else:  # GPU
-                    if compute_type not in ["float16", "int8_float16"]:
-                        compute_type = "float16"
+                # 決定 compute_type（使用共用邏輯）
+                compute_type = _resolve_compute_type(
+                    whisper_config.whisper_device or "cpu",
+                    whisper_config.compute_type
+                )
                 
                 self._config = ASRConfig(
                     model_name=whisper_config.model_size or "base",
@@ -112,8 +126,32 @@ class FasterWhisperProvider(IASRProvider):
                 compute_type="int8"
             )
     
+    def _get_model(self):
+        """獲取模型（使用共享的 model_loader）"""
+        if self._use_shared_model:
+            # 使用共享模型
+            from src.provider.whisper.model_loader import model_loader
+            
+            model, status = model_loader.get_model(
+                model_type="faster-whisper",
+                model_name=self._config.model_name,
+                device=self._config.device,
+                compute_type=self._config.compute_type,
+                wait=True  # 等待模型載入
+            )
+            
+            if status != "ready" or model is None:
+                raise ServiceInitializationError(f"無法載入共享模型: status={status}")
+            
+            return model
+        else:
+            # 舊的載入方式（為了相容性保留）
+            if self._model is None:
+                self._load_model()
+            return self._model
+    
     def _load_model(self) -> None:
-        """載入 Faster-Whisper 模型"""
+        """載入 Faster-Whisper 模型（舊方法，為相容性保留）"""
         try:
             from faster_whisper import WhisperModel
         except ImportError as e:
@@ -142,11 +180,14 @@ class FasterWhisperProvider(IASRProvider):
         Returns:
             轉譯結果
         """
-        if not self._initialized or not self._model:
+        if not self._initialized:
             raise ServiceInitializationError("服務未初始化")
         
         if not Path(file_path).exists():
             raise ServiceExecutionError(f"檔案不存在: {file_path}")
+        
+        # 獲取模型（延遲載入或共享模型）
+        model = self._get_model()
         
         start_time = time.time()
         
@@ -154,7 +195,7 @@ class FasterWhisperProvider(IASRProvider):
             # 使用 lock 確保執行緒安全
             with self._transcribe_lock:
                 # 執行轉譯
-                segments_gen, info = self._model.transcribe(
+                segments_gen, info = model.transcribe(
                     file_path,
                     language=self._config.language,
                     task="transcribe",

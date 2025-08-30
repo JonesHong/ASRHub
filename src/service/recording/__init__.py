@@ -1,8 +1,16 @@
-"""錄音服務
+"""Recording Service Module - 條件式載入
 
-從 AudioQueueManager 取得音訊 chunks 並寫入本地檔案。
+只在服務啟用時才載入 Recording。
 """
 
-from .recording import recording, Recording
+from src.service.service_loader import lazy_load_service
 
-__all__ = ['recording', 'Recording']
+# 使用延遲載入 - 只在第一次使用時檢查配置並載入
+recording = lazy_load_service(
+    service_path='src.service.recording.recording',
+    class_name='Recording',
+    instance_name='recording',
+    config_path='services.recording'
+)
+
+__all__ = ['recording']

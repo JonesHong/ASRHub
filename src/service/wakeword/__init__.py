@@ -1,9 +1,16 @@
-"""Wakeword detection service module
+"""Wakeword detection service module - 條件式載入
 
-Module-level singleton instance for OpenWakeWord service.
+只在服務啟用時才載入 OpenWakeword。
 """
 
-# 匯出 OpenWakeword 服務
-from .openwakeword import OpenWakeword, openwakeword
+from src.service.service_loader import lazy_load_service
 
-__all__ = ['OpenWakeword', 'openwakeword']
+# 使用延遲載入 - 只在第一次使用時檢查配置並載入
+openwakeword = lazy_load_service(
+    service_path='src.service.wakeword.openwakeword',
+    class_name='OpenWakeword',
+    instance_name='openwakeword',
+    config_path='services.wakeword'
+)
+
+__all__ = ['openwakeword']

@@ -25,6 +25,7 @@ class SessionState(TypedDict):
     
     # === 基本資訊 ===
     session_id: str  # Session 唯一識別碼 (UUID v7)
+    request_id: Optional[str]  # 請求 ID，用於關聯客戶端請求
     strategy: str  # 轉譯策略: batch, non_streaming, streaming
     status: str  # 當前狀態: idle, listening, processing, transcribing, replying, error
     created_at: float  # 建立時間 (timestamp)
@@ -71,7 +72,8 @@ class SessionsState(TypedDict):
 
 def create_initial_session_state(
     session_id: str,
-    strategy: str = "non_streaming"
+    strategy: str = "non_streaming",
+    request_id: Optional[str] = None
 ) -> SessionState:
     """
     建立初始的 Session 狀態
@@ -79,6 +81,7 @@ def create_initial_session_state(
     Args:
         session_id: Session ID
         strategy: 轉譯策略
+        request_id: 請求 ID (optional)
         
     Returns:
         初始化的 SessionState
@@ -87,6 +90,7 @@ def create_initial_session_state(
     return SessionState(
         # 基本資訊
         session_id=session_id,
+        request_id=request_id,
         strategy=strategy,
         status="idle",
         created_at=now,

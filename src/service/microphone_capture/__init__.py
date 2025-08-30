@@ -1,8 +1,16 @@
-"""麥克風擷取服務
+"""Microphone Capture Service Module - 條件式載入
 
-提供本地麥克風音訊擷取功能。
+只在服務啟用時才載入 MicrophoneCapture。
 """
 
-from .microphone_capture import microphone_capture, MicrophoneCapture
+from src.service.service_loader import lazy_load_service
 
-__all__ = ['microphone_capture', 'MicrophoneCapture']
+# 使用延遲載入 - 只在第一次使用時檢查配置並載入
+microphone_capture = lazy_load_service(
+    service_path='src.service.microphone_capture.microphone_capture',
+    class_name='MicrophoneCapture',
+    instance_name='microphone_capture',
+    config_path='services.microphone'
+)
+
+__all__ = ['microphone_capture']

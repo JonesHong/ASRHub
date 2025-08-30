@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-完整測試 ASRHub 管道流程
+ASRHub 單機模式 (Standalone Mode)
 
-測試項目：
+完整的單機版本，不依賴外部輸出。
+包含完整的 ASR 管道流程：
+
 1. 麥克風擷取 (int16 格式)
 2. 關鍵字檢測 (OpenWakeWord)
 3. VAD 檢測 (Silero VAD)
@@ -12,6 +14,12 @@
 透過 PyStoreX 事件驅動和無狀態服務組合
 """
 
+# 添加 src 到路徑
+import os
+import sys
+
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../'))
 # 靜音 ctranslate2 的 pkg_resources 警告
 import warnings
 
@@ -55,19 +63,19 @@ class ASRHubPipelineTest:
         self.action_subscription = None  # PyStoreX action stream 訂閱
         
         # 測試統計
-        self.wakeword_count = 0      # 關鍵字檢測次數
-        self.vad_speech_count = 0    # VAD 語音檢測次數
-        self.vad_silence_count = 0   # VAD 靜音檢測次數
-        self.recording_count = 0     # 錄音次數
-        self.transcription_count = 0 # 轉譯次數
-        self.audio_count = 0         # 音訊 chunks 數
+        # self.wakeword_count = 0      # 關鍵字檢測次數
+        # self.vad_speech_count = 0    # VAD 語音檢測次數
+        # self.vad_silence_count = 0   # VAD 靜音檢測次數
+        # self.recording_count = 0     # 錄音次數
+        # self.transcription_count = 0 # 轉譯次數
+        # self.audio_count = 0         # 音訊 chunks 數
         
         # 音訊格式檢查
         # self.received_dtypes = set()
         # self.audio_ranges = []
         
         # 最近的轉譯結果
-        self.last_transcriptions = []
+        # self.last_transcriptions = []
         
         # 設定信號處理器
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -104,21 +112,24 @@ class ASRHubPipelineTest:
         # 監聽 VAD 事件
         def on_vad_speech(state):
             """VAD 檢測到語音"""
-            self.vad_speech_count += 1
-            current_time = time.time() - self.start_time if self.start_time else 0
-            logger.info(f"🎤 VAD: 檢測到語音 @ {current_time:.2f}s (總計: {self.vad_speech_count} 次)")
+            # self.vad_speech_count += 1
+            # current_time = time.time() - self.start_time if self.start_time else 0
+            # logger.info(f"🎤 VAD: 檢測到語音 @ {current_time:.2f}s (總計: {self.vad_speech_count} 次)")
+            pass
         
         def on_vad_silence(state):
             """VAD 檢測到靜音"""
-            self.vad_silence_count += 1
-            current_time = time.time() - self.start_time if self.start_time else 0
-            logger.debug(f"🤫 VAD: 檢測到靜音 @ {current_time:.2f}s (總計: {self.vad_silence_count} 次)")
+            # self.vad_silence_count += 1
+            # current_time = time.time() - self.start_time if self.start_time else 0
+            # logger.debug(f"🤫 VAD: 檢測到靜音 @ {current_time:.2f}s (總計: {self.vad_silence_count} 次)")
+            pass
         
         def on_recording_started(state):
             """開始錄音"""
-            self.recording_count += 1
-            current_time = time.time() - self.start_time if self.start_time else 0
-            logger.info(f"⏺️ 開始錄音 @ {current_time:.2f}s (第 {self.recording_count} 次)")
+            pass
+            # self.recording_count += 1
+            # current_time = time.time() - self.start_time if self.start_time else 0
+            # logger.info(f"⏺️ 開始錄音 @ {current_time:.2f}s (第 {self.recording_count} 次)")
         
         def on_recording_stopped(state):
             """停止錄音"""
@@ -127,7 +138,7 @@ class ASRHubPipelineTest:
         
         def on_transcription_done(state):
             """轉譯完成"""
-            self.transcription_count += 1
+            # self.transcription_count += 1
             current_time = time.time() - self.start_time if self.start_time else 0
             
             # 嘗試從 state 取得轉譯結果
@@ -139,15 +150,17 @@ class ASRHubPipelineTest:
                     if result and hasattr(result, 'full_text'):
                         text = result.full_text.strip()
                         if text:
-                            self.last_transcriptions.append(text)
+                            # self.last_transcriptions.append(text)
                             logger.info(f"📝 轉譯結果: \"{text}\" @ {current_time:.2f}s")
                         else:
                             logger.warning(f"📝 轉譯結果為空 @ {current_time:.2f}s")
                 else:
-                    logger.info(f"📝 轉譯完成 @ {current_time:.2f}s (總計: {self.transcription_count} 次)")
+                    # logger.info(f"📝 轉譯完成 @ {current_time:.2f}s (總計: {self.transcription_count} 次)")
+                    pass
             except Exception as e:
                 logger.debug(f"無法取得轉譯結果: {e}")
-                logger.info(f"📝 轉譯完成 @ {current_time:.2f}s (總計: {self.transcription_count} 次)")
+                # logger.info(f"📝 轉譯完成 @ {current_time:.2f}s (總計: {self.transcription_count} 次)")
+                pass
         
         # 訂閱事件的處理函數
         def handle_action(action):
@@ -181,8 +194,9 @@ class ASRHubPipelineTest:
                 on_transcription_done(state)
             elif action_type == '[Session] Wake Activated':
                 # 也計數喚醒事件
-                self.wakeword_count += 1
-                logger.info(f"🎯 喚醒事件觸發 (總計: {self.wakeword_count} 次)")
+                # self.wakeword_count += 1
+                # logger.info(f"🎯 喚醒事件觸發 (總計: {self.wakeword_count} 次)")
+                pass
         
         # 訂閱 action stream
         self.action_subscription = store._action_subject.subscribe(handle_action)
@@ -242,8 +256,8 @@ class ASRHubPipelineTest:
         logger.info("✅ Store 事件監聽器已設定")
         
         # 初始化服務
-        if not openwakeword.is_initialized():
-            openwakeword.initialize()
+        # if not openwakeword.is_initialized():
+        #     openwakeword.initialize()
         
         # 設定麥克風參數（現在應該強制 int16）
         success = microphone_capture.set_parameters(
@@ -297,15 +311,15 @@ class ASRHubPipelineTest:
         logger.info(f"已為 session {self.session_id} 設定音訊配置")
         
         # 開始監聽服務
-        logger.info(f"🔍 開始 OpenWakeWord 監聽，session_id: {self.session_id}")
-        wakeword_success = openwakeword.start_listening(
-            session_id=self.session_id,
-            callback=self.on_wakeword_detected
-        )
-        logger.info(f"✅ OpenWakeWord 監聽狀態: {wakeword_success}")
+        # logger.info(f"🔍 開始 OpenWakeWord 監聽，session_id: {self.session_id}")
+        # wakeword_success = openwakeword.start_listening(
+        #     session_id=self.session_id,
+        #     callback=self.on_wakeword_detected
+        # )
+        # logger.info(f"✅ OpenWakeWord 監聽狀態: {wakeword_success}")
         
-        if not wakeword_success:
-            raise RuntimeError("無法啟動 OpenWakeword 服務")
+        # if not wakeword_success:
+        #     raise RuntimeError("無法啟動 OpenWakeword 服務")
         
         # 啟動麥克風擷取
         logger.info("🎙️ 開始麥克風擷取...")

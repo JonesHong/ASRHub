@@ -19,6 +19,9 @@ websockets
 python-socketio
 aiohttp
 
+# Redis
+redis-toolkit
+
 # 音訊處理
 numpy
 scipy>=1.11.0  # 高品質音訊重新取樣

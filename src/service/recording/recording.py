@@ -41,7 +41,18 @@ class Recording(SingletonMixin, IRecordingService):
             
             # 從 ConfigManager 載入配置
             self._config = ConfigManager()
+            
+            # 檢查配置是否存在
+            if not hasattr(self._config, 'services') or not hasattr(self._config.services, 'recording'):
+                logger.warning("Recording 配置不存在")
+                return
+                
             self._recording_config = self._config.services.recording
+            
+            # 檢查是否啟用
+            if not self._recording_config.enabled:
+                logger.info("Recording 服務已停用 (enabled: false)")
+                return
             
             # 錄音狀態管理
             self._recording_sessions: Set[str] = set()
@@ -50,14 +61,14 @@ class Recording(SingletonMixin, IRecordingService):
             self._lock = threading.Lock()
             
             # 執行緒池
-            self._executor = ThreadPoolExecutor(max_workers=self._recording_config.recording_max_workers)
+            self._executor = ThreadPoolExecutor(max_workers=self._recording_config.max_workers)
             
             # 預設輸出目錄
             self._default_output_dir = Path(self._recording_config.output_dir)
             self._default_output_dir.mkdir(parents=True, exist_ok=True)
             
             # 自動清理設定
-            if self._recording_config.recording_auto_cleanup:
+            if self._recording_config.auto_cleanup:
                 self._setup_auto_cleanup()
             
             logger.info(f"錄音服務已初始化，輸出目錄: {self._default_output_dir}")
@@ -86,6 +97,11 @@ class Recording(SingletonMixin, IRecordingService):
         Returns:
             是否成功開始錄音
         """
+        # 檢查服務是否啟用
+        if not self._recording_config.enabled:
+            logger.debug("Recording 服務未啟用，跳過錄音")
+            return False
+        
         # 註冊為音訊佇列的讀者（可能從指定時間戳開始）
         from src.core.audio_queue_manager import audio_queue
         audio_queue.register_reader(session_id, "recording", start_timestamp)
@@ -158,6 +174,10 @@ class Recording(SingletonMixin, IRecordingService):
         Returns:
             錄音資訊或 None（如果未在錄音中）
         """
+        # 檢查服務是否啟用
+        if not self._recording_config.enabled:
+            return None
+        
         with self._lock:
             if session_id not in self._recording_sessions:
                 logger.warning(f"Session {session_id} 未在錄音中")
@@ -248,6 +268,10 @@ class Recording(SingletonMixin, IRecordingService):
         Returns:
             是否正在錄音
         """
+        # 檢查服務是否啟用
+        if not self._recording_config.enabled:
+            return False
+        
         with self._lock:
             return session_id in self._recording_sessions
     
@@ -260,6 +284,10 @@ class Recording(SingletonMixin, IRecordingService):
         Returns:
             錄音資訊或 None（如果未在錄音中）
         """
+        # 檢查服務是否啟用
+        if not self._recording_config.enabled:
+            return None
+        
         with self._lock:
             if session_id not in self._recording_sessions:
                 return None
@@ -284,6 +312,10 @@ class Recording(SingletonMixin, IRecordingService):
         Returns:
             錄音檔案字典
         """
+        # 檢查服務是否啟用
+        if not self._recording_config.enabled:
+            return {'count': 0, 'recordings': []}
+        
         recordings = []
         
         # 列出輸出目錄中的檔案
@@ -317,6 +349,10 @@ class Recording(SingletonMixin, IRecordingService):
         Returns:
             刪除的檔案數量
         """
+        # 檢查服務是否啟用
+        if not self._recording_config.enabled:
+            return 0
+        
         if days is None:
             days = self._recording_config.cleanup_days
         
@@ -409,7 +445,7 @@ class Recording(SingletonMixin, IRecordingService):
                         chunks_buffer.append(audio_chunk)
                         
                         # 批次寫入檔案
-                        if len(chunks_buffer) >= self._recording_config.recording_batch_size:
+                        if len(chunks_buffer) >= self._recording_config.batch_size:
                             self._write_chunks_to_file(wav_file, chunks_buffer, info)
                             chunks_buffer = []
                         

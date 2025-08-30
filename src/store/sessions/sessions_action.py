@@ -25,7 +25,11 @@ def add_session_title(action_type: str):
 
 create_session = create_action(
     add_session_title(Action.CREATE_SESSION),
-    lambda strategy=Strategy.NON_STREAMING: strategy,  # 根據 interface: 只需要 strategy
+    lambda strategy=Strategy.NON_STREAMING, request_id=None, session_id=None: {
+        'strategy': strategy,
+        'request_id': request_id,
+        'session_id': session_id
+    }
 )
 
 delete_session = create_action(
@@ -119,14 +123,9 @@ record_stopped = create_action(
     lambda session_id: session_id,
 )
 
-start_asr_sound_effect = create_action(
-    add_session_title(Action.START_ASR_SOUND_EFFECT),
-    lambda session_id: session_id,
-)
-
-stop_asr_sound_effect = create_action(
-    add_session_title(Action.STOP_ASR_SOUND_EFFECT),
-    lambda session_id: session_id,
+play_asr_feedback = create_action(
+    add_session_title(Action.PLAY_ASR_FEEDBACK),
+    lambda session_id, command: {"session_id": session_id, "command": command},
 )
 
 transcribe_started = create_action(
@@ -136,7 +135,7 @@ transcribe_started = create_action(
 
 transcribe_done = create_action(
     add_session_title(Action.TRANSCRIBE_DONE),
-    lambda session_id: session_id,
+    lambda session_id,result: {"session_id": session_id, "result": result},
 )
 
 asr_stream_started = create_action(

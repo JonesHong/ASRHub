@@ -31,21 +31,30 @@ class AudioEnhancer(SingletonMixin):
     def __init__(self):
         """初始化"""
         if not hasattr(self, '_initialized'):
-            self._initialized = True
+            self._initialized = False
+            self.enabled = False
             self._load_config()
-            logger.info("🎛️ AudioEnhancer 服務初始化完成")
+            
+            if self.enabled:
+                self._initialized = True
+                logger.info("🎛️ AudioEnhancer 服務初始化完成")
+            else:
+                logger.info("AudioEnhancer 服務已停用 (enabled: false)")
     
     def _load_config(self):
         """載入配置"""
         config = ConfigManager()
         
-        # 檢查是否啟用
-        if not config.services.audio_enhancer.enabled:
-            logger.warning("⚠️ AudioEnhancer 服務已停用")
-            self.enabled = False
+        # 檢查配置是否存在
+        if not hasattr(config, 'services') or not hasattr(config.services, 'audio_enhancer'):
+            logger.warning("AudioEnhancer 配置不存在")
             return
         
-        self.enabled = True
+        # 檢查是否啟用
+        self.enabled = config.services.audio_enhancer.enabled
+        
+        if not self.enabled:
+            return
         
         # 音訊增強配置 - 現在直接在 audio_enhancer 層級
         enhancer_config = config.services.audio_enhancer

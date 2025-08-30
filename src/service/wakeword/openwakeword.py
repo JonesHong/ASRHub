@@ -63,15 +63,20 @@ class OpenWakeword(SingletonMixin, IWakewordService):
             # 載入配置
             self._config = self._load_config()
             
-            # 直接初始化（KISS 原則）
-            try:
-                self._load_model()
-                self._initialized = True
-                logger.info("OpenWakeword 服務初始化成功")
-            except Exception as e:
-                logger.error(f"OpenWakeword 初始化失敗: {e}")
-                # 服務仍可使用，但需要稍後重試
-                self._initialized = False
+            # 服務已經通過 service_loader 檢查了 enabled
+            # 如果能到這裡，表示服務已啟用
+            if self._config:
+                # 直接初始化（KISS 原則）
+                try:
+                    self._load_model()
+                    self._initialized = True
+                    logger.info("OpenWakeword 服務初始化成功")
+                except Exception as e:
+                    logger.error(f"OpenWakeword 初始化失敗: {e}")
+                    # 服務仍可使用，但需要稍後重試
+                    self._initialized = False
+            else:
+                logger.warning("OpenWakeword 配置載入失敗")
     
     def _load_config(self) -> Optional[WakewordConfig]:
         """從 ConfigManager 載入設定"""
@@ -79,22 +84,23 @@ class OpenWakeword(SingletonMixin, IWakewordService):
             if hasattr(config_manager, 'services') and hasattr(config_manager.services, 'wakeword'):
                 wakeword_config = config_manager.services.wakeword
                 
-                # 檢查是否啟用且類型為 openwakeword
-                if wakeword_config.wakeword_enabled and wakeword_config.type == "openwakeword":
-                    # 現在可以直接使用 yaml2py 生成的 openwakeword 子配置
+                # 服務已經通過 service_loader 檢查了 enabled
+                # 檢查類型為 openwakeword
+                if wakeword_config.type == "openwakeword":
+                    # 使用統一後的欄位名稱（移除 wakeword_ 前綴）
                     cfg = wakeword_config.openwakeword
                     return WakewordConfig(
-                        model_path=cfg.wakeword_model_path,
-                        threshold=cfg.wakeword_threshold,
-                        chunk_size=cfg.wakeword_chunk_size,
-                        sample_rate=cfg.wakeword_sample_rate,
+                        model_path=cfg.model_path,
+                        threshold=cfg.threshold,
+                        chunk_size=cfg.chunk_size,
+                        sample_rate=cfg.sample_rate,
                         debounce_time=cfg.debounce_time,
-                        use_gpu=cfg.wakeword_use_gpu
+                        use_gpu=cfg.use_gpu
                     )
-            return WakewordConfig()  # 使用預設值
+            return None  # 不返回預設配置
         except Exception as e:
             logger.warning(f"載入配置失敗: {e}")
-            return WakewordConfig()
+            return None
     
     def _ensure_initialized(self) -> bool:
         """確保服務已初始化，如果失敗則重試
@@ -207,12 +213,12 @@ class OpenWakeword(SingletonMixin, IWakewordService):
             raise WakewordAudioError(f"音訊格式轉換失敗: {e}") from e
         
         # 記錄接收到的音訊格式（只記錄第一次）
-        if not hasattr(self, '_first_oww_logged'):
-            self._first_oww_logged = {}
-        if session_id not in self._first_oww_logged:
-            self._first_oww_logged[session_id] = True
-            logger.info(f"🔊 [OWW_RECEIVED] First audio for OpenWakeWord session {session_id}: shape={audio_data.shape}, "
-                       f"dtype={audio_data.dtype}, range=[{audio_data.min():.4f}, {audio_data.max():.4f}]")
+        # if not hasattr(self, '_first_oww_logged'):
+        #     self._first_oww_logged = {}
+        # if session_id not in self._first_oww_logged:
+        #     self._first_oww_logged[session_id] = True
+        #     logger.info(f"🔊 [OWW_RECEIVED] First audio for OpenWakeWord session {session_id}: shape={audio_data.shape}, "
+        #                f"dtype={audio_data.dtype}, range=[{audio_data.min():.4f}, {audio_data.max():.4f}]")
         
         # 執行推論
         try:

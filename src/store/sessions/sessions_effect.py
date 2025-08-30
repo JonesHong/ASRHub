@@ -37,7 +37,8 @@ from src.core.buffer_manager import BufferManager, BufferConfig
 from src.service.vad.silero_vad import silero_vad
 from src.service.wakeword.openwakeword import openwakeword
 from src.service.timer.timer_service import timer_service
-from src.provider.provider_manager import ProviderPoolManager, PoolConfig
+from src.provider.provider_manager import get_provider_manager, PoolConfig
+from src.interface.asr_provider import TranscriptionResult
 
 # FSM Transitions - 直接使用 transitions library
 from src.core.fsm_transitions import (
@@ -66,8 +67,7 @@ from src.store.sessions.sessions_action import (
     silence_timeout,
     record_started,
     record_stopped,
-    start_asr_sound_effect,
-    stop_asr_sound_effect,
+    play_asr_feedback,
     transcribe_started,
     transcribe_done,
     asr_stream_started,
@@ -106,6 +106,7 @@ class SessionEffects:
     _fsm_instances: Dict[str, 'SessionFSM'] = {}  # session_id -> FSM instance
     # _session_states 已移除 - 狀態現在由 FSM 實例管理
     _session_strategies: Dict[str, str] = {}  # 記錄每個 session 的策略
+    _request_id_mapping: Dict[str, str] = {}  # request_id -> session_id 映射
     
     def __init__(self, store=None):
         """初始化 Effects """
@@ -142,9 +143,9 @@ class SessionEffects:
         )
     
     def _init_provider_pool(self):
-        """初始化 Provider Pool"""
-        self._provider_pool = ProviderPoolManager()
-        logger.info(f"Provider pool initialized")
+        """初始化 Provider Pool - 使用單例"""
+        self._provider_pool = get_provider_manager()  # 使用單例而不是創建新實例
+        logger.info(f"Provider pool initialized (using singleton)")
     
     # === FSM 驗證輔助方法 ===
     
@@ -363,15 +364,15 @@ class SessionEffects:
         audio_data = payload.get('audio_data')
         
         # 記錄接收到的音訊格式（只記錄第一次）
-        import numpy as np
-        if not hasattr(self, '_first_audio_logged'):
-            self._first_audio_logged = {}
-        if session_id not in self._first_audio_logged:
-            self._first_audio_logged[session_id] = True
-            if isinstance(audio_data, (bytes, bytearray)):
-                logger.info(f"📥 [EFFECT_RECEIVED] First audio received for {session_id}: {len(audio_data)} bytes")
-            elif isinstance(audio_data, np.ndarray):
-                logger.info(f"📥 [EFFECT_RECEIVED] First audio received for {session_id}: shape={audio_data.shape}, dtype={audio_data.dtype}")
+        # import numpy as np
+        # if not hasattr(self, '_first_audio_logged'):
+        #     self._process_audio_chunk = {}
+        # if session_id not in self._first_audio_logged:
+        #     self._first_audio_logged[session_id] = True
+        #     if isinstance(audio_data, (bytes, bytearray)):
+        #         logger.info(f"📥 [EFFECT_RECEIVED] First audio received for {session_id}: {len(audio_data)} bytes")
+        #     elif isinstance(audio_data, np.ndarray):
+        #         logger.info(f"📥 [EFFECT_RECEIVED] First audio received for {session_id}: shape={audio_data.shape}, dtype={audio_data.dtype}")
         
         # 從 selector 取得 session 的音訊配置
         from src.store.main_store import store
@@ -385,17 +386,17 @@ class SessionEffects:
             return
         
         # 從 session 的音訊配置取得參數
-        actual_sample_rate = audio_config.get('sample_rate', 16000)
-        actual_channels = audio_config.get('channels', 1)
-        actual_format = audio_config.get('format', 'pcm_s16le')
+        actual_sample_rate = audio_config.get('sample_rate') # , 16000
+        actual_channels = audio_config.get('channels') # , 1
+        actual_format = audio_config.get('format') # , 'pcm_s16le'
         
-        # 只記錄第一次的配置
-        if not hasattr(self, '_first_config_logged'):
-            self._first_config_logged = {}
-        if session_id not in self._first_config_logged:
-            self._first_config_logged[session_id] = True
-            logger.info(f"📋 [EFFECT_CONFIG] Session audio config for {session_id}: {actual_sample_rate}Hz, "
-                        f"{actual_channels}ch, {actual_format}")
+        # # 只記錄第一次的配置
+        # if not hasattr(self, '_first_config_logged'):
+        #     self._first_config_logged = {}
+        # if session_id not in self._first_config_logged:
+        #     self._first_config_logged[session_id] = True
+        #     logger.info(f"📋 [EFFECT_CONFIG] Session audio config for {session_id}: {actual_sample_rate}Hz, "
+        #                 f"{actual_channels}ch, {actual_format}")
         
         # 獲取或初始化 session 狀態
         # 使用 FSM 狀態查詢，不再需要手動設置狀態
@@ -414,14 +415,14 @@ class SessionEffects:
             self._start_wake_word_monitoring(session_id)
         
         # 記錄轉換過程（只記錄第一次）
-        if not hasattr(self, '_first_convert_logged'):
-            self._first_convert_logged = {}
+        # if not hasattr(self, '_first_convert_logged'):
+        #     self._first_convert_logged = {}
         
-        # 如果採樣率不是 16000，需要轉換（ASR 需要 16kHz）
+        # # 如果採樣率不是 16000，需要轉換（ASR 需要 16kHz）
         if actual_sample_rate != 16000:
-            if session_id not in self._first_convert_logged:
-                self._first_convert_logged[session_id] = True
-                logger.info(f"🔄 [EFFECT_CONVERT] Converting audio from {actual_sample_rate}Hz to 16000Hz for ASR")
+        #     if session_id not in self._first_convert_logged:
+        #         self._first_convert_logged[session_id] = True
+        #         logger.info(f"🔄 [EFFECT_CONVERT] Converting audio from {actual_sample_rate}Hz to 16000Hz for ASR")
             
             from src.service.audio_converter import audio_converter
             
@@ -430,36 +431,34 @@ class SessionEffects:
                 converted_audio = audio_converter.convert_audio(
                     audio_data,
                     source_sample_rate=actual_sample_rate,
-                    target_sample_rate=16000,
                     source_channels=actual_channels,
-                    target_channels=1  # ASR 通常使用單聲道
                 )
-                if session_id in self._first_convert_logged and self._first_convert_logged[session_id]:
-                    self._first_convert_logged[session_id] = False  # 標記已經記錄過
-                    if isinstance(converted_audio, np.ndarray):
-                        logger.info(f"✅ [EFFECT_CONVERTED] Audio converted: shape={converted_audio.shape}, dtype={converted_audio.dtype}")
-                    else:
-                        logger.info(f"✅ [EFFECT_CONVERTED] Audio converted: {len(converted_audio)} bytes")
+                # if session_id in self._first_convert_logged and self._first_convert_logged[session_id]:
+                #     self._first_convert_logged[session_id] = False  # 標記已經記錄過
+                #     if isinstance(converted_audio, np.ndarray):
+                #         logger.info(f"✅ [EFFECT_CONVERTED] Audio converted: shape={converted_audio.shape}, dtype={converted_audio.dtype}")
+                #     else:
+                #         logger.info(f"✅ [EFFECT_CONVERTED] Audio converted: {len(converted_audio)} bytes")
             except Exception as e:
                 logger.error(f"Failed to convert audio sample rate: {e}")
                 logger.warning("Using original audio data - ASR may not work properly")
                 converted_audio = audio_data
         else:
             converted_audio = audio_data
-            if session_id not in self._first_convert_logged:
-                self._first_convert_logged[session_id] = True
-                logger.info(f"✅ [EFFECT_NO_CONVERT] Audio already at 16kHz, no conversion needed")
+            # if session_id not in self._first_convert_logged:
+            #     # self._first_convert_logged[session_id] = True
+            #     logger.info(f"✅ [EFFECT_NO_CONVERT] Audio already at 16kHz, no conversion needed")
         
         # 推送到時間戳隊列（只記錄第一次）
-        if not hasattr(self, '_first_queue_logged'):
-            self._first_queue_logged = {}
+        # if not hasattr(self, '_first_queue_logged'):
+        #     self._first_queue_logged = {}
         timestamp = audio_queue.push(session_id, converted_audio)
-        if session_id not in self._first_queue_logged:
-            self._first_queue_logged[session_id] = True
-            logger.info(f"📤 [EFFECT->QUEUE] First audio pushed to queue at timestamp {timestamp:.3f}")
+        # if session_id not in self._first_queue_logged:
+        #     self._first_queue_logged[session_id] = True
+        #     logger.info(f"📤 [EFFECT->QUEUE] First audio pushed to queue at timestamp {timestamp:.3f}")
         
-        if timestamp > 0:
-            logger.trace(f"Audio pushed to queue at {timestamp:.3f} for session {session_id}")
+        # if timestamp > 0:
+        #     logger.trace(f"Audio pushed to queue at {timestamp:.3f} for session {session_id}")
     
     # === Wake Word Detection ===
     
@@ -799,18 +798,13 @@ class SessionEffects:
                 logger.debug(f"Written temporary audio file: {temp_filename}")
                 
                 # 使用 lease_context 而非 lease（lease 返回 tuple，lease_context 是 context manager）
+                result = None  # 初始化 result
                 with self._provider_pool.lease_context(session_id, timeout=config.providers.pool.lease_timeout) as (provider, error):
                     if provider:
                         try:
                             # MVP 版本使用 transcribe_file 方法
                             result = provider.transcribe_file(temp_filename)
                             logger.info(f"Transcription result: {result.full_text[:100]}...")
-                            
-                            # TODO: 處理轉譯結果
-                            # self.store.dispatch(transcription_result({
-                            #     "session_id": session_id,
-                            #     "result": result
-                            # }))
                             
                         except Exception as e:
                             logger.error(f"Transcription error: {e}")
@@ -833,8 +827,8 @@ class SessionEffects:
             fsm.transcribe_done()
             logger.info(f"✅ FSM: [{session_id}] {old_state} → {fsm.state}")
         
-        # Dispatch transcribe_done action
-        self.store.dispatch(transcribe_done(session_id))
+        # Dispatch transcribe_done action with result
+        self.store.dispatch(transcribe_done(session_id, result))
         
         # Reset session 只在最後統一處理，避免重複調用
         # self._reset_session(session_id)  # 移到 handle_transcribe_done 統一處理
@@ -852,6 +846,7 @@ class SessionEffects:
         self.store.dispatch(transcribe_started(session_id, filepath))
         
         config = ConfigManager()
+        result = None  # 初始化 result
         
         try:
             # 使用 lease_context 取得 ASR provider
@@ -864,13 +859,7 @@ class SessionEffects:
                         if result and result.full_text:
                             logger.info(f"✅ Transcription successful for {session_id}")
                             logger.block("📝 Transcription:",[result.full_text])
-                            # logger.info(f"📝 Transcription: {result.full_text}")
                             
-                            # TODO: 處理轉譯結果 
-                            # self.store.dispatch(transcription_result({
-                            #     "session_id": session_id,
-                            #     "result": result
-                            # }))
                         else:
                             logger.warning(f"Empty transcription result for {session_id}")
                             
@@ -891,8 +880,8 @@ class SessionEffects:
             fsm.transcribe_done()
             logger.info(f"✅ FSM: [{session_id}] {old_state} → {fsm.state}")
         
-        # Dispatch transcribe_done action
-        self.store.dispatch(transcribe_done(session_id))
+        # Dispatch transcribe_done action with result
+        self.store.dispatch(transcribe_done(session_id, result))
         
         # Reset session 只在最後統一處理，避免重複調用
         # self._reset_session(session_id)  # 移到 handle_transcribe_done 統一處理
@@ -1169,27 +1158,61 @@ class SessionEffects:
             ops.do_action(self._create_session)
         )
     
+    @classmethod
+    def get_session_id_by_request_id(cls, request_id: str) -> Optional[str]:
+        """根據 request_id 獲取對應的 session_id"""
+        return cls._request_id_mapping.get(request_id)
+    
     def _create_session(self, action):
-        """創建新會話"""
-        import uuid
+        """創建新會話 - 處理副作用，不生成 session_id（由 reducer 生成）"""
         
-        # 從 action 中取得策略和音訊配置
+        # 從 action 中取得策略和 request_id
         if hasattr(action.payload, 'get'):
-            # 新格式：payload 是 Map，包含 strategy 和 audio_config
+            # 新格式：payload 是 Map，包含 strategy, audio_config, request_id
             strategy = action.payload.get('strategy', Strategy.NON_STREAMING)
             audio_config = action.payload.get('audio_config')
+            request_id = action.payload.get('request_id')
         else:
             # 舊格式：payload 直接是 strategy 字串
             strategy = action.payload if action.payload else Strategy.NON_STREAMING
             audio_config = None
+            request_id = None
         
-        # 生成新的 session_id
-        session_id = str(uuid.uuid4())
+        # 從 state 獲取 reducer 創建的 session
+        # Reducer 已經創建了 session，我們需要找到它
+        state = self.store.state
+        sessions_data = state.get("sessions", {})
         
-        logger.info(f"Creating new session {session_id} with strategy {strategy}")
+        # 獲取真正的 sessions dict (SessionsState 內的 sessions 欄位)
+        if hasattr(sessions_data, 'get') and 'sessions' in sessions_data:
+            sessions = sessions_data.get('sessions', {})
+        else:
+            sessions = sessions_data
+        
+        # 找到最新創建的 session（有 request_id 的）
+        session_id = None
+        for sid, session in sessions.items():
+            if hasattr(session, 'get') and session.get('request_id') == request_id:
+                session_id = sid
+                break
+        
+        if not session_id:
+            # 如果沒有 request_id，取最新的 session
+            if sessions:
+                session_id = list(sessions.keys())[-1]
+            else:
+                logger.error("No session found in state after reducer created it")
+                return None
+        
+        logger.info(f"Processing session {session_id} with strategy {strategy} and request_id {request_id}")
         
         # 設定策略（確保只存儲策略字串，而不是整個 payload）
         self._session_strategies[session_id] = strategy
+        
+        # 如果有 request_id，建立映射
+        if request_id:
+            self._request_id_mapping[request_id] = session_id
+            logger.debug(f"Mapped request_id {request_id} to session_id {session_id}")
         
         # FSM 初始狀態就是 IDLE，不需要手動設定
         
@@ -1406,8 +1429,50 @@ class SessionEffects:
                 fsm.trigger('upload_completed')
             logger.info(f"✅ FSM: [{session_id}] {old_state} → {fsm.state}")
         
-        # 可以在這裡開始轉錄處理
-        # self._start_batch_transcription(session_id, file_name)
+        # 開始轉錄處理 - 收集所有音訊並進行批次處理
+        self._start_batch_transcription(session_id, file_name)
+    
+    def _start_batch_transcription(self, session_id: str, file_name: str):
+        """開始批次轉譯處理
+        
+        Args:
+            session_id: Session ID
+            file_name: 檔案名稱（僅用於記錄）
+        """
+        logger.info(f"🎯 Starting batch transcription for session {session_id}")
+        
+        # 從 audio queue 收集所有音訊
+        chunks = []
+        queue_size = audio_queue.size(session_id)
+        
+        if queue_size > 0:
+            # 使用 pull 方法一次取出所有音訊
+            chunks = audio_queue.pull(session_id, count=queue_size)
+            logger.info(f"📦 Collected {len(chunks)} audio chunks from queue")
+        else:
+            logger.warning(f"⚠️ No audio chunks in queue for session {session_id}")
+            return
+        
+        # 將 AudioChunk 轉換為 TimestampedAudio 格式（如果需要的話）
+        from src.core.audio_queue_manager import TimestampedAudio
+        import time
+        
+        timestamped_chunks = []
+        for i, chunk in enumerate(chunks):
+            # 如果 chunk 已經是 TimestampedAudio，直接使用
+            if hasattr(chunk, 'timestamp') and hasattr(chunk, 'data'):
+                timestamped_chunks.append(chunk)
+            else:
+                # 否則創建一個簡單的 TimestampedAudio
+                timestamped_chunks.append(TimestampedAudio(
+                    timestamp=time.time() + i * 0.1,  # 簡單的時間戳
+                    data=chunk
+                ))
+        
+        # 調用批次處理方法進行轉譯
+        self._batch_process_audio(session_id, timestamped_chunks, None)
+        
+        logger.info(f"✅ Batch transcription initiated for session {session_id}")
     
     # === Stream Effects (for Streaming Strategy) ===
     

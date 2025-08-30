@@ -21,9 +21,9 @@ logger.info("🎯 Using unified SessionEffects with timestamp support")
 from src.store.sessions.sessions_effect import SessionEffects
 effects = SessionEffects(store=store)
 
-# 註冊所有 effects
+# 註冊所有 effects (使用已創建的 effects 實例)
 store = EffectsModule.register_root([
-    SessionEffects(store=store)
+    effects  # 使用上面創建的實例，而不是創建新的
 ], store)
 
 # 匯出 store 作為 main_store
