@@ -9,6 +9,9 @@ ASR Hub 主程式入口
 import asyncio
 import sys
 import signal
+import socket
+import subprocess
+import platform
 from pathlib import Path
 import warnings
 
@@ -43,6 +46,140 @@ class ASRHubServer:
         self.redis_enabled = False
         self.http_sse_enabled = False
         
+    def check_and_clean_ports(self):
+        """檢查並清理所有被占用的 port"""
+        logger.info("🔍 檢查 API port 占用狀況...")
+        
+        # 收集需要檢查的 ports
+        ports_to_check = []
+        
+        # Redis port
+        # if hasattr(self.config.api, 'redis') and self.config.api.redis.enabled:
+        #     ports_to_check.append((
+        #         self.config.api.redis.port,
+        #         "Redis",
+        #         self.config.api.redis.host
+        #     ))
+        
+        # HTTP SSE port
+        if hasattr(self.config.api, 'http_sse') and self.config.api.http_sse.enabled:
+            ports_to_check.append((
+                self.config.api.http_sse.port,
+                "HTTP SSE",
+                self.config.api.http_sse.host
+            ))
+        
+        # WebSocket port
+        if hasattr(self.config.api, 'websocket') and self.config.api.websocket.enabled:
+            ports_to_check.append((
+                self.config.api.websocket.port,
+                "WebSocket",
+                self.config.api.websocket.host
+            ))
+        
+        # Socket.IO port
+        if hasattr(self.config.api, 'socketio') and self.config.api.socketio.enabled:
+            ports_to_check.append((
+                self.config.api.socketio.port,
+                "Socket.IO",
+                self.config.api.socketio.host
+            ))
+        
+        # 檢查並清理每個 port
+        for port, service_name, host in ports_to_check:
+            self._check_and_kill_port(port, service_name, host)
+        
+        logger.success("✅ Port 檢查完成")
+    
+    def _check_and_kill_port(self, port: int, service_name: str, host: str = "0.0.0.0"):
+        """檢查單個 port 並在必要時 kill 占用的程序"""
+        # 檢查 port 是否被占用
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        
+        # 如果 host 是 0.0.0.0，檢查 127.0.0.1
+        check_host = "127.0.0.1" if host == "0.0.0.0" else host
+        
+        try:
+            result = sock.connect_ex((check_host, port))
+            sock.close()
+            
+            if result == 0:
+                # Port 被占用
+                logger.warning(f"⚠️  Port {port} ({service_name}) 已被占用，嘗試清理...")
+                
+                # 根據作業系統使用不同的命令
+                system = platform.system()
+                
+                try:
+                    if system == "Windows":
+                        # Windows: 使用 netstat 找出 PID，然後 taskkill
+                        cmd = f"netstat -ano | findstr :{port}"
+                        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                        lines = result.stdout.strip().split('\n')
+                        
+                        for line in lines:
+                            if f":{port}" in line and "LISTENING" in line:
+                                parts = line.split()
+                                if parts:
+                                    pid = parts[-1]
+                                    if pid and pid.isdigit():
+                                        # Kill 進程
+                                        kill_cmd = f"taskkill /F /PID {pid}"
+                                        subprocess.run(kill_cmd, shell=True, capture_output=True)
+                                        logger.info(f"   ✅ 已終止占用 port {port} 的進程 (PID: {pid})")
+                                        break
+                    
+                    elif system == "Linux" or system == "Darwin":  # Linux or macOS
+                        # Unix-like: 使用 lsof 或 fuser
+                        try:
+                            # 嘗試使用 lsof
+                            cmd = f"lsof -ti:{port}"
+                            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                            
+                            if result.stdout.strip():
+                                pids = result.stdout.strip().split('\n')
+                                for pid in pids:
+                                    if pid:
+                                        # Kill 進程
+                                        kill_cmd = f"kill -9 {pid}"
+                                        subprocess.run(kill_cmd, shell=True, capture_output=True)
+                                        logger.info(f"   ✅ 已終止占用 port {port} 的進程 (PID: {pid})")
+                        except:
+                            # 如果 lsof 不可用，嘗試 fuser
+                            try:
+                                cmd = f"fuser -k {port}/tcp"
+                                subprocess.run(cmd, shell=True, capture_output=True)
+                                logger.info(f"   ✅ 已使用 fuser 清理 port {port}")
+                            except:
+                                logger.warning(f"   ⚠️  無法自動清理 port {port}，請手動檢查")
+                    
+                    # 等待一下讓 port 釋放
+                    import time
+                    time.sleep(0.5)
+                    
+                    # 再次檢查 port 是否已釋放
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(1)
+                    result = sock.connect_ex((check_host, port))
+                    sock.close()
+                    
+                    if result != 0:
+                        logger.success(f"   ✅ Port {port} ({service_name}) 已成功釋放")
+                    else:
+                        logger.warning(f"   ⚠️  Port {port} ({service_name}) 仍被占用，可能需要手動處理")
+                        
+                except Exception as e:
+                    logger.error(f"   ❌ 清理 port {port} 時發生錯誤: {e}")
+            else:
+                logger.info(f"   ✅ Port {port} ({service_name}) 未被占用")
+                
+        except Exception as e:
+            # 連接失敗表示 port 未被占用（這是好事）
+            logger.info(f"   ✅ Port {port} ({service_name}) 未被占用")
+        finally:
+            sock.close()
+    
     def initialize_services(self):
         """初始化所有服務"""
         logger.info("🔧 初始化服務...")
@@ -193,6 +330,9 @@ class ASRHubServer:
             "基於 PyStoreX 事件驅動架構",
             "支援多種通訊協定"
         ])
+        
+        # 檢查並清理被占用的 ports
+        self.check_and_clean_ports()
         
         # 初始化服務
         self.initialize_services()

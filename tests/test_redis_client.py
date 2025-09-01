@@ -43,6 +43,7 @@ from src.interface.strategy import Strategy
 from src.interface.wake import WakeActivateSource, WakeDeactivateSource
 from src.utils.id_provider import new_id
 from src.utils.logger import logger
+from src.config.manager import ConfigManager
 
 
 class RedisClient:
@@ -52,18 +53,19 @@ class RedisClient:
     因此本客戶端實現了 session_id 過濾機制，只處理屬於自己 session 的事件。
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 6379, db: int = 0, wait_confirmations: bool = True):
+    def __init__(self, wait_confirmations: bool = True):
         """初始化 Redis 客戶端
         
         Args:
-            host: Redis 主機
-            port: Redis 連接埠
-            db: Redis 資料庫編號
             wait_confirmations: 是否等待確認訊息（預設 True）
         """
-        self.host = host
-        self.port = port
-        self.db = db
+        # 載入配置
+        self.config = ConfigManager()
+        
+        # Redis 設定
+        self.host = self.config.api.redis.host
+        self.port = self.config.api.redis.port
+        self.db = self.config.api.redis.db
         self.wait_confirmations = wait_confirmations
         
         # Redis 連接
@@ -75,11 +77,11 @@ class RedisClient:
         self.session_id: Optional[str] = None
         self.is_running = False
         
-        # 音訊設定
-        self.FORMAT = pyaudio.paInt16
-        self.CHANNELS = 1
-        self.RATE = 16000
-        self.CHUNK = 1024
+        # 音訊設定（從配置載入）
+        self.FORMAT = pyaudio.paInt16  # 對應 config 的 "int16"
+        self.CHANNELS = self.config.audio.default_channels
+        self.RATE = self.config.audio.default_sample_rate
+        self.CHUNK = self.config.audio.buffer_size
         
         # PyAudio
         self.audio = None
@@ -535,7 +537,7 @@ def main(wait_confirmations=True):
     Args:
         wait_confirmations: 是否等待確認訊息（預設 True）
     """
-    client = RedisClient(wait_confirmations=wait_confirmations)
+    client = RedisClient(wait_confirmations=wait_confirmations)  # 現在只需要 wait_confirmations 參數
     
     # 設定信號處理
     def signal_handler(sig, frame):
