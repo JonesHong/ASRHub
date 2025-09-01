@@ -8,6 +8,7 @@ Redis 客戶端測試程式
 4. 接收轉譯結果
 """
 
+import json
 import sys
 import time
 import base64
@@ -22,7 +23,9 @@ from redis_toolkit import RedisToolkit, RedisConnectionConfig, RedisOptions
 
 # 從 channels 匯入所有需要的訊息類型
 from src.api.redis.channels import (
-    RedisChannels,
+    RedisChannels
+)
+from src.api.redis.models import (
     CreateSessionMessage,
     StartListeningMessage,
     EmitAudioChunkMessage,
@@ -43,7 +46,11 @@ from src.utils.logger import logger
 
 
 class RedisClient:
-    """Redis 客戶端實現"""
+    """Redis 客戶端實現
+    
+    注意: Redis Pub/Sub 採用廣播模式，所有訂閱相同頻道的客戶端都會收到所有消息。
+    因此本客戶端實現了 session_id 過濾機制，只處理屬於自己 session 的事件。
+    """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 6379, db: int = 0, wait_confirmations: bool = True):
         """初始化 Redis 客戶端
@@ -205,6 +212,10 @@ class RedisClient:
         """處理開始監聽回應"""
         try:
             response = ListeningStartedMessage(**data)
+            # 檢查是否是我們的 session
+            if response.session_id != self.session_id:
+                logger.debug(f"忽略其他 session 的監聽事件: {response.session_id}")
+                return
             logger.info(f"✅ 確認開始監聽: {response.sample_rate}Hz, {response.channels}ch")
             self.listening_started_event.set()
         except Exception as e:
@@ -214,6 +225,10 @@ class RedisClient:
         """處理喚醒啟用回應"""
         try:
             response = WakeActivatedResponseMessage(**data)
+            # 檢查是否是我們的 session
+            if response.session_id != self.session_id:
+                logger.debug(f"忽略其他 session 的喚醒啟用事件: {response.session_id}")
+                return
             logger.info(f"✅ 確認喚醒啟用: 來源={response.source}")
             self.wake_activated_event.set()
         except Exception as e:
@@ -223,6 +238,10 @@ class RedisClient:
         """處理喚醒停用回應"""
         try:
             response = WakeDeactivatedResponseMessage(**data)
+            # 檢查是否是我們的 session
+            if response.session_id != self.session_id:
+                logger.debug(f"忽略其他 session 的喚醒停用事件: {response.session_id}")
+                return
             logger.info(f"✅ 確認喚醒停用: 來源={response.source}")
             self.wake_deactivated_event.set()
         except Exception as e:
@@ -232,6 +251,10 @@ class RedisClient:
         """處理轉譯完成"""
         try:
             response = TranscribeDoneMessage(**data)
+            # 檢查是否是我們的 session
+            if response.session_id != self.session_id:
+                logger.debug(f"忽略其他 session 的轉譯結果: {response.session_id}")
+                return
             logger.info(f"")
             logger.info(f"=" * 60)
             logger.info(f"📝 轉譯結果: {response.text}")
@@ -248,6 +271,10 @@ class RedisClient:
         """處理 ASR 回饋音控制"""
         try:
             response = PlayASRFeedbackMessage(**data)
+            # 檢查是否是我們的 session
+            if response.session_id != self.session_id:
+                logger.debug(f"忽略其他 session 的 ASR 回饋音事件: {response.session_id}")
+                return
             if response.command == "play":
                 logger.info(f"🔊 ASR 回饋音: 播放")
             elif response.command == "stop":
@@ -340,20 +367,25 @@ class RedisClient:
                     # 讀取音訊資料
                     audio_data = self.stream.read(self.CHUNK, exception_on_overflow=False)
                     
-                    # 音訊編碼為 base64
-                    audio_encoded = base64.b64encode(audio_data).decode('utf-8')
+                    # 方案一：直接發送二進制數據（推薦）
+                    # 使用特殊的消息格式：元數據 + 分隔符 + 二進制數據
+                    self._send_binary_audio_chunk(audio_data)
                     
-                    # 建立訊息
-                    message = EmitAudioChunkMessage(
-                        session_id=self.session_id,
-                        audio_data=audio_encoded,
-                    )
-                    
-                    # 發送音訊資料
-                    self.publisher.publisher(
-                        RedisChannels.REQUEST_EMIT_AUDIO_CHUNK,
-                        message.model_dump()
-                    )
+                    # 方案二：保留舊的 base64 方式（已註解）
+                    # # 音訊編碼為 base64
+                    # audio_encoded = base64.b64encode(audio_data).decode('utf-8')
+                    # 
+                    # # 建立訊息
+                    # message = EmitAudioChunkMessage(
+                    #     session_id=self.session_id,
+                    #     audio_data=audio_encoded,
+                    # )
+                    # 
+                    # # 發送音訊資料
+                    # self.publisher.publisher(
+                    #     RedisChannels.REQUEST_EMIT_AUDIO_CHUNK,
+                    #     message.model_dump()
+                    # )
                     
                 except Exception as e:
                     if self.is_running:
@@ -364,6 +396,40 @@ class RedisClient:
             logger.error(f"開啟音訊串流失敗: {e}")
         finally:
             self.stop_audio_stream()
+    
+    def _send_binary_audio_chunk(self, audio_data: bytes):
+        """發送二進制音訊數據（不使用 base64）
+        
+        格式：使用特殊的消息結構
+        - 元數據部分：JSON 格式的 session_id 和其他參數
+        - 二進制部分：原始音訊數據
+        """
+        try:
+            # 元數據
+            metadata = {
+                "session_id": self.session_id,
+                "sample_rate": self.RATE,
+                "channels": self.CHANNELS,
+                "format": "int16",
+                "is_binary": True  # 標記這是二進制消息
+            }
+            
+            # 使用特殊的頻道來發送二進制音訊
+            # 組合消息：JSON 元數據 + 分隔符 + 二進制數據
+            metadata_json = json.dumps(metadata).encode('utf-8')
+            separator = b'\x00\x00\xFF\xFF'  # 特殊分隔符
+            
+            # 組合完整消息
+            full_message = metadata_json + separator + audio_data
+            
+            # 直接發送二進制消息到 Redis
+            self.publisher.client.publish(
+                RedisChannels.REQUEST_EMIT_AUDIO_CHUNK,
+                full_message
+            )
+            
+        except Exception as e:
+            logger.error(f"發送二進制音訊失敗: {e}")
     
     def wake_activate(self, source: str = WakeActivateSource.UI):
         """發送喚醒啟用請求

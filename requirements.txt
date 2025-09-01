@@ -62,6 +62,7 @@ pytest
 pytest-asyncio
 pytest-cov
 coverage
+sseclient-py>=1.8.0  # SSE 客戶端測試用
 
 # 視覺化和分析（選用）
 colorama

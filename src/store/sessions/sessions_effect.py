@@ -558,6 +558,12 @@ class SessionEffects:
         # FSM 已經通過 record_started trigger 轉換到 processing_recording 狀態
         # 不需要手動設置狀態
 
+        # 清除 audio_queue 以避免喚醒詞干擾後續的 ASR
+        # 這會清除所有之前的音訊，確保錄音從喚醒詞後開始
+        # 這樣可以避免喚醒詞本身被包含在 ASR 轉譯中
+        logger.info(f"🧹 清除 session {session_id} 的 audio_queue，避免喚醒詞干擾 ASR")
+        audio_queue.clear(session_id)
+
         # 使用現有的 Recording 服務開始錄音
         recording_metadata = {
             "wake_time": timestamp,

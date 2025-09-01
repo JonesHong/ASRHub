@@ -19,9 +19,12 @@ from redis_toolkit import RedisToolkit, RedisConnectionConfig, RedisOptions
 from pydantic import ValidationError
 
 from src.api.redis.channels import (
-    EmitAudioChunkMessage,
     RedisChannels,
     channels,
+)
+
+from src.api.redis.models import (
+    EmitAudioChunkMessage,
     CreateSessionMessage,
     StartListeningMessage,
     DeleteSessionMessage,
@@ -297,34 +300,65 @@ class RedisServer:
             self._send_error(None, "START_LISTENING_ERROR", str(e))
 
     def _handle_emit_audio_chunk(self, data: Any):
-        """處理發送音訊資料"""
+        """處理發送音訊資料（支持二進制和 base64 兩種格式）"""
         try:
-            # 驗證訊息格式
-            message = EmitAudioChunkMessage(**data)
+            session_id = None
+            audio_bytes = None
+            
+            # 檢查是否為二進制格式
+            if isinstance(data, bytes):
+                # 處理二進制格式：元數據 + 分隔符 + 音訊數據
+                separator = b'\x00\x00\xFF\xFF'
+                
+                try:
+                    # 找到分隔符位置
+                    separator_idx = data.index(separator)
+                    
+                    # 解析元數據
+                    metadata_bytes = data[:separator_idx]
+                    metadata = json.loads(metadata_bytes.decode('utf-8'))
+                    
+                    # 提取音訊數據
+                    audio_bytes = data[separator_idx + len(separator):]
+                    session_id = metadata['session_id']
+                    
+                    logger.debug(f"📦 收到二進制音訊，大小: {len(audio_bytes)} bytes（無 base64 開銷）")
+                    
+                except (ValueError, json.JSONDecodeError) as e:
+                    logger.error(f"解析二進制消息失敗: {e}")
+                    self._send_error(None, "BINARY_PARSE_ERROR", str(e))
+                    return
+                    
+            else:
+                # 處理傳統的 base64 格式（向後相容）
+                message = EmitAudioChunkMessage(**data)
+                session_id = message.session_id
+                
+                try:
+                    # 使用 base64 直接解碼
+                    audio_bytes = base64.b64decode(message.audio_data)
+                    logger.debug(f"📦 收到 base64 音訊，解碼後: {len(audio_bytes)} bytes")
+                except Exception as e:
+                    logger.error(f"Base64 解碼失敗: {e}")
+                    self._send_error(session_id, "AUDIO_DECODE_ERROR", str(e))
+                    return
             
             # 檢查 session 是否存在
-            session = get_session_by_id(message.session_id)(store.state)
+            session = get_session_by_id(session_id)(store.state)
             if not session:
-                logger.error(f"❌ Session {message.session_id} 不存在，無法處理音訊")
-                self._send_error(message.session_id, "SESSION_NOT_FOUND", f"Session {message.session_id} not found")
+                logger.error(f"❌ Session {session_id} 不存在，無法處理音訊")
+                self._send_error(session_id, "SESSION_NOT_FOUND", f"Session {session_id} not found")
                 return
-
-            try:
-                # 使用 base64 直接解碼
-                audio_bytes = base64.b64decode(message.audio_data)
-            except Exception as e:
-                logger.error(f"Base64 解碼失敗: {e}")
-                self._send_error(message.session_id, "AUDIO_DECODE_ERROR", str(e))
-                return
+                
             # 客戶端 emit 服務端 receive
             action = receive_audio_chunk(
-                session_id=message.session_id, audio_data=audio_bytes
+                session_id=session_id, audio_data=audio_bytes
             )
             store.dispatch(action)
 
             # 可選：回應確認收到音訊（通常不需要，除非客戶端需要確認）
             # response = AudioReceivedMessage(
-            #     session_id=message.session_id,
+            #     session_id=session_id,
             #     timestamp=datetime.now().isoformat()
             # )
             # self.subscriber.publish(
@@ -333,7 +367,7 @@ class RedisServer:
             # )
 
             logger.debug(
-                f"📥 收到音訊資料 [session: {message.session_id}]: {len(audio_bytes)} bytes"
+                f"📥 收到音訊資料 [session: {session_id}]: {len(audio_bytes)} bytes"
             )
 
         except ValidationError as e:

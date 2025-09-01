@@ -137,11 +137,40 @@ class ASRHubServer:
         else:
             logger.info("⏭️  Redis Pub/Sub 已停用")
         
-        # HTTP SSE (未來實作)
+        # HTTP SSE
         if hasattr(self.config.api, 'http_sse') and self.config.api.http_sse.enabled:
-            # TODO: 實作新的 HTTP SSE 伺服器
-            self.http_sse_enabled = True
-            logger.info(f"⏸️  HTTP SSE 伺服器待實作 (port: {self.config.api.http_sse.port})")
+            try:
+                # 在背景執行緒啟動 HTTP SSE 伺服器
+                import threading
+                import asyncio
+                
+                def run_http_sse_server():
+                    """在獨立執行緒中運行 HTTP SSE 伺服器"""
+                    from src.api.http_sse.server import http_sse_server
+                    
+                    # 創建新的事件循環
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    # 初始化並啟動伺服器
+                    loop.run_until_complete(http_sse_server.initialize())
+                    loop.run_until_complete(http_sse_server.start())
+                
+                http_thread = threading.Thread(
+                    target=run_http_sse_server,
+                    daemon=True,
+                    name="HTTPSSEServer"
+                )
+                http_thread.start()
+                
+                # 等待伺服器啟動
+                import time
+                time.sleep(1)
+                
+                self.http_sse_enabled = True
+                logger.info(f"✅ HTTP SSE 伺服器已啟用 (http://{self.config.api.http_sse.host}:{self.config.api.http_sse.port})")
+            except Exception as e:
+                logger.error(f"❌ HTTP SSE 初始化失敗: {e}")
         else:
             logger.info("⏭️  HTTP SSE 已停用")
         
@@ -183,8 +212,8 @@ class ASRHubServer:
         if self.redis_enabled:
             enabled_services.append(f"Redis: {self.config.api.redis.host}:{self.config.api.redis.port}")
         if self.http_sse_enabled:
-            enabled_services.append(f"HTTP SSE: http://localhost:{self.config.api.http_sse.port}")
-        
+            enabled_services.append(f"HTTP SSE: http://{self.config.api.http_sse.host}:{self.config.api.http_sse.port}")
+
         if enabled_services:
             logger.info("📡 已啟用的通訊協定:")
             for service in enabled_services:
