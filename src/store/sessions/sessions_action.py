@@ -3,6 +3,7 @@ from pystorex import create_action
 
 from src.interface.action import Action
 from src.interface.strategy import Strategy
+from src.interface.wake import WakeActivateSource, WakeDeactivateSource
 from src.utils.string_case import to_camel_case, add_title_prefix
 
 
@@ -90,12 +91,12 @@ start_listening = create_action(
 
 wake_activated = create_action(
     add_session_title(Action.WAKE_ACTIVATED),
-    lambda session_id, source: {"session_id": session_id, "source": source},
+    lambda session_id, source: {"session_id": session_id, "source": source}, # WakeActivateSource
 )
 
 wake_deactivated = create_action(
     add_session_title(Action.WAKE_DEACTIVATED),
-    lambda session_id, source: {"session_id": session_id, "source": source},
+    lambda session_id, source: {"session_id": session_id, "source": source}, # WakeDeactivateSource
 )
 
 vad_speech_detected = create_action(

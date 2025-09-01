@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../
 from src.service.wakeword.openwakeword import openwakeword
 from src.core.audio_queue_manager import audio_queue
 from src.utils.logger import logger
-from src.interface.wakeword import WakewordDetection
+from src.interface.wake import WakewordDetection
 
 
 

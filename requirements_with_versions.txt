@@ -1,0 +1,46 @@
+# ASR Hub 依賴套件（含版本號）
+# 生成時間: Sun Aug 31 00:07:10 CST 2025
+
+yaml2py==0.2.0
+pretty-loguru==1.2.0
+redis-toolkit==0.4.0
+pystorex==0.2.1
+pydantic==2.11.7
+# python-dotenv  # 未安裝
+reactivex==4.0.4
+immutables==0.21
+watchdog==6.0.0
+redis==6.4.0
+requests==2.32.4
+tqdm==4.67.1
+schedule==1.2.2
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+aiofiles==24.1.0
+httpx==0.28.1
+# sse-starlette  # 未安裝
+python-multipart==0.0.20
+websockets==15.0.1
+python-socketio==5.13.0
+aiohttp==3.12.15
+numpy==2.3.2
+scipy==1.16.1
+soundfile==0.13.1
+# librosa  # 未安裝
+pydub==0.25.1
+pyaudio==0.2.14
+sounddevice==0.5.2
+gradio==5.43.1
+matplotlib==3.10.5
+psutil==7.0.0
+onnxruntime==1.22.1
+# openai-whisper  # 未安裝
+faster-whisper==1.2.0
+pytest==8.4.1
+pytest-asyncio==1.1.0
+# pytest-cov  # 未安裝
+# coverage  # 未安裝
+# colorama  # 未安裝
+matplotlib==3.10.5
+uuid6==2025.0.1
+transitions==0.9.3

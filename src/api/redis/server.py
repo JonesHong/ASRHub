@@ -25,9 +25,12 @@ from src.api.redis.channels import (
     CreateSessionMessage,
     StartListeningMessage,
     DeleteSessionMessage,
-    WakeActivatedMessage,
+    WakeActivateMessage,
+    WakeDeactivateMessage,
     SessionCreatedMessage,
     ListeningStartedMessage,
+    WakeActivatedMessage,
+    WakeDeactivatedMessage,
     # AudioReceivedMessage,
     TranscribeDoneMessage,
     PlayASRFeedbackMessage,
@@ -152,11 +155,14 @@ class RedisServer:
             elif channel == RedisChannels.REQUEST_EMIT_AUDIO_CHUNK:
                 self._handle_emit_audio_chunk(data)
 
+            elif channel == RedisChannels.REQUEST_WAKE_ACTIVATE:
+                self._handle_wake_activate(data)
+
+            elif channel == RedisChannels.REQUEST_WAKE_DEACTIVATE:
+                self._handle_wake_deactivate(data)
+
             # elif channel == RedisChannels.REQUEST_DELETE_SESSION:
             #     self._handle_delete_session(data)
-
-            # elif channel == RedisChannels.REQUEST_WAKE_ACTIVATED:
-            #     self._handle_wake_activated(data)
 
             else:
                 logger.warning(f"未知的頻道: {channel}")
@@ -265,8 +271,8 @@ class RedisServer:
                 format=message.format,
             )
             store.dispatch(action)
-
-            # 回應開始監聽成功
+            
+            # 發送開始監聽成功確認
             response = ListeningStartedMessage(
                 session_id=message.session_id,
                 sample_rate=message.sample_rate,
@@ -274,7 +280,6 @@ class RedisServer:
                 format=message.format,
                 timestamp=datetime.now().isoformat(),
             )
-
             self.publisher.publisher(
                 RedisChannels.RESPONSE_LISTENING_STARTED,
                 response.model_dump()
@@ -356,14 +361,32 @@ class RedisServer:
             logger.error(f"刪除 Session 失敗: {e}")
             self._send_error(None, "DELETE_SESSION_ERROR", str(e))
 
-    def _handle_wake_activated(self, data: Any):
+    def _handle_wake_activate(self, data: Any):
         """處理喚醒啟用請求"""
         try:
             # 驗證訊息格式
-            message = WakeActivatedMessage(**data)
+            message = WakeActivateMessage(**data)
+            
+            # 檢查 session 是否存在
+            session = get_session_by_id(message.session_id)(store.state)
+            if not session:
+                logger.error(f"❌ Session {message.session_id} 不存在，無法啟用喚醒")
+                self._send_error(message.session_id, "SESSION_NOT_FOUND", f"Session {message.session_id} not found")
+                return
 
             action = wake_activated(session_id=message.session_id, source=message.source)
             store.dispatch(action)
+            
+            # 發送喚醒啟用成功確認
+            response = WakeActivatedMessage(
+                session_id=message.session_id,
+                source=message.source,
+                timestamp=datetime.now().isoformat(),
+            )
+            self.publisher.publisher(
+                RedisChannels.RESPONSE_WAKE_ACTIVATED,
+                response.model_dump()
+            )
 
             logger.info(f"🎯 喚醒啟用 [session: {message.session_id}]: 來源={message.source}")
 
@@ -372,7 +395,43 @@ class RedisServer:
             self._send_error(None, "VALIDATION_ERROR", str(e))
         except Exception as e:
             logger.error(f"喚醒啟用失敗: {e}")
-            self._send_error(None, "WAKE_ACTIVATED_ERROR", str(e))
+            self._send_error(None, "WAKE_ACTIVATE_ERROR", str(e))
+
+    def _handle_wake_deactivate(self, data: Any):
+        """處理喚醒停用請求"""
+        try:
+            # 驗證訊息格式
+            message = WakeDeactivateMessage(**data)
+            
+            # 檢查 session 是否存在
+            session = get_session_by_id(message.session_id)(store.state)
+            if not session:
+                logger.error(f"❌ Session {message.session_id} 不存在，無法停用喚醒")
+                self._send_error(message.session_id, "SESSION_NOT_FOUND", f"Session {message.session_id} not found")
+                return
+
+            action = wake_deactivated(session_id=message.session_id, source=message.source)
+            store.dispatch(action)
+            
+            # 發送喚醒停用成功確認
+            response = WakeDeactivatedMessage(
+                session_id=message.session_id,
+                source=message.source,
+                timestamp=datetime.now().isoformat(),
+            )
+            self.publisher.publisher(
+                RedisChannels.RESPONSE_WAKE_DEACTIVATED,
+                response.model_dump()
+            )
+
+            logger.info(f"🛑 喚醒停用 [session: {message.session_id}]: 來源={message.source}")
+
+        except ValidationError as e:
+            logger.error(f"喚醒停用訊息格式錯誤: {e}")
+            self._send_error(None, "VALIDATION_ERROR", str(e))
+        except Exception as e:
+            logger.error(f"喚醒停用失敗: {e}")
+            self._send_error(None, "WAKE_DEACTIVATE_ERROR", str(e))
 
     def _setup_store_listeners(self):
         """設定 Store 事件監聽器"""

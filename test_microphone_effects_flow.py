@@ -45,7 +45,7 @@ from src.service.vad.silero_vad import silero_vad
 from src.service.wakeword.openwakeword import openwakeword
 from src.core.audio_queue_manager import audio_queue
 from src.interface.vad import VADState, VADResult
-from src.interface.wakeword import WakewordDetection
+from src.interface.wake import WakewordDetection
 
 # Configuration and logging
 from src.config.manager import ConfigManager

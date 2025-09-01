@@ -18,7 +18,7 @@ class WakeActivateSource:
     UI = "ui"
     KEYWORD = "keyword"
 
-
+WakeActivateSource.KEYWORD
 class WakeDeactivateSource:
     """喚醒停用來源"""
     VISUAL = "visual"
@@ -27,13 +27,6 @@ class WakeDeactivateSource:
 
 
 # === Wakeword Status and Data Classes ===
-class WakewordStatus(Enum):
-    """喚醒詞檢測狀態。"""
-    IDLE = "idle"           # 閒置
-    LISTENING = "listening"  # 監聽中
-    DETECTED = "detected"   # 檢測到
-    COOLDOWN = "cooldown"   # 冷卻期（防止重複觸發）
-
 
 @dataclass
 class WakewordDetection:

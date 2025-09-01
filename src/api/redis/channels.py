@@ -37,10 +37,12 @@ class RedisChannels:
     REQUEST_START_LISTENING = "request:" + action2channel(InputAction.START_LISTENING)
     REQUEST_EMIT_AUDIO_CHUNK = "request:" + action2channel(InputAction.EMIT_AUDIO_CHUNK)
     
+    # Wake control events
+    REQUEST_WAKE_ACTIVATE = "request:" + action2channel(InputAction.WAKE_ACTIVATED)  # 喚醒啟用（包含 source）
+    REQUEST_WAKE_DEACTIVATE = "request:" + action2channel(InputAction.WAKE_DEACTIVATED)  # 喚醒停用（包含 source）
+    
     # 其他輸入事件（保留但可選）
     REQUEST_DELETE_SESSION = "request:" + action2channel(InputAction.DELETE_SESSION)
-    REQUEST_WAKE_ACTIVATED = "request:" + action2channel(InputAction.WAKE_ACTIVATED)
-    REQUEST_WAKE_DEACTIVATED = "request:" + action2channel(InputAction.WAKE_DEACTIVATED)
     
     # === 輸出頻道 (ASRHub -> 客戶端) ===
     # 主要輸出：transcribe_done, play_asr_feedback
@@ -50,20 +52,23 @@ class RedisChannels:
     # 錯誤通知
     RESPONSE_ERROR_REPORTED = "response:" + action2channel(OutputAction.ERROR_REPORTED)
     
-    # 其他輸出事件（狀態通知）
-    RESPONSE_SESSION_CREATED = "response:session:created"  # 回應 session 建立成功
-    RESPONSE_LISTENING_STARTED = "response:listening:started"  # 回應開始監聽
-    RESPONSE_AUDIO_RECEIVED = "response:audio:received"  # 確認收到音訊
-    RESPONSE_ERROR = "response:error"  # 錯誤通知
+    # 狀態確認通知（客戶端可選擇性訂閱）
+    RESPONSE_SESSION_CREATED = "response:session:created"      # 回應 session 建立成功
+    RESPONSE_LISTENING_STARTED = "response:listening:started"  # 回應開始監聽成功
+    RESPONSE_WAKE_ACTIVATED = "response:wake:activated"        # 回應喚醒啟用成功
+    RESPONSE_WAKE_DEACTIVATED = "response:wake:deactivated"    # 回應喚醒停用成功
+    RESPONSE_AUDIO_RECEIVED = "response:audio:received"        # 確認收到音訊（通常不用）
+    RESPONSE_ERROR = "response:error"                          # 錯誤通知
 
 
 # 訂閱的頻道列表（ASRHub 要監聽的）
 channels = [
     RedisChannels.REQUEST_CREATE_SESSION,      # request:create:session
     RedisChannels.REQUEST_START_LISTENING,     # request:start:listening  
-    RedisChannels.REQUEST_EMIT_AUDIO_CHUNK, # request:emit:audio:chunk
-    # RedisChannels.REQUEST_DELETE_SESSION,      # request:delete:session (可選)
-    # RedisChannels.REQUEST_WAKE_ACTIVATED,      # request:wake:activated (可選)
+    RedisChannels.REQUEST_EMIT_AUDIO_CHUNK,    # request:emit:audio:chunk
+    RedisChannels.REQUEST_WAKE_ACTIVATE,       # request:wake:activate
+    RedisChannels.REQUEST_WAKE_DEACTIVATE,     # request:wake:deactivate
+    # RedisChannels.REQUEST_DELETE_SESSION,    # request:delete:session (可選)
 ]
 
 
@@ -95,10 +100,16 @@ class DeleteSessionMessage(BaseModel):
     session_id: str
 
 
-class WakeActivatedMessage(BaseModel):
+class WakeActivateMessage(BaseModel):
     """喚醒啟用訊息"""
     session_id: str
-    source: str = "external"  # external (UI/視覺) 或 keyword (內部)
+    source: str  # visual, ui, keyword (from WakeActivateSource)
+
+
+class WakeDeactivateMessage(BaseModel):
+    """喚醒停用訊息"""
+    session_id: str
+    source: str  # visual, ui, vad_silence_timeout (from WakeDeactivateSource)
 
 
 # 輸出訊息格式
@@ -110,11 +121,25 @@ class SessionCreatedMessage(BaseModel):
 
 
 class ListeningStartedMessage(BaseModel):
-    """開始監聽回應"""
+    """開始監聽成功回應"""
     session_id: str
     sample_rate: int = 16000
     channels: int = 1
     format: str = "int16"
+    timestamp: Optional[str] = None
+
+
+class WakeActivatedMessage(BaseModel):
+    """喚醒啟用成功回應"""
+    session_id: str
+    source: str  # 啟用來源
+    timestamp: Optional[str] = None
+
+
+class WakeDeactivatedMessage(BaseModel):
+    """喚醒停用成功回應"""
+    session_id: str
+    source: str  # 停用來源
     timestamp: Optional[str] = None
 
 

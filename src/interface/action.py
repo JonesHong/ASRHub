@@ -1,5 +1,4 @@
 # src/interface/action.py
-
 class Action:
     """
     事件 (Events: verbs, triggers)
@@ -98,7 +97,6 @@ class Action:
     """內部錯誤 (必選參數: session_id, error)"""
     ERROR_REPORTED = "error_reported"
     """錯誤已回報 (必選參數: session_id)"""
-
 
 class InputAction(Action):
     """

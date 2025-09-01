@@ -28,11 +28,16 @@ from src.api.redis.channels import (
     EmitAudioChunkMessage,
     SessionCreatedMessage,
     ListeningStartedMessage,
+    WakeActivatedMessage as WakeActivatedResponseMessage,
+    WakeDeactivatedMessage as WakeDeactivatedResponseMessage,
     TranscribeDoneMessage,
     PlayASRFeedbackMessage,
     ErrorMessage,
+    WakeActivateMessage,
+    WakeDeactivateMessage,
 )
 from src.interface.strategy import Strategy
+from src.interface.wake import WakeActivateSource, WakeDeactivateSource
 from src.utils.id_provider import new_id
 from src.utils.logger import logger
 
@@ -40,11 +45,19 @@ from src.utils.logger import logger
 class RedisClient:
     """Redis 客戶端實現"""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 6379, db: int = 0):
-        """初始化 Redis 客戶端"""
+    def __init__(self, host: str = "127.0.0.1", port: int = 6379, db: int = 0, wait_confirmations: bool = True):
+        """初始化 Redis 客戶端
+        
+        Args:
+            host: Redis 主機
+            port: Redis 連接埠
+            db: Redis 資料庫編號
+            wait_confirmations: 是否等待確認訊息（預設 True）
+        """
         self.host = host
         self.port = port
         self.db = db
+        self.wait_confirmations = wait_confirmations
         
         # Redis 連接
         self.subscriber: Optional[RedisToolkit] = None
@@ -65,9 +78,11 @@ class RedisClient:
         self.audio = None
         self.stream = None
         
-        # 事件
+        # 事件（可選擇性使用）
         self.session_created_event = threading.Event()
         self.listening_started_event = threading.Event()
+        self.wake_activated_event = threading.Event()
+        self.wake_deactivated_event = threading.Event()
         
     def initialize(self) -> bool:
         """初始化 Redis 連接"""
@@ -83,10 +98,12 @@ class RedisClient:
                 is_logger_info=False,
             )
             
-            # 訂閱的頻道列表
+            # 訂閱的頻道列表（包含所有確認頻道）
             output_channels = [
                 RedisChannels.RESPONSE_SESSION_CREATED,
-                RedisChannels.RESPONSE_LISTENING_STARTED,
+                RedisChannels.RESPONSE_LISTENING_STARTED,      # 可選擇性處理
+                RedisChannels.RESPONSE_WAKE_ACTIVATED,         # 可選擇性處理
+                RedisChannels.RESPONSE_WAKE_DEACTIVATED,       # 可選擇性處理
                 RedisChannels.RESPONSE_TRANSCRIBE_DONE,
                 RedisChannels.RESPONSE_PLAY_ASR_FEEDBACK,
                 RedisChannels.RESPONSE_ERROR,
@@ -134,9 +151,15 @@ class RedisClient:
             # 處理不同的回應訊息
             if channel == RedisChannels.RESPONSE_SESSION_CREATED:
                 self._handle_session_created(data)
-                
+            
             elif channel == RedisChannels.RESPONSE_LISTENING_STARTED:
                 self._handle_listening_started(data)
+            
+            elif channel == RedisChannels.RESPONSE_WAKE_ACTIVATED:
+                self._handle_wake_activated(data)
+            
+            elif channel == RedisChannels.RESPONSE_WAKE_DEACTIVATED:
+                self._handle_wake_deactivated(data)
                 
             elif channel == RedisChannels.RESPONSE_TRANSCRIBE_DONE:
                 self._handle_transcribe_done(data)
@@ -177,14 +200,33 @@ class RedisClient:
             import traceback
             traceback.print_exc()
     
+    
     def _handle_listening_started(self, data: Any):
         """處理開始監聽回應"""
         try:
             response = ListeningStartedMessage(**data)
-            logger.info(f"✅ 開始監聽: {response.sample_rate}Hz, {response.channels}ch")
+            logger.info(f"✅ 確認開始監聽: {response.sample_rate}Hz, {response.channels}ch")
             self.listening_started_event.set()
         except Exception as e:
             logger.error(f"處理開始監聽回應失敗: {e}")
+    
+    def _handle_wake_activated(self, data: Any):
+        """處理喚醒啟用回應"""
+        try:
+            response = WakeActivatedResponseMessage(**data)
+            logger.info(f"✅ 確認喚醒啟用: 來源={response.source}")
+            self.wake_activated_event.set()
+        except Exception as e:
+            logger.error(f"處理喚醒啟用回應失敗: {e}")
+    
+    def _handle_wake_deactivated(self, data: Any):
+        """處理喚醒停用回應"""
+        try:
+            response = WakeDeactivatedResponseMessage(**data)
+            logger.info(f"✅ 確認喚醒停用: 來源={response.source}")
+            self.wake_deactivated_event.set()
+        except Exception as e:
+            logger.error(f"處理喚醒停用回應失敗: {e}")
     
     def _handle_transcribe_done(self, data: Any):
         """處理轉譯完成"""
@@ -250,6 +292,8 @@ class RedisClient:
         
         logger.info(f"📤 準備發送開始監聽請求，session_id: {self.session_id}")
         
+        self.listening_started_event.clear()
+        
         message = StartListeningMessage(
             session_id=self.session_id,
             sample_rate=self.RATE,
@@ -262,10 +306,11 @@ class RedisClient:
         )
         logger.info(f"📤 已發送開始監聽請求 (session: {self.session_id}, {self.RATE}Hz, {self.CHANNELS}ch)")
         
-        # 等待開始監聽確認
-        if not self.listening_started_event.wait(timeout=5):
-            logger.error("開始監聽超時")
-            return False
+        # 根據設定決定是否等待確認
+        if self.wait_confirmations:
+            if not self.listening_started_event.wait(timeout=5):
+                logger.warning("開始監聽確認超時，但繼續執行")
+        
         return True
     
     def start_audio_stream(self):
@@ -320,6 +365,64 @@ class RedisClient:
         finally:
             self.stop_audio_stream()
     
+    def wake_activate(self, source: str = WakeActivateSource.UI):
+        """發送喚醒啟用請求
+        
+        Args:
+            source: 啟用來源 (visual, ui, keyword)
+        """
+        if not self.session_id:
+            logger.error("尚未建立會話")
+            return False
+        
+        self.wake_activated_event.clear()
+        
+        message = WakeActivateMessage(
+            session_id=self.session_id,
+            source=source
+        )
+        self.publisher.publisher(
+            RedisChannels.REQUEST_WAKE_ACTIVATE,
+            message.model_dump()
+        )
+        logger.info(f"🎯 發送喚醒啟用請求 (session: {self.session_id}, source: {source})")
+        
+        # 根據設定決定是否等待確認
+        if self.wait_confirmations:
+            if not self.wake_activated_event.wait(timeout=5):
+                logger.warning("喚醒啟用確認超時，但繼續執行")
+        
+        return True
+    
+    def wake_deactivate(self, source: str = WakeDeactivateSource.VAD_SILENCE_TIMEOUT):
+        """發送喚醒停用請求
+        
+        Args:
+            source: 停用來源 (visual, ui, vad_silence_timeout)
+        """
+        if not self.session_id:
+            logger.error("尚未建立會話")
+            return False
+        
+        self.wake_deactivated_event.clear()
+        
+        message = WakeDeactivateMessage(
+            session_id=self.session_id,
+            source=source
+        )
+        self.publisher.publisher(
+            RedisChannels.REQUEST_WAKE_DEACTIVATE,
+            message.model_dump()
+        )
+        logger.info(f"🛑 發送喚醒停用請求 (session: {self.session_id}, source: {source})")
+        
+        # 根據設定決定是否等待確認
+        if self.wait_confirmations:
+            if not self.wake_deactivated_event.wait(timeout=5):
+                logger.warning("喚醒停用確認超時，但繼續執行")
+        
+        return True
+    
     def stop_audio_stream(self):
         """停止音訊串流"""
         if self.stream:
@@ -360,9 +463,13 @@ class RedisClient:
         logger.info("✅ 客戶端已停止")
 
 
-def main():
-    """主程式"""
-    client = RedisClient()
+def main(wait_confirmations=True):
+    """主程式
+    
+    Args:
+        wait_confirmations: 是否等待確認訊息（預設 True）
+    """
+    client = RedisClient(wait_confirmations=wait_confirmations)
     
     # 設定信號處理
     def signal_handler(sig, frame):
@@ -387,6 +494,13 @@ def main():
         if not client.start_listening():
             logger.error("開始監聽失敗")
             return
+        
+        # 測試喚醒啟用/停用（可選）
+        # 取消註解以下程式碼來測試喚醒功能
+        # client.wake_activate(WakeActivateSource.UI)
+        # import time
+        # time.sleep(2)
+        # client.wake_deactivate(WakeDeactivateSource.VAD_SILENCE_TIMEOUT)
         
         # 開始音訊串流
         client.start_audio_stream()

@@ -39,7 +39,7 @@ from src.core.audio_queue_manager import audio_queue
 from src.utils.logger import logger
 from src.interface.audio import AudioChunk
 from src.interface.vad import VADState, VADResult
-from src.interface.wakeword import WakewordDetection
+from src.interface.wake import WakewordDetection
 
 
 @dataclass

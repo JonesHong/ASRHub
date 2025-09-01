@@ -37,7 +37,7 @@ from src.service.microphone_capture.microphone_capture import microphone_capture
 from src.service.wakeword.openwakeword import openwakeword
 # from src.core.audio_queue_manager import audio_queue
 # from src.interface.audio import AudioChunk
-from src.interface.wakeword import WakewordDetection
+from src.interface.wake import WakewordDetection
 
 # 導入 PyStoreX 相關模組
 from src.store.main_store import store

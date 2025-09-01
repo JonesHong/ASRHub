@@ -3,9 +3,21 @@
 # 核心依賴
 yaml2py
 pretty-loguru
+redis-toolkit
+pystorex
 pydantic
 python-dotenv
 
+# 響應式和資料結構
+reactivex  # PyStoreX 依賴
+immutables  # PyStoreX 使用的不可變資料結構
+
+# 系統工具
+watchdog  # 文件監控（ConfigManager 使用）
+redis  # Redis 客戶端
+requests  # HTTP 請求
+tqdm  # 進度條
+schedule  # 定時任務排程
 # 非同步框架
 fastapi
 uvicorn[standard]
@@ -18,9 +30,6 @@ python-multipart
 websockets
 python-socketio
 aiohttp
-
-# Redis
-redis-toolkit
 
 # 音訊處理
 numpy
@@ -59,4 +68,6 @@ colorama
 matplotlib
 
 
-uuid6
+# 其他工具
+uuid6  # UUID v7 支援（更好的時間排序）
+transitions  # 狀態機管理

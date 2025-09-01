@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any, List, Callable
 import numpy as np
 from pathlib import Path
 
-from src.interface.wakeword import IWakewordService, WakewordConfig, WakewordDetection
+from src.interface.wake import IWakewordService, WakewordConfig, WakewordDetection
 from src.utils.logger import logger
 from src.utils.singleton import SingletonMixin
 from src.interface.exceptions import (
