@@ -66,7 +66,7 @@ class SileroVAD(SingletonMixin, IVADService):
             # LSTM 隱藏狀態管理（每個 session 一組）
             self._hidden_states: Dict[str, tuple] = {}
             
-            logger.info("SileroVAD 初始化")
+            # logger.debug("SileroVAD 初始化")
             
             # 服務已經通過 service_loader 檢查了 enabled
             # 如果能到這裡，表示服務已啟用
@@ -75,7 +75,7 @@ class SileroVAD(SingletonMixin, IVADService):
                 try:
                     self._load_model()
                     self._initialized = True
-                    logger.info("Silero VAD 自動初始化成功")
+                    logger.debug("Silero VAD 初始化成功")
                 except Exception as e:
                     logger.error(f"Silero VAD 自動初始化失敗: {e}")
                     # 允許稍後重試，不拋出錯誤
@@ -143,7 +143,7 @@ class SileroVAD(SingletonMixin, IVADService):
                 providers=providers
             )
             
-            logger.info(f"模型載入成功: {model_path}")
+            logger.debug(f"VAD 模型載入: {model_path}")
             
         except Exception as e:
             logger.error(f"模型載入失敗: {e}")

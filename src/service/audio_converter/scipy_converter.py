@@ -68,11 +68,9 @@ class ScipyConverter(SingletonMixin, IAudioConverter):
             else:
                 backends.append("NumPy (fallback)")
                 
-            logger.info(f"ScipyConverter initialized with: {', '.join(backends)}, "
-                       f"batch_size={self.batch_size}, quality={self.quality}")
-            
-            if self.scipy_config.use_gpu and not GPU_AVAILABLE:
-                logger.warning("GPU requested but CuPy not available, falling back to CPU")
+            # 簡化日誌輸出
+            backend_info = "GPU (CuPy)" if GPU_AVAILABLE and self.scipy_config.use_gpu else "CPU"
+            logger.debug(f"ScipyConverter: {backend_info}, quality={self.quality}")
     
     def convert_for_session(
         self,

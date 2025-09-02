@@ -17,7 +17,7 @@ store = create_store()
 store = StoreModule.register_root({"sessions": sessions_reducer}, store)
 
 # 註冊Effects - 使用統一的 SessionEffects
-logger.info("🎯 Using unified SessionEffects with timestamp support")
+logger.debug("🎯 使用統一的 SessionEffects 並支援時間戳記")
 from src.store.sessions.sessions_effect import SessionEffects
 effects = SessionEffects(store=store)
 

@@ -70,7 +70,7 @@ class OpenWakeword(SingletonMixin, IWakewordService):
                 try:
                     self._load_model()
                     self._initialized = True
-                    logger.info("OpenWakeword 服務初始化成功")
+                    logger.debug("OpenWakeword 初始化成功")
                 except Exception as e:
                     logger.error(f"OpenWakeword 初始化失敗: {e}")
                     # 服務仍可使用，但需要稍後重試
@@ -154,12 +154,12 @@ class OpenWakeword(SingletonMixin, IWakewordService):
         
         # 載入模型
         try:
-            logger.info(f"載入模型: {model_path}")
+            logger.debug(f"WakeWord 模型: {model_path}")
             self._model = Model(
                 wakeword_models=[model_path],
                 inference_framework="onnx"
             )
-            logger.info("模型載入成功")
+            # logger.debug("模型載入成功")
         except Exception as e:
             raise WakewordModelError(
                 f"載入模型失敗 {model_path}: {e}"
@@ -523,9 +523,9 @@ class OpenWakeword(SingletonMixin, IWakewordService):
         except Exception as e:
             raise WakewordInitializationError(f"服務初始化過程發生錯誤: {e}") from e
         
-        # 如果已經在監聽，警告並返回
+        # 如果已經在監聽，直接返回
         if session_id in self._sessions and self._sessions[session_id].get("active"):
-            logger.warning(f"Session {session_id} 已在監聽中，無需重複開始")
+            logger.debug(f"Session {session_id} 已在監聽中，無需重複開始")
             return True  # 已經在監聽，視為成功
         
         # 如果指定了新模型，載入它

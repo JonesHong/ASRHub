@@ -7,7 +7,7 @@ ASRHub 提供基於 HTTP Server-Sent Events (SSE) 的即時語音識別服務。
 ## API 基本資訊
 
 - **Base URL**: `http://{host}:{port}/api/v1`
-- **預設 Host**: `0.0.0.0`
+- **預設 Host**: `127.0.0.1`
 - **預設 Port**: `8000`
 - **協定**: HTTP + SSE (Server-Sent Events)
 

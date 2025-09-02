@@ -95,7 +95,7 @@ class FasterWhisperProvider(IASRProvider):
             self._initialized = True
             
             # 不在這裡載入模型，改為使用共享的 model_loader
-            logger.info(f"FasterWhisperProvider 初始化成功 (singleton={singleton}, shared_model={self._use_shared_model})")
+            logger.debug(f"FasterWhisperProvider 初始化成功 (singleton={singleton}, shared_model={self._use_shared_model})")
     
     def _load_config(self) -> None:
         """從 ConfigManager 載入配置"""

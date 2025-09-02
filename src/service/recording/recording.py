@@ -44,14 +44,14 @@ class Recording(SingletonMixin, IRecordingService):
             
             # 檢查配置是否存在
             if not hasattr(self._config, 'services') or not hasattr(self._config.services, 'recording'):
-                logger.warning("Recording 配置不存在")
+                logger.warning("錄音配置不存在")
                 return
                 
             self._recording_config = self._config.services.recording
             
             # 檢查是否啟用
             if not self._recording_config.enabled:
-                logger.info("Recording 服務已停用 (enabled: false)")
+                logger.info("錄音服務已停用 (enabled: false)")
                 return
             
             # 錄音狀態管理
@@ -71,7 +71,7 @@ class Recording(SingletonMixin, IRecordingService):
             if self._recording_config.auto_cleanup:
                 self._setup_auto_cleanup()
             
-            logger.info(f"錄音服務已初始化，輸出目錄: {self._default_output_dir}")
+            logger.debug(f"錄音服務已初始化，輸出目錄: {self._default_output_dir}")
     
     
     def start_recording(
@@ -99,16 +99,16 @@ class Recording(SingletonMixin, IRecordingService):
         """
         # 檢查服務是否啟用
         if not self._recording_config.enabled:
-            logger.debug("Recording 服務未啟用，跳過錄音")
+            logger.debug("錄音服務未啟用，跳過錄音")
             return False
         
         # 註冊為音訊佇列的讀者（可能從指定時間戳開始）
         from src.core.audio_queue_manager import audio_queue
         audio_queue.register_reader(session_id, "recording", start_timestamp)
         if start_timestamp:
-            logger.debug(f"Registered Recording as reader for session {session_id} from timestamp {start_timestamp:.3f}")
+            logger.debug(f"已註冊錄音服務為 session {session_id} 的讀者，從時間戳 {start_timestamp:.3f} 開始")
         else:
-            logger.debug(f"Registered Recording as reader for session {session_id}")
+            logger.debug(f"已註冊錄音服務為 session {session_id} 的讀者")
         
         with self._lock:
             if session_id in self._recording_sessions:

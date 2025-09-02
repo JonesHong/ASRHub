@@ -31,6 +31,10 @@ websockets
 python-socketio
 aiohttp
 
+# WebRTC (LiveKit)
+livekit>=1.0.12
+livekit-api>=1.0.5
+
 # 音訊處理
 numpy
 scipy>=1.11.0  # 高品質音訊重新取樣

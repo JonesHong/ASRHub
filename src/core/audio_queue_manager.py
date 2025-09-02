@@ -82,8 +82,8 @@ class AudioQueueManager(SingletonMixin, IAudioQueueManager):
             self._max_history_duration = 30.0  # 最多保留 30 秒歷史
             self._chunk_duration = 0.1  # 假設每個 chunk 是 100ms
             
-            logger.info(f"AudioQueueManager initialized with timestamp support "
-                       f"(max_size={self._max_queue_size}, history={self._max_history_duration}s)")
+            logger.debug(f"音訊佇列管理器已初始化 - 支援時間戳記 "
+                        f"(最大容量={self._max_queue_size}, 歷史記錄={self._max_history_duration}秒)")
     
     def _create_queue(self, session_id: str) -> None:
         """為 session 建立新佇列 (必須在 registry lock 內呼叫)。"""

@@ -76,7 +76,7 @@ class WhisperProvider(IASRProvider):
                 try:
                     self._load_model()
                     self._initialized = True
-                    logger.info(f"WhisperProvider MVP 初始化成功 (singleton={singleton})")
+                    logger.debug(f"WhisperProvider 初始化成功 (singleton={singleton})")
                 except Exception as e:
                     logger.error(f"模型載入失敗: {e}")
     
@@ -112,7 +112,7 @@ class WhisperProvider(IASRProvider):
                 "openai-whisper 未安裝。請執行: pip install openai-whisper"
             ) from e
         
-        logger.info(f"載入模型: {self._config.model_name} on {self._config.device}")
+        logger.debug(f"Whisper 模型: {self._config.model_name} on {self._config.device}")
         
         # Load model with specified device
         self._model = whisper.load_model(
@@ -120,7 +120,7 @@ class WhisperProvider(IASRProvider):
             device=self._config.device
         )
         
-        logger.info("模型載入成功")
+        # logger.debug("模型載入成功")
     
     def transcribe_file(self, file_path: str) -> TranscriptionResult:
         """轉譯檔案（核心功能）

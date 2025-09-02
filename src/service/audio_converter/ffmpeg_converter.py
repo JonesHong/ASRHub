@@ -43,10 +43,10 @@ class FFmpegConverter(SingletonMixin):
             self.timeout = self.ffmpeg_config.timeout
             
             if self.ffmpeg_path:
-                logger.info(f"FFmpegConverter initialized with: {self.ffmpeg_path}, timeout={self.timeout}s")
+                logger.debug(f"FFmpeg 轉換器已初始化: {self.ffmpeg_path}, 逾時={self.timeout}秒")
                 self._log_ffmpeg_version()
             else:
-                logger.warning("FFmpeg not found! Please install FFmpeg")
+                logger.warning("找不到 FFmpeg！請安裝 FFmpeg")
     
     def _find_ffmpeg(self) -> Optional[str]:
         """尋找 FFmpeg 執行檔。"""
@@ -55,7 +55,7 @@ class FFmpegConverter(SingletonMixin):
         if configured_path and configured_path != 'ffmpeg':
             if os.path.exists(configured_path):
                 return configured_path
-            logger.warning(f"Configured FFmpeg path not found: {configured_path}")
+            logger.warning(f"找不到配置的 FFmpeg 路徑: {configured_path}")
         
         # 嘗試直接使用系統 ffmpeg
         if shutil.which('ffmpeg'):
@@ -85,9 +85,9 @@ class FFmpegConverter(SingletonMixin):
             )
             if result.returncode == 0:
                 version_line = result.stdout.split('\n')[0]
-                logger.debug(f"FFmpeg version: {version_line}")
+                logger.debug(f"FFmpeg 版本: {version_line}")
         except Exception as e:
-            logger.warning(f"Could not get FFmpeg version: {e}")
+            logger.warning(f"無法取得 FFmpeg 版本: {e}")
     
     def is_available(self) -> bool:
         """檢查 FFmpeg 是否可用。"""
@@ -116,7 +116,7 @@ class FFmpegConverter(SingletonMixin):
             成功回傳 True
         """
         if not self.is_available():
-            raise ServiceError("FFmpeg not available")
+            raise ServiceError("FFmpeg 不可用")
         
         # 建構 FFmpeg 命令
         cmd = [
@@ -141,7 +141,7 @@ class FFmpegConverter(SingletonMixin):
         cmd.append(str(output_path))
         
         try:
-            logger.debug(f"FFmpeg command: {' '.join(cmd)}")
+            logger.debug(f"FFmpeg 命令: {' '.join(cmd)}")
             
             result = subprocess.run(
                 cmd,
@@ -151,17 +151,17 @@ class FFmpegConverter(SingletonMixin):
             )
             
             if result.returncode == 0:
-                logger.info(f"Converted {input_path} to {output_path}")
+                logger.debug(f"已轉換 {input_path} 到 {output_path}")
                 return True
             else:
-                logger.error(f"FFmpeg error: {result.stderr}")
+                logger.error(f"FFmpeg 錯誤: {result.stderr}")
                 return False
                 
         except subprocess.TimeoutExpired:
-            logger.error("FFmpeg conversion timeout")
+            logger.error("FFmpeg 轉換逾時")
             return False
         except Exception as e:
-            logger.error(f"FFmpeg conversion failed: {e}")
+            logger.error(f"FFmpeg 轉換失敗: {e}")
             return False
     
     def convert_chunk(
@@ -185,7 +185,7 @@ class FFmpegConverter(SingletonMixin):
             轉換後的音訊片段
         """
         if not self.is_available():
-            logger.error("FFmpeg not available")
+            logger.error("FFmpeg 不可用")
             return None
         
         if not chunk.data:
@@ -226,15 +226,15 @@ class FFmpegConverter(SingletonMixin):
                     channels=target_channels
                 )
             else:
-                logger.error(f"FFmpeg pipe error: {stderr.decode('utf-8', errors='ignore')}")
+                logger.error(f"FFmpeg 管道錯誤: {stderr.decode('utf-8', errors='ignore')}")
                 return None
                 
         except subprocess.TimeoutExpired:
             process.kill()
-            logger.error("FFmpeg pipe timeout")
+            logger.error("FFmpeg 管道逾時")
             return None
         except Exception as e:
-            logger.error(f"FFmpeg pipe failed: {e}")
+            logger.error(f"FFmpeg 管道失敗: {e}")
             return None
     
     def convert_stream(
@@ -282,11 +282,11 @@ class FFmpegConverter(SingletonMixin):
                 bufsize=4096
             )
             
-            logger.info("FFmpeg stream converter started")
+            logger.debug("FFmpeg 串流轉換器已啟動")
             return process
             
         except Exception as e:
-            logger.error(f"Failed to start FFmpeg stream: {e}")
+            logger.error(f"無法啟動 FFmpeg 串流: {e}")
             return None
     
     def extract_metadata(self, file_path: Union[str, Path]) -> Optional[Dict[str, Any]]:
@@ -349,7 +349,7 @@ class FFmpegConverter(SingletonMixin):
             return metadata
             
         except Exception as e:
-            logger.error(f"Failed to extract metadata: {e}")
+            logger.error(f"無法提取 metadata: {e}")
             return None
     
     def _get_ffmpeg_format(self, format_str: str) -> str:
@@ -386,16 +386,16 @@ class FFmpegConverter(SingletonMixin):
         file_path = Path(file_path)
         
         if not file_path.exists():
-            logger.error(f"File not found: {file_path}")
+            logger.error(f"找不到檔案: {file_path}")
             return None
         
         # 提取 metadata
         metadata = self.extract_metadata(file_path)
         if not metadata:
-            logger.error(f"Could not extract metadata from {file_path}")
+            logger.error(f"無法從 {file_path} 提取 metadata")
             return None
         
-        logger.info(f"Input file metadata: {metadata}")
+        logger.debug(f"輸入檔案 metadata: {metadata}")
         
         # 準備輸出路徑
         if output_dir:

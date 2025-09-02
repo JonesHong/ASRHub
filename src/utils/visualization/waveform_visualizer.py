@@ -308,7 +308,7 @@ class WaveformVisualizer:
         
         # 預設參數
         launch_kwargs = {
-            'server_name': '127.0.0.1',  # 使用 localhost 而不是 0.0.0.0
+            'server_name': '127.0.0.1',  # 使用 localhost 而不是 127.0.0.1
             'server_port': 7860,
             'share': False,
             'inbrowser': True
@@ -316,7 +316,7 @@ class WaveformVisualizer:
         launch_kwargs.update(kwargs)
         
         # 處理顯示的 URL
-        display_host = 'localhost' if launch_kwargs['server_name'] in ['0.0.0.0', '127.0.0.1'] else launch_kwargs['server_name']
+        display_host = 'localhost' if launch_kwargs['server_name'] in ['127.0.0.1', '127.0.0.1'] else launch_kwargs['server_name']
         logger.info(f"Launching visualizer at http://{display_host}:{launch_kwargs['server_port']}")
         self.interface.launch(**launch_kwargs)
     

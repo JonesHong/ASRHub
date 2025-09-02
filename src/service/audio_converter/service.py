@@ -37,7 +37,7 @@ class AudioConverterService:
             try:
                 from .scipy_converter import scipy_converter
                 self.scipy_converter = scipy_converter
-                logger.info("ScipyConverter loaded")
+                logger.debug("音訊轉換器 (SciPy) 已載入")
             except ImportError as e:
                 logger.warning(f"ScipyConverter not available: {e}")
         
@@ -47,14 +47,14 @@ class AudioConverterService:
                 from .ffmpeg_converter import ffmpeg_converter
                 if ffmpeg_converter.is_available():
                     self.ffmpeg_converter = ffmpeg_converter
-                    logger.info("FFmpegConverter loaded")
+                    logger.debug("音訊轉換器 (FFmpeg) 已載入")
                 else:
-                    logger.warning("FFmpeg not found in system")
+                    logger.warning("FFmpeg 未安裝，部分功能可能受限")
             except Exception as e:
                 logger.warning(f"FFmpegConverter not available: {e}")
         
         if not self.scipy_converter and not self.ffmpeg_converter:
-            logger.error("No audio converter available!")
+            logger.error("沒有可用的音訊轉換器！")
     
     def convert_chunk(
         self,

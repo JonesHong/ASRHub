@@ -122,10 +122,10 @@ class ProviderPoolManager:
         # 延遲載入：不在 __init__ 中創建 providers
         # self._initialize_pool()  # 改為第一次 lease 時才初始化
         
-        logger.info(
-            f"🚀 ProviderPoolManager 初始化 (延遲載入模式): "
-            f"min={self.config.min_size}, max={self.config.max_size}, "
-            f"type={self.config.provider_type}"
+        logger.debug(
+            f"🚀 Provider Pool 管理器初始化 (延遲載入模式): "
+            f"最小={self.config.min_size}, 最大={self.config.max_size}, "
+            f"類型={self.config.provider_type}"
         )
     
     def _initialize_pool(self):
@@ -218,15 +218,15 @@ class ProviderPoolManager:
             # 2. 如果池是空的，創建第一個 provider
             with self._lock:
                 if len(self._available) == 0 and len(self._all_providers) < self.config.max_size:
-                    logger.info("🔥 Warm up: 創建第一個 provider...")
+                    logger.debug("🔥 暖機: 創建第一個 provider...")
                     try:
                         provider = self._create_provider()
                         self._available.append(provider)
-                        logger.info("✅ Warm up provider 創建成功")
+                        logger.debug("✅ 暖機 provider 創建成功")
                     except Exception as e:
-                        logger.warning(f"⚠️ Warm up 創建 provider 失敗: {e}")
+                        logger.warning(f"⚠️ 暖機創建 provider 失敗: {e}")
                 else:
-                    logger.debug(f"Warm up: 已有 {len(self._available)} 個可用 provider")
+                    logger.debug(f"暖機: 已有 {len(self._available)} 個可用 provider")
             
             # 3. 同時觸發模型載入（如果使用共享模型）
             future = None
@@ -255,7 +255,7 @@ class ProviderPoolManager:
                     
                     status = model_loader.get_status()
                     if model_key not in status['loaded_models']:
-                        logger.info(f"🔥 Warm up: 觸發模型載入 ({model_key})...")
+                        logger.debug(f"🔥 暖機: 觸發模型載入 ({model_key})...")
                         # 背景載入模型
                         future = model_loader.preload_model_async(
                             model_type="faster-whisper",
@@ -263,7 +263,7 @@ class ProviderPoolManager:
                             device=whisper_config.whisper_device or "cpu",
                             compute_type=resolved_compute_type
                         )
-                        logger.info("📋 模型背景載入已啟動")
+                        logger.debug("📋 模型背景載入已啟動")
                         
                         # 如果需要等待完成
                         if wait_for_completion:
@@ -275,7 +275,7 @@ class ProviderPoolManager:
                 logger.debug(f"模型預載過程中的錯誤（非關鍵）: {e}")
                 
         except Exception as e:
-            logger.warning(f"⚠️ Warm up 失敗（非關鍵）: {e}")
+            logger.warning(f"⚠️ 暖機失敗（非關鍵）: {e}")
             
         return True
     
