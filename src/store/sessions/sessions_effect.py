@@ -142,7 +142,7 @@ class SessionEffects:
     def _init_provider_pool(self):
         """初始化 Provider Pool - 使用單例"""
         self._provider_pool = get_provider_manager()  # 使用單例而不是創建新實例
-        logger.info(f"Provider pool initialized (using singleton)")
+        # 移除重複的日誌訊息，provider_manager 已經記錄了
 
     # === FSM 驗證輔助方法 ===
 
@@ -519,6 +519,10 @@ class SessionEffects:
             f"✅ Wake word detected: '{source}' (confidence: {confidence:.3f}) at {timestamp:.3f} for session {session_id}"
         )
 
+        # 播放 ASR 回饋音（開始）
+        self.store.dispatch(play_asr_feedback(session_id, "play"))
+        logger.info(f"🔊 Dispatched ASR feedback play for session {session_id}")
+
         # 使用原生方法觸發 FSM 狀態轉換
         fsm = self._get_or_create_fsm(session_id)
         success = False
@@ -880,6 +884,10 @@ class SessionEffects:
 
         # Dispatch transcribe_done action with result
         self.store.dispatch(transcribe_done(session_id, result))
+        
+        # 停止 ASR 回饋音
+        self.store.dispatch(play_asr_feedback(session_id, "stop"))
+        logger.info(f"🔇 Dispatched ASR feedback stop for session {session_id}")
 
         # Reset session 只在最後統一處理，避免重複調用
         # self._reset_session(session_id)  # 移到 handle_transcribe_done 統一處理
@@ -935,6 +943,10 @@ class SessionEffects:
 
         # Dispatch transcribe_done action with result
         self.store.dispatch(transcribe_done(session_id, result))
+        
+        # 停止 ASR 回饋音
+        self.store.dispatch(play_asr_feedback(session_id, "stop"))
+        logger.info(f"🔇 Dispatched ASR feedback stop for session {session_id}")
 
         # Reset session 只在最後統一處理，避免重複調用
         # self._reset_session(session_id)  # 移到 handle_transcribe_done 統一處理
@@ -1289,33 +1301,33 @@ class SessionEffects:
         return action_stream.pipe(ofType(wake_activated), ops.do_action(self._on_wake_activated))
 
     def _on_wake_activated(self, action):
-        """處理喚醒詞激活事件"""
+        """處理喚醒詞激活事件（用於手動觸發）"""
         payload = action.payload
         session_id = payload.get("session_id")
         source = payload.get("source", "unknown")
 
         logger.info(f"Wake word activated for session {session_id} from {source}")
-
-        # 使用原生方法觸發 FSM 狀態轉換
-        fsm = self._get_or_create_fsm(session_id)
-        success = False
-        if fsm:
-            old_state = fsm.state
-            if hasattr(fsm, "wake_activated"):
-                success = fsm.wake_activated()
-            else:
-                success = fsm.trigger(Action.WAKE_ACTIVATED)
-            if success:
+        
+        # 如果是手動觸發（如通過 WebRTC DataChannel），需要發送 record_started
+        # 檢查是否已經在錄音中
+        if session_id not in self._recording_start_timestamps:
+            # 開始錄音
+            timestamp = time.time()
+            recording_start = timestamp - self.pre_roll_duration
+            self._recording_start_timestamps[session_id] = recording_start
+            
+            # 使用原生方法觸發 FSM 狀態轉換
+            fsm = self._get_or_create_fsm(session_id)
+            if fsm and hasattr(fsm, "record_started"):
+                old_state = fsm.state
+                fsm.record_started()
                 logger.info(f"✅ FSM: [{session_id}] {old_state} → {fsm.state}")
-            else:
-                logger.warning(f"❌ FSM: [{session_id}] Failed to transition from {old_state}")
-
-        if success:
-            # 已修復: 現在完全通過 FSM 管理狀態
-            # FSM 已經正確處理了狀態轉換到 processing_activated
-            logger.info(f"✅ FSM transitioned to activated state for session {session_id}")
+            
+            # 播放 ASR 回饋音（開始）
+            self.store.dispatch(play_asr_feedback(session_id, "play"))
+            logger.info(f"🔊 Dispatched ASR feedback play for manual wake activation")
         else:
-            logger.error(f"❌ Failed to transition FSM to activated state for session {session_id}")
+            logger.info(f"Session {session_id} already recording, skipping record_started")
 
     def _init_session_listening(self, action):
         """初始化會話監聽"""
@@ -1406,6 +1418,10 @@ class SessionEffects:
         # 停止錄音
         if recording.is_recording(session_id):
             recording.stop_recording(session_id)
+            
+        # 停止 ASR 回饋音
+        self.store.dispatch(play_asr_feedback(session_id, "stop"))
+        logger.info(f"🔇 Dispatched ASR feedback stop for wake deactivation")
 
         # FSM 會通過 wake_deactivated 轉換自動回到 IDLE 狀態
 

@@ -54,10 +54,7 @@ from src.store.sessions.sessions_action import (
     transcribe_done,
     wake_activated,
     wake_deactivated,
-    record_started,
-    asr_stream_started,
-    record_stopped,
-    asr_stream_stopped,
+    play_asr_feedback,
 )
 from src.store.sessions.sessions_selector import (
     get_session_by_id,
@@ -592,15 +589,18 @@ class HTTPSSEServer:
                 action_type = action.get("type", "") if isinstance(action, dict) else ""
                 payload = action.get("payload", {}) if isinstance(action, dict) else {}
             
+            # 記錄所有收到的 action（調試用）
+            if action_type not in [receive_audio_chunk.type]:
+                logger.info(f"📡 [HTTP SSE] 處理 Store action: {action_type}")
+            
             # 只有我們關心的事件才處理
-            if action_type in [transcribe_done.type, record_started.type, asr_stream_started.type, 
-                              record_stopped.type, asr_stream_stopped.type]:
+            if action_type in [transcribe_done.type, play_asr_feedback.type]:
                 # 安全地在事件循環中執行
                 self._schedule_async_task(action_type, payload)
         
         # 訂閱 Store 的 action stream
         self.store_subscription = store._action_subject.subscribe(handle_store_action)
-        logger.info("✅ Store 事件監聽器已設定")
+        # logger.debug("Store 事件監聽器已設定")  # 改為 debug 級別，避免重複顯示
     
     def _schedule_async_task(self, action_type: str, payload: Dict[str, Any]):
         """安全地排程非同步任務"""
@@ -617,11 +617,22 @@ class HTTPSSEServer:
             if action_type == transcribe_done.type:
                 asyncio.run_coroutine_threadsafe(self._handle_transcribe_done(payload), self.loop)
             
-            # 監聽錄音開始/停止事件
-            elif action_type == record_started.type or action_type == asr_stream_started.type:
-                asyncio.run_coroutine_threadsafe(self._handle_asr_feedback_play(payload), self.loop)
-            elif action_type == record_stopped.type or action_type == asr_stream_stopped.type:
-                asyncio.run_coroutine_threadsafe(self._handle_asr_feedback_stop(payload), self.loop)
+            # 監聽 ASR 回饋音事件
+            elif action_type == play_asr_feedback.type:
+                # 根據 command 判斷播放或停止
+                # 處理 dict 和 immutables.Map 的情況
+                command = None
+                if hasattr(payload, 'get'):
+                    command = payload.get("command")
+                elif isinstance(payload, dict):
+                    command = payload.get("command")
+                
+                if command == "play":
+                    asyncio.run_coroutine_threadsafe(self._handle_asr_feedback_play(payload), self.loop)
+                elif command == "stop":
+                    asyncio.run_coroutine_threadsafe(self._handle_asr_feedback_stop(payload), self.loop)
+                else:
+                    logger.warning(f"未知的 ASR 回饋音 command: {command}, payload type: {type(payload)}")
                 
         except Exception as e:
             logger.error(f"排程非同步任務失敗: {e}")
@@ -685,9 +696,20 @@ class HTTPSSEServer:
     async def _handle_asr_feedback_play(self, payload: Dict[str, Any]):
         """處理 ASR 回饋音播放事件"""
         try:
-            session_id = payload.get("session_id")
+            # 處理 payload 可能是字串、dict 或 immutables.Map 的情況
+            session_id = None
+            
+            if isinstance(payload, str):
+                session_id = payload
+            elif hasattr(payload, 'get'):  # 處理 dict 和 immutables.Map
+                session_id = payload.get("session_id")
+                # 如果是 immutables.Map，session_id 可能也是 immutables.Map
+                if hasattr(session_id, 'get'):
+                    session_id = str(session_id) if session_id else None
+            
             if not session_id:
-                logger.warning("ASR 回饋音播放事件缺少 session_id")
+                # 靜默返回，可能是其他 API 的 session
+                logger.info(f"ASR 回饋音播放事件缺少 session_id，payload: {payload}")
                 return
             
             # 發送 SSE 事件
@@ -699,7 +721,7 @@ class HTTPSSEServer:
             
             await self._send_sse_event(session_id, SSEEventTypes.PLAY_ASR_FEEDBACK, event_data.model_dump())
             
-            logger.debug(f"🔊 ASR 回饋音播放指令已推送 [session: {session_id}]")
+            logger.info(f"🔊 ASR 回饋音播放指令已推送 [session: {session_id}]")
             
         except Exception as e:
             logger.error(f"處理 ASR 回饋音播放事件失敗: {e}")
@@ -707,9 +729,20 @@ class HTTPSSEServer:
     async def _handle_asr_feedback_stop(self, payload: Dict[str, Any]):
         """處理 ASR 回饋音停止事件"""
         try:
-            session_id = payload.get("session_id")
+            # 處理 payload 可能是字串、dict 或 immutables.Map 的情況
+            session_id = None
+            
+            if isinstance(payload, str):
+                session_id = payload
+            elif hasattr(payload, 'get'):  # 處理 dict 和 immutables.Map
+                session_id = payload.get("session_id")
+                # 如果是 immutables.Map，session_id 可能也是 immutables.Map
+                if hasattr(session_id, 'get'):
+                    session_id = str(session_id) if session_id else None
+            
             if not session_id:
-                logger.warning("ASR 回饋音停止事件缺少 session_id")
+                # 靜默返回，可能是其他 API 的 session
+                logger.info(f"ASR 回饋音停止事件缺少 session_id，payload: {payload}")
                 return
             
             # 發送 SSE 事件
@@ -721,7 +754,7 @@ class HTTPSSEServer:
             
             await self._send_sse_event(session_id, SSEEventTypes.PLAY_ASR_FEEDBACK, event_data.model_dump())
             
-            logger.debug(f"🔇 ASR 回饋音停止指令已推送 [session: {session_id}]")
+            logger.info(f"🔇 ASR 回饋音停止指令已推送 [session: {session_id}]")
             
         except Exception as e:
             logger.error(f"處理 ASR 回饋音停止事件失敗: {e}")

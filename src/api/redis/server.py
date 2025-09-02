@@ -48,10 +48,7 @@ from src.store.sessions.sessions_action import (
     transcribe_done,
     delete_session,
     wake_activated,
-    record_started,
-    asr_stream_started,
-    record_stopped,
-    asr_stream_stopped,
+    play_asr_feedback,
 )
 from src.store.sessions.sessions_selector import get_session_by_id, get_all_sessions, get_session_last_transcription
 from src.config.manager import ConfigManager
@@ -482,20 +479,35 @@ class RedisServer:
                 action_type = action.get("type", "") if isinstance(action, dict) else ""
                 payload = action.get("payload", {}) if isinstance(action, dict) else {}
 
+            # 記錄所有收到的 action（調試用）
+            if action_type not in [receive_audio_chunk.type]:
+                logger.info(f"📡 [Redis] 處理 Store action: {action_type}")
+
             # 監聽轉譯完成事件 - 使用正確的 action type 字串
             if action_type == transcribe_done.type:
                 self._handle_transcribe_done(payload)
 
-            # 監聽錄音開始/停止事件，發送 ASR 回饋音控制
-            elif action_type == record_started.type or action_type == asr_stream_started.type:
-                self._handle_asr_feedback_play(payload)
-            elif action_type == record_stopped.type or action_type == asr_stream_stopped.type:
-                self._handle_asr_feedback_stop(payload)
+            # 監聽 ASR 回饋音事件
+            elif action_type == play_asr_feedback.type:
+                # 根據 command 判斷播放或停止
+                # 處理 dict 和 immutables.Map 的情況
+                command = None
+                if hasattr(payload, 'get'):
+                    command = payload.get("command")
+                elif isinstance(payload, dict):
+                    command = payload.get("command")
+                
+                if command == "play":
+                    self._handle_asr_feedback_play(payload)
+                elif command == "stop":
+                    self._handle_asr_feedback_stop(payload)
+                else:
+                    logger.warning(f"未知的 ASR 回饋音 command: {command}, payload type: {type(payload)}")
 
         # 訂閱 Store 的 action stream
         self.store_subscription = store._action_subject.subscribe(handle_store_action)
         store_subscription = self.store_subscription
-        logger.info("✅ Store 事件監聽器已設定")
+        # logger.debug("Store 事件監聽器已設定")  # 改為 debug 級別，避免重複顯示
 
     def _handle_transcribe_done(self, payload: Dict[str, Any]):
         """處理轉譯完成事件，發布到 Redis"""
@@ -563,9 +575,20 @@ class RedisServer:
     def _handle_asr_feedback_play(self, payload: Dict[str, Any]):
         """處理 ASR 回饋音播放事件"""
         try:
-            session_id = payload.get("session_id")
+            # 處理 payload 可能是字串、dict 或 immutables.Map 的情況
+            session_id = None
+            
+            if isinstance(payload, str):
+                session_id = payload
+            elif hasattr(payload, 'get'):  # 處理 dict 和 immutables.Map
+                session_id = payload.get("session_id")
+                # 如果是 immutables.Map，session_id 可能也是 immutables.Map
+                if hasattr(session_id, 'get'):
+                    session_id = str(session_id) if session_id else None
+                
             if not session_id:
-                logger.warning("ASR 回饋音播放事件缺少 session_id")
+                # 靜默返回，可能是其他 API 的 session
+                logger.info(f"ASR 回饋音播放事件缺少 session_id，payload: {payload}")
                 return
 
             # 發布播放 ASR 回饋音指令到 Redis
@@ -575,7 +598,7 @@ class RedisServer:
 
             self.publisher.publisher(RedisChannels.RESPONSE_PLAY_ASR_FEEDBACK, response.model_dump())
 
-            logger.debug(f"🔊 ASR 回饋音播放指令已發布 [session: {session_id}]")
+            logger.info(f"🔊 ASR 回饋音播放指令已發布 [session: {session_id}]")
 
         except Exception as e:
             logger.error(f"處理 ASR 回饋音播放事件失敗: {e}")
@@ -583,9 +606,20 @@ class RedisServer:
     def _handle_asr_feedback_stop(self, payload: Dict[str, Any]):
         """處理 ASR 回饋音停止事件"""
         try:
-            session_id = payload.get("session_id")
+            # 處理 payload 可能是字串、dict 或 immutables.Map 的情況
+            session_id = None
+            
+            if isinstance(payload, str):
+                session_id = payload
+            elif hasattr(payload, 'get'):  # 處理 dict 和 immutables.Map
+                session_id = payload.get("session_id")
+                # 如果是 immutables.Map，session_id 可能也是 immutables.Map
+                if hasattr(session_id, 'get'):
+                    session_id = str(session_id) if session_id else None
+                
             if not session_id:
-                logger.warning("ASR 回饋音停止事件缺少 session_id")
+                # 靜默返回，可能是其他 API 的 session
+                logger.info(f"ASR 回饋音停止事件缺少 session_id，payload: {payload}")
                 return
 
             # 發布停止 ASR 回饋音指令到 Redis
@@ -595,7 +629,7 @@ class RedisServer:
 
             self.publisher.publisher(RedisChannels.RESPONSE_PLAY_ASR_FEEDBACK, response.model_dump())
 
-            logger.debug(f"🔇 ASR 回饋音停止指令已發布 [session: {session_id}]")
+            logger.info(f"🔇 ASR 回饋音停止指令已發布 [session: {session_id}]")
 
         except Exception as e:
             logger.error(f"處理 ASR 回饋音停止事件失敗: {e}")
