@@ -201,7 +201,9 @@ class RedisClient:
                 self.session_id = response.session_id
                 if old_session_id and old_session_id != self.session_id:
                     logger.warning(f"⚠️ Session ID 已更新: {old_session_id} → {self.session_id}")
-                logger.info(f"✅ 會話已建立: {self.session_id} (request_id: {self.request_id})")
+                logger.info(f"✅ Session 已建立")
+                logger.info(f"   Session ID: {self.session_id}")
+                logger.debug(f"   Request ID: {self.request_id}")
                 self.session_created_event.set()
             else:
                 # 舊格式（沒有 request_id）- 可能是舊的測試訊息
@@ -221,7 +223,8 @@ class RedisClient:
             if response.session_id != self.session_id:
                 logger.debug(f"忽略其他 session 的監聽事件: {response.session_id}")
                 return
-            logger.info(f"✅ 確認開始監聽: {response.sample_rate}Hz, {response.channels}ch")
+            logger.info(f"✅ 確認開始監聽")
+            logger.debug(f"   取樣率: {response.sample_rate}Hz, 頻道數: {response.channels}")
             self.listening_started_event.set()
         except Exception as e:
             logger.error(f"處理開始監聽回應失敗: {e}")
@@ -234,7 +237,8 @@ class RedisClient:
             if response.session_id != self.session_id:
                 logger.debug(f"忽略其他 session 的喚醒啟用事件: {response.session_id}")
                 return
-            logger.info(f"✅ 確認喚醒啟用: 來源={response.source}")
+            logger.info(f"✅ 確認喚醒啟用")
+            logger.debug(f"   來源: {response.source}")
             self.wake_activated_event.set()
         except Exception as e:
             logger.error(f"處理喚醒啟用回應失敗: {e}")
@@ -247,7 +251,8 @@ class RedisClient:
             if response.session_id != self.session_id:
                 logger.debug(f"忽略其他 session 的喚醒停用事件: {response.session_id}")
                 return
-            logger.info(f"✅ 確認喚醒停用: 來源={response.source}")
+            logger.info(f"✅ 確認喚醒停用")
+            logger.debug(f"   來源: {response.source}")
             self.wake_deactivated_event.set()
         except Exception as e:
             logger.error(f"處理喚醒停用回應失敗: {e}")
@@ -281,9 +286,9 @@ class RedisClient:
                 logger.debug(f"忽略其他 session 的 ASR 回饋音事件: {response.session_id}")
                 return
             if response.command == "play":
-                logger.info(f"🔊 ASR 回饋音: 播放")
+                logger.info(f"🔊 收到 ASR 回饋音播放事件")
             elif response.command == "stop":
-                logger.info(f"🔇 ASR 回饋音: 停止")
+                logger.info(f"🔇 收到 ASR 回饋音停止事件")
         except Exception as e:
             logger.error(f"處理 ASR 回饋音失敗: {e}")
     
@@ -302,27 +307,30 @@ class RedisClient:
             RedisChannels.REQUEST_CREATE_SESSION,
             message.model_dump()
         )
-        logger.info(f"📤 發送建立會話請求 (策略: {strategy}, request_id: {self.request_id})")
+        logger.info(f"📤 發送建立 Session 請求")
+        logger.debug(f"   策略: {strategy}")
         
         # 等待會話建立
         if not self.session_created_event.wait(timeout=5):
-            logger.error("建立會話超時")
+            logger.error("❌ 建立 Session 超時")
             return False
         
-        logger.info(f"📋 會話建立完成，session_id: {self.session_id}")
+        logger.info(f"✅ Session 建立成功")
+        logger.info(f"   Session ID: {self.session_id}")
         return True
     
     def start_listening(self):
         """開始監聽設定"""
         if not self.session_id:
-            logger.error("尚未建立會話")
+            logger.error("❌ 尚未建立 Session")
             return False
         
         # 等待一下確保收到所有回應，避免使用舊的 session_id
         import time
         time.sleep(0.5)
         
-        logger.info(f"📤 準備發送開始監聽請求，session_id: {self.session_id}")
+        logger.info(f"📤 發送開始監聽請求")
+        logger.debug(f"   Session ID: {self.session_id}")
         
         self.listening_started_event.clear()
         
@@ -336,7 +344,7 @@ class RedisClient:
             RedisChannels.REQUEST_START_LISTENING,
             message.model_dump()
         )
-        logger.info(f"📤 已發送開始監聽請求 (session: {self.session_id}, {self.RATE}Hz, {self.CHANNELS}ch)")
+        logger.debug(f"   取樣率: {self.RATE}Hz, 頻道數: {self.CHANNELS}")
         
         # 根據設定決定是否等待確認
         if self.wait_confirmations:
@@ -349,10 +357,10 @@ class RedisClient:
         """開始音訊串流"""
         try:
             if not self.session_id:
-                logger.error("無法開始音訊串流：沒有有效的 session_id")
+                logger.error("❌ 無法開始音訊串流：沒有有效的 Session ID")
                 return
                 
-            logger.info(f"🎤 開始音訊串流，session_id: {self.session_id}")
+            logger.info(f"🎤 開始麥克風錄音...")
             
             # 開啟麥克風串流
             self.stream = self.audio.open(
@@ -363,7 +371,7 @@ class RedisClient:
                 frames_per_buffer=self.CHUNK
             )
             
-            logger.info(f"🎤 麥克風已開啟，開始錄音... (session: {self.session_id})")
+            logger.info(f"🎤 麥克風已開啟，開始錄音...")
             logger.info("按 Ctrl+C 停止")
             
             # 音訊處理循環
@@ -444,7 +452,7 @@ class RedisClient:
             source: 啟用來源 (visual, ui, keyword)
         """
         if not self.session_id:
-            logger.error("尚未建立會話")
+            logger.error("❌ 尚未建立 Session")
             return False
         
         self.wake_activated_event.clear()
@@ -457,7 +465,8 @@ class RedisClient:
             RedisChannels.REQUEST_WAKE_ACTIVATE,
             message.model_dump()
         )
-        logger.info(f"🎯 發送喚醒啟用請求 (session: {self.session_id}, source: {source})")
+        logger.info(f"🎯 發送喚醒啟用請求")
+        logger.debug(f"   來源: {source}")
         
         # 根據設定決定是否等待確認
         if self.wait_confirmations:
@@ -473,7 +482,7 @@ class RedisClient:
             source: 停用來源 (visual, ui, vad_silence_timeout)
         """
         if not self.session_id:
-            logger.error("尚未建立會話")
+            logger.error("❌ 尚未建立 Session")
             return False
         
         self.wake_deactivated_event.clear()
@@ -486,7 +495,8 @@ class RedisClient:
             RedisChannels.REQUEST_WAKE_DEACTIVATE,
             message.model_dump()
         )
-        logger.info(f"🛑 發送喚醒停用請求 (session: {self.session_id}, source: {source})")
+        logger.info(f"🛑 發送喚醒停用請求")
+        logger.debug(f"   來源: {source}")
         
         # 根據設定決定是否等待確認
         if self.wait_confirmations:
@@ -554,17 +564,17 @@ def main(wait_confirmations=True):
     try:
         # 初始化
         if not client.initialize():
-            logger.error("初始化失敗")
+            logger.error("❌ 初始化失敗")
             return
         
         # 建立會話
         if not client.create_session():
-            logger.error("建立會話失敗")
+            logger.error("❌ 建立 Session 失敗")
             return
         
         # 開始監聽
         if not client.start_listening():
-            logger.error("開始監聽失敗")
+            logger.error("❌ 開始監聽失敗")
             return
         
         # 測試喚醒啟用/停用（可選）
@@ -584,6 +594,11 @@ def main(wait_confirmations=True):
 
 
 if __name__ == "__main__":
-    logger.info("🚀 Redis 客戶端測試")
+    logger.info("")
     logger.info("=" * 60)
+    logger.info("🚀 Redis 客戶端測試")
+    logger.info("🎤 音訊來源: 麥克風")
+    logger.info("⚡ 傳輸方式: 二進制（無 base64）")
+    logger.info("=" * 60)
+    logger.info("")
     main()

@@ -61,7 +61,8 @@ class HTTPSSEClient:
         try:
             self.audio = pyaudio.PyAudio()
             self.is_running = True
-            logger.info(f"✅ HTTP SSE 客戶端已初始化，連接到 {self.base_url}")
+            logger.info("✅ HTTP SSE 客戶端已初始化")
+            logger.info(f"   連接位址: {self.base_url}")
             return True
         except Exception as e:
             logger.error(f"❌ 初始化失敗: {e}")
@@ -76,7 +77,8 @@ class HTTPSSEClient:
         def sse_listener():
             """SSE 監聽器執行緒"""
             try:
-                logger.info(f"📡 連接到 SSE: {self.sse_url}")
+                logger.info("🔄 正在連接 SSE...")
+                logger.debug(f"   SSE URL: {self.sse_url}")
                 
                 # 建立 SSE 連線
                 response = requests.get(self.sse_url, stream=True, headers={'Accept': 'text/event-stream'})
@@ -99,7 +101,7 @@ class HTTPSSEClient:
             except Exception as e:
                 logger.error(f"SSE 監聽器錯誤: {e}")
             finally:
-                logger.info("📡 SSE 連線已關閉")
+                logger.info("🔌 SSE 連線已關閉")
         
         # 啟動監聽執行緒
         self.sse_thread = threading.Thread(target=sse_listener, daemon=True)
@@ -110,25 +112,42 @@ class HTTPSSEClient:
         """處理 SSE 事件"""
         try:
             if event_type == "connection_ready":
-                logger.info("✅ SSE 連線就緒")
+                logger.info("✅ SSE 連線已建立")
             
             elif event_type == "session_created":
-                logger.info(f"✅ 確認會話建立: {data.get('session_id')}")
+                logger.info("✅ 確認 Session 建立")
+                logger.debug(f"   Session ID: {data.get('session_id')}")
             
             elif event_type == "listening_started":
-                logger.info(f"✅ 確認開始監聽: {data.get('sample_rate')}Hz")
+                logger.info("✅ 確認開始監聽")
+                logger.debug(f"   取樣率: {data.get('sample_rate')}Hz")
             
             elif event_type == "transcribe_done":
                 # 轉譯結果
                 text = data.get("text", "")
                 confidence = data.get("confidence")
+                language = data.get("language")
+                duration = data.get("duration")
+                # 轉譯結果統一格式
                 logger.info("")
                 logger.info("=" * 60)
                 logger.info(f"📝 轉譯結果: {text}")
+                if language:
+                    logger.info(f"   語言: {language}")
                 if confidence:
                     logger.info(f"   信心度: {confidence:.2f}")
+                if duration:
+                    logger.info(f"   時長: {duration:.2f} 秒")
                 logger.info("=" * 60)
                 logger.info("")
+            
+            elif event_type == "play_asr_feedback":
+                # ASR 回饋音控制
+                command = data.get("command")
+                if command == "play":
+                    logger.info("🔊 收到 ASR 回饋音播放事件")
+                elif command == "stop":
+                    logger.info("🔇 收到 ASR 回饋音停止事件")
             
             elif event_type == "error_reported":
                 # 錯誤訊息
@@ -148,7 +167,8 @@ class HTTPSSEClient:
                 "request_id": self.request_id
             }
             
-            logger.info(f"📤 發送建立會話請求")
+            logger.info("📤 發送建立 Session 請求")
+            logger.debug(f"   策略: non_streaming")
             response = requests.post(url, json=payload)
             response.raise_for_status()
             
@@ -156,20 +176,21 @@ class HTTPSSEClient:
             self.session_id = result["session_id"]
             self.sse_url = result["sse_url"]
             
-            logger.info(f"✅ 會話已建立: {self.session_id}")
+            logger.info("✅ Session 建立成功")
+            logger.info(f"   Session ID: {self.session_id}")
             
             # 啟動 SSE 監聽器
             self._start_sse_listener()
             return True
             
         except Exception as e:
-            logger.error(f"建立會話失敗: {e}")
+            logger.error(f"❌ 建立 Session 失敗: {e}")
             return False
     
     def start_listening(self):
         """開始監聽設定"""
         if not self.session_id:
-            logger.error("尚未建立會話")
+            logger.error("❌ 尚未建立 Session")
             return False
         
         try:
@@ -181,13 +202,60 @@ class HTTPSSEClient:
                 "format": "int16"
             }
             
-            logger.info(f"📤 發送開始監聽請求")
+            logger.info("📤 發送開始監聽請求")
+            logger.debug(f"   取樣率: {self.RATE}Hz, 頻道數: {self.CHANNELS}")
             response = requests.post(url, json=payload)
             response.raise_for_status()
             return True
             
         except Exception as e:
-            logger.error(f"開始監聽失敗: {e}")
+            logger.error(f"❌ 開始監聽失敗: {e}")
+            return False
+    
+    def wake_activate(self, source: str = "ui"):
+        """啟用喚醒"""
+        if not self.session_id:
+            logger.error("❌ 尚未建立 Session")
+            return False
+        
+        try:
+            url = f"{self.base_url}/wake_activated"
+            payload = {
+                "session_id": self.session_id,
+                "source": source
+            }
+            
+            logger.info("🎯 發送喚醒啟用請求")
+            logger.debug(f"   來源: {source}")
+            response = requests.post(url, json=payload)
+            response.raise_for_status()
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 喚醒啟用失敗: {e}")
+            return False
+    
+    def wake_deactivate(self, source: str = "vad_silence_timeout"):
+        """停用喚醒"""
+        if not self.session_id:
+            logger.error("❌ 尚未建立 Session")
+            return False
+        
+        try:
+            url = f"{self.base_url}/wake_deactivated"
+            payload = {
+                "session_id": self.session_id,
+                "source": source
+            }
+            
+            logger.info("🛑 發送喚醒停用請求")
+            logger.debug(f"   來源: {source}")
+            response = requests.post(url, json=payload)
+            response.raise_for_status()
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 喚醒停用失敗: {e}")
             return False
     
     def send_audio_chunk(self, audio_data: bytes):
@@ -227,10 +295,10 @@ class HTTPSSEClient:
         """開始麥克風錄音並發送音訊"""
         try:
             if not self.session_id:
-                logger.error("無法開始音訊串流：沒有有效的 session_id")
+                logger.error("❌ 無法開始音訊串流：沒有有效的 Session ID")
                 return
             
-            logger.info(f"🎤 開始麥克風錄音...")
+            logger.info("🎤 開始麥克風錄音...")
             
             # 開啟麥克風串流
             self.stream = self.audio.open(
@@ -268,7 +336,7 @@ class HTTPSSEClient:
     
     def stop(self):
         """停止客戶端"""
-        logger.info("🛑 正在停止客戶端...")
+        logger.info("\n🛑 正在停止客戶端...")
         self.is_running = False
         
         # 關閉音訊
@@ -324,6 +392,13 @@ def main():
         if not client.start_listening():
             return
         
+        # 測試喚醒啟用/停用（可選）
+        # 取消註解以下程式碼來測試喚醒功能和 ASR 回饋音
+        # if client.wake_activate("test"):
+        #     time.sleep(2)  # 等待 ASR 回饋音播放事件
+        #     client.wake_deactivate("test")
+        #     time.sleep(1)
+        
         # 開始麥克風錄音
         client.start_microphone()
         
@@ -334,10 +409,12 @@ def main():
 
 
 if __name__ == "__main__":
-    logger.info("🚀 HTTP SSE 客戶端測試 - 簡化版")
+    logger.info("")
     logger.info("=" * 60)
+    logger.info("🚀 HTTP SSE 客戶端測試")
     logger.info("🎤 音訊來源: 麥克風")
     logger.info("⚡ 傳輸方式: 二進制（無 base64）")
     logger.info("=" * 60)
+    logger.info("")
     
     main()
