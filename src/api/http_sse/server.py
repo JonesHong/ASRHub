@@ -145,32 +145,45 @@ class HTTPSSEServer:
             return await self._handle_wake_deactivate(request)
         
         # === 音訊串流 ===
-        # 舊的 base64 JSON 端點（保留註解）
-        # @self.app.post(SSEEndpoints.EMIT_AUDIO_CHUNK, response_model=AudioChunkResponse)
-        # async def emit_audio_chunk_endpoint(request: EmitAudioChunkRequest):
-        #     """發送音訊片段 (JSON with base64)"""
-        #     # 解碼 base64
-        #     audio_bytes = base64.b64decode(request.audio_data)
-        #     return await self._handle_emit_audio_chunk(
-        #         request.session_id, audio_bytes, request.chunk_id
-        #     )
-        
-        # 新的二進位端點（使用原本的 EMIT_AUDIO_CHUNK 路徑）
         @self.app.post(SSEEndpoints.EMIT_AUDIO_CHUNK)
-        async def emit_audio_chunk_endpoint(
-            request: Request,
-            session_id: str = Query(..., description="Session ID"),
-            chunk_id: Optional[str] = Query(None, description="Chunk ID"),
-            sample_rate: int = Query(16000, description="Sample rate"),
-            channels: int = Query(1, description="Number of channels"),
-            format: str = Query("int16", description="Audio format")
-        ):
-            """直接發送二進制音訊資料（不用 base64）"""
-            # 讀取二進制資料
-            audio_bytes = await request.body()
-            return await self._handle_emit_audio_chunk(
-                session_id, audio_bytes, chunk_id, sample_rate, channels, format
-            )
+        async def emit_audio_chunk_endpoint(request: Request):
+            """發送二進制音訊資料 - 使用 metadata + separator + binary 格式"""
+            # 讀取完整的請求體
+            body = await request.body()
+            
+            # 定義分隔符
+            separator = b'\x00\x00\xFF\xFF'
+            
+            # 找到分隔符位置
+            separator_idx = body.find(separator)
+            if separator_idx == -1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid request format. Expected: [JSON metadata] + [separator] + [binary audio]"
+                )
+            
+            # 分離 metadata 和音訊資料
+            metadata_json = body[:separator_idx]
+            audio_bytes = body[separator_idx + len(separator):]
+            
+            # 解析 metadata
+            try:
+                metadata = json.loads(metadata_json.decode('utf-8'))
+                session_id = metadata.get('session_id')
+                chunk_id = metadata.get('chunk_id')
+                
+                if not session_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Missing session_id in metadata"
+                    )
+            except json.JSONDecodeError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid metadata JSON"
+                )
+            
+            return await self._handle_emit_audio_chunk(session_id, audio_bytes, chunk_id)
         
         # === SSE 事件串流 ===
         @self.app.get(SSEEndpoints.EVENTS_STREAM)
@@ -300,108 +313,32 @@ class HTTPSSEServer:
                 detail=str(e)
             )
     
-    # 舊的 base64 方法（保留註解）
-    # async def _handle_emit_audio_chunk(self, request: EmitAudioChunkRequest) -> AudioChunkResponse:
-    #     """處理音訊片段，確保連續性"""
-    #     try:
-    #         session_id = request.session_id
-    #         # 檢查 session 是否存在
-    #         session = get_session_by_id(session_id)(store.state)
-    #         if not session:
-    #             raise HTTPException(
-    #                 status_code=status.HTTP_404_NOT_FOUND,
-    #                 detail=f"Session {session_id} not found"
-    #             )
-    #         
-    #         # 解碼音訊資料
-    #         try:
-    #             audio_bytes = base64.b64decode(request.audio_data)
-    #         except Exception as e:
-    #             logger.error(f"Base64 解碼失敗: {e}")
-    #             raise HTTPException(
-    #                 status_code=status.HTTP_400_BAD_REQUEST,
-    #                 detail="Invalid audio data encoding"
-    #             )
-    #         
-    #         # 取得音訊緩衝
-    #         buffer_info = self.audio_buffers[session_id]
-    #         
-    #         async with buffer_info["lock"]:
-    #             # 更新序列號
-    #             buffer_info["sequence"] += 1
-    #             current_sequence = buffer_info["sequence"]
-    #             
-    #             # 處理 chunk_id（用於追蹤）
-    #             chunk_id = request.chunk_id or f"chunk_{current_sequence}"
-    #             
-    #             # 檢查是否為重複的 chunk
-    #             if buffer_info["last_chunk_id"] == chunk_id:
-    #                 logger.warning(f"重複的音訊片段 {chunk_id}，跳過處理")
-    #                 return AudioChunkResponse(
-    #                     session_id=session_id,
-    #                     chunk_id=chunk_id,
-    #                     bytes_received=0,
-    #                     status="duplicate"
-    #                 )
-    #             
-    #             # 儲存音訊片段資訊（用於除錯和追蹤）
-    #             buffer_info["chunks"].append({
-    #                 "chunk_id": chunk_id,
-    #                 "sequence": current_sequence,
-    #                 "size": len(audio_bytes),
-    #                 "timestamp": datetime.now().isoformat()
-    #             })
-    #             
-    #             # 限制緩衝大小（保留最近 100 個片段的資訊）
-    #             if len(buffer_info["chunks"]) > 100:
-    #                 buffer_info["chunks"] = buffer_info["chunks"][-100:]
-    #             
-    #             # 更新最後處理的 chunk_id
-    #             buffer_info["last_chunk_id"] = chunk_id
-    #             
-    #             # 分發到 Store（立即處理，不等待）
-    #             action = receive_audio_chunk(
-    #                 session_id=session_id,
-    #                 audio_data=audio_bytes
-    #             )
-    #             store.dispatch(action)
-    #             
-    #             logger.debug(f"📥 音訊片段 [{session_id}]: seq={current_sequence}, chunk={chunk_id}, size={len(audio_bytes)}")
-    #         
-    #         return AudioChunkResponse(
-    #             session_id=session_id,
-    #             chunk_id=chunk_id,
-    #             bytes_received=len(audio_bytes),
-    #             status="received"
-    #         )
-    #         
-    #     except HTTPException:
-    #         raise
-    #     except Exception as e:
-    #         logger.error(f"處理音訊失敗: {e}")
-    #         raise HTTPException(
-    #             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-    #             detail=str(e)
-    #         )
-    
     async def _handle_emit_audio_chunk(
         self, 
         session_id: str,
         audio_bytes: bytes,
-        chunk_id: Optional[str] = None,
-        sample_rate: int = 16000,
-        channels: int = 1,
-        format: str = "int16"
+        chunk_id: Optional[str] = None
     ) -> AudioChunkResponse:
-        """處理二進位音訊片段 - 簡化版本，讓 SessionEffects 處理複雜邏輯"""
+        """處理二進位音訊片段 - 從 session 取得音訊參數"""
         try:
-            # 檢查 session 是否存在
+            # 檢查 session 是否存在並取得音訊參數
             session = get_session_by_id(session_id)(store.state)
             if not session:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Session {session_id} not found"
                 )
+            
+            # 從 session 取得音訊參數（在 start_listening 時設定的）
+            # 使用 getattr 和 get 方法相容不同的資料結構
+            if hasattr(session, 'get'):
+                sample_rate = session.get('sample_rate', 16000)
+                channels = session.get('channels', 1)
+                audio_format = session.get('format', 'int16')
+            else:
+                sample_rate = getattr(session, 'sample_rate', 16000)
+                channels = getattr(session, 'channels', 1)
+                audio_format = getattr(session, 'format', 'int16')
             
             # 如果需要轉換格式，使用 audio_converter 服務
             if sample_rate != 16000 or channels != 1:
@@ -422,7 +359,6 @@ class HTTPSSEServer:
                 logger.debug(f"音訊已轉換: {sample_rate}Hz {channels}ch -> 16000Hz 1ch")
             
             # 直接分發到 Store，讓 SessionEffects 和 audio_queue_manager 處理
-            # 不需要在 API 層管理 buffer
             action = receive_audio_chunk(
                 session_id=session_id,
                 audio_data=audio_bytes

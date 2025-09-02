@@ -4,6 +4,7 @@ HTTP SSE 客戶端測試程式 - 簡化版
 測試 HTTP SSE API 的麥克風音訊串流
 """
 
+import os
 import sys
 import time
 import threading
@@ -11,6 +12,8 @@ import signal
 import json
 from typing import Optional, Dict, Any
 
+# 添加 src 到路徑
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import requests
 import pyaudio
 from sseclient import SSEClient  # pip install sseclient-py
@@ -188,24 +191,29 @@ class HTTPSSEClient:
             return False
     
     def send_audio_chunk(self, audio_data: bytes):
-        """發送音訊片段（二進制傳輸）"""
+        """發送音訊片段（使用 metadata + separator + binary 格式）"""
         if not self.session_id:
             return False
         
         try:
-            # 使用二進制傳輸（無 base64 編碼）
-            url = f"{self.base_url}/emit_audio_chunk"
-            params = {
+            # 組合 metadata JSON
+            metadata = {
                 "session_id": self.session_id,
-                "sample_rate": self.RATE,
-                "channels": self.CHANNELS,
-                "format": "int16"
+                "chunk_id": f"chunk_{time.time()}"
             }
             
+            # 使用特殊的格式：JSON metadata + 分隔符 + 二進制數據
+            metadata_json = json.dumps(metadata).encode('utf-8')
+            separator = b'\x00\x00\xFF\xFF'  # 特殊分隔符
+            
+            # 組合完整消息
+            full_message = metadata_json + separator + audio_data
+            
+            # 發送到伺服器
+            url = f"{self.base_url}/emit_audio_chunk"
             response = requests.post(
-                url, 
-                data=audio_data,
-                params=params,
+                url,
+                data=full_message,
                 headers={"Content-Type": "application/octet-stream"}
             )
             response.raise_for_status()
@@ -242,7 +250,7 @@ class HTTPSSEClient:
                     # 讀取音訊資料
                     audio_data = self.stream.read(self.CHUNK, exception_on_overflow=False)
                     
-                    # 直接發送二進制音訊
+                    # 發送音訊（使用新的格式）
                     self.send_audio_chunk(audio_data)
                     
                 except Exception as e:

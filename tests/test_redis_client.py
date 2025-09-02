@@ -9,6 +9,7 @@ Redis 客戶端測試程式
 """
 
 import json
+import os
 import sys
 import time
 import base64
@@ -17,6 +18,8 @@ import signal
 from datetime import datetime
 from typing import Optional, Dict, Any
 
+# 添加 src 到路徑
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import pyaudio
 import numpy as np
 from redis_toolkit import RedisToolkit, RedisConnectionConfig, RedisOptions
@@ -410,10 +413,11 @@ class RedisClient:
             # 元數據
             metadata = {
                 "session_id": self.session_id,
-                "sample_rate": self.RATE,
-                "channels": self.CHANNELS,
-                "format": "int16",
-                "is_binary": True  # 標記這是二進制消息
+                "chunk_id": f"chunk_{time.time()}"
+                # "sample_rate": self.RATE,
+                # "channels": self.CHANNELS,
+                # "format": "int16",
+                # "is_binary": True  # 標記這是二進制消息
             }
             
             # 使用特殊的頻道來發送二進制音訊
