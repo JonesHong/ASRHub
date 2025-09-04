@@ -30,157 +30,226 @@ ASRHub 是一個企業級的統一語音識別中介軟體系統，旨在簡化�
 
 ### 🔌 多 ASR 提供者支援
 - **Local Whisper** - OpenAI Whisper 本地部署版本
-- **FunASR** - 阿里巴巴開源語音識別
-- **Vosk** - 離線語音識別引擎
-- **Google Speech-to-Text** - Google 雲端語音識別服務
-- **OpenAI Whisper API** - OpenAI 官方 API 服務
+- **FunASR** - 阿里巴巴開源語音識別（規劃中）
+- **Vosk** - 離線語音識別引擎（規劃中）
+- **Google Speech-to-Text** - Google 雲端語音識別服務（規劃中）
+- **OpenAI Whisper API** - OpenAI 官方 API 服務（規劃中）
 
 ### 📡 多協議支援
+- **Redis Pub/Sub** - 分散式訊息傳遞
 - **HTTP SSE (Server-Sent Events)** - 實時串流，Session 重用機制
-- **WebSocket** - 雙向實時通訊
-- **Socket.IO** - 強化的 WebSocket，支援自動重連
+- **WebRTC(LiveKit)** - 實時通訊，支援音訊串流
+- **WebSocket** - 雙向實時通訊（規劃中）
+- **Socket.IO** - 強化的 WebSocket，支援自動重連（規劃中）
 - **gRPC** - 高效能 RPC 框架（規劃中）
-- **Redis Pub/Sub** - 分散式訊息傳遞（規劃中）
 
-### 🎨 音訊處理服務
-- **音訊佇列管理** - 儲存轉換後的 16kHz 音訊，供下游服務使用
-- **緩衝區管理** - 智慧音訊切窗，支援 fixed/sliding/dynamic 三種模式
+### 🎨 無狀態服務
+- **格式轉換** - FFmpeg/SciPy 雙引擎，支援 GPU 加速
+- **音訊佇列管理** - AudioQueueManager 儲存轉換後的 16kHz 音訊，供下游服務使用
+- **緩衝區管理** - BufferManager 音訊切窗，支援 fixed/sliding/dynamic 三種模式
+- **喚醒詞偵測** - OpenWakeWord 自訂喚醒詞觸發
+- **音訊錄製** - AudioRecorder 提供錄製功能
+- **VAD (Voice Activity Detection)** - Silero VAD 語音活動偵測
 - **音訊增強** - 自動調整音量、動態壓縮、軟限幅，解決麥克風音量問題
 - **深度降噪** - DeepFilterNet 深度學習降噪，消除白噪音、增強人聲
-- **VAD (Voice Activity Detection)** - Silero VAD 語音活動偵測
-- **喚醒詞偵測** - OpenWakeWord 自訂喚醒詞觸發
-- **格式轉換** - FFmpeg/SciPy 雙引擎，支援 GPU 加速
+- **倒數計時器** - Timer Service 靜音倒數計時
 
-### 🔄 進階功能
-- **Provider 池化管理** - 並行處理多個 Session，最大化硬體資源利用
-- **FSM 狀態管理** - IDLE、LISTENING、BUSY 三態管理
-- **Session 重用機制** - 減少連線開銷，提升效能  
-- **實時串流支援** - 低延遲音訊處理
-- **智慧資源分配** - 租借機制、老化防止、配額管理
-- **健康檢查機制** - 自動移除不健康的 Provider 實例
-- **錯誤處理與重試** - 穩定可靠的服務
+### 核心功能說明
 
-### 🚀 最新架構改進 (v0.4.0)
-- **FSM + PyStoreX 整合** - 狀態機驗證結合響應式狀態管理，確保狀態轉換合法性
-- **時間戳協調機制** - 非破壞性多讀取器，解決服務競爭問題  
-- **SessionEffects 實作** - 整合現有服務，遵循 KISS 原則
-- **批量後處理管線** - 錄音結束後統一降噪增強，提升品質
-- **Pre-roll 與 Tail Padding** - 喚醒前 500ms 預錄，靜音後 300ms 延續
-- **服務職責分離** - FSM 定義規則、Validator 驗證、Effects 處理副作用、Reducer 純函數更新
-
-### 🎯 時間戳音訊佇列系統 (v0.3.1)
-- **非破壞性多讀取器** - 多個服務可同時讀取相同音訊，避免競爭
-- **Pre-roll 預錄緩衝** - 喚醒詞檢測後回溯 500ms，確保完整捕獲第一個字
-- **Tail Padding 尾部填充** - 靜音檢測後延續 300ms，確保不截斷最後字尾
-- **獨立讀取位置** - 每個服務（喚醒詞、VAD、錄音）維護獨立的讀取進度
-- **時間戳索引** - 精確的音訊片段時間定位，支援範圍查詢
-- **向後相容** - 保留原有 pop() 介面，新增 pull_from_timestamp() 等時間戳介面
-
+* **FSM + PyStoreX 整合**：以狀態機驗證搭配響應式狀態管理，保障狀態轉換合法且可追蹤（預設：
+* `IDLE → PROCESSING → BUSY`）。
+* **職責分離**：`FSM` 定義規則、`Effects` 處理副作用、`Reducer` 以**純函數**更新狀態。
+* **時間戳協調機制**：支援**非破壞性多讀取器**、**獨立讀取位置**與**時間戳索引**，多個服務可同時讀取同一段音訊而互不干擾。
+* **即時串流支援**：低延遲處理，與**批量後處理**互補。
+* **Provider 池化管理**：並行處理多 Session，最大化硬體資源利用。
+* **Session 重用**：降低連線/載入開銷，提升吞吐。
+* **智慧資源分配**：租借機制、老化防止、配額管理。
+* **健康檢查**：自動剔除不健康的 Provider 實例。
+* **時間戳多讀協調**：以非破壞性佇列避免競爭條件與資料爭用。
+* **錯誤處理與重試**：可配置策略（退避、上限），確保長時間服務穩定。
+  
 ## 🏗️ 系統架構
 
 ### 事件驅動架構設計
 
 ASRHub 採用**事件驅動架構 (Event-Driven Architecture)** 結合 **Redux-like 狀態管理模式**，確保系統狀態的可預測性和可追蹤性。
 
-```mermaid
-graph TB
-    subgraph "客戶端層"
-        WEB[Web 應用]
-        MOBILE[移動應用]
-        IOT[IoT 設備]
-    end
-    
-    subgraph "ASRHub 統一中介層"
-        subgraph "API 協議層"
-            SSE["HTTP SSE<br/>FastAPI + SSEManager<br/>+ Session 重用"]
-            WEBRTC["WebRTC<br/>aiortc + 房間管理<br/>+ 低延遲"]
-            REDIS["Redis Pub/Sub<br/>+ 頻道管理<br/>+ 分散式"]
-        end
-        
-        subgraph "核心狀態管理"
-            STORE["PyStoreX Store<br/>(單一真相來源)"]
-            REDUCER[Sessions Reducer]
-            EFFECTS["Session Effects<br/>(副作用處理)"]
-            SELECTOR["Selectors<br/>(狀態查詢)"]
-        end
-        
-        subgraph "FSM 狀態機"
-            FSM["FSM Controller<br/>IDLE→LISTENING→BUSY"]
-            STRATEGY["策略模式<br/>BATCH/NON_STREAMING/STREAMING"]
-        end
-        
-        subgraph "音訊處理管線"
-            QUEUE["AudioQueueManager<br/>(時間戳支援+16kHz)"]
-            BUFFER["BufferManager<br/>(Fixed/Sliding/Dynamic)"]
-            ENHANCE["AudioEnhancer<br/>(auto_enhance)"]
-            DENOISE["DeepFilterNet<br/>(深度降噪)"]
-            VAD["Silero VAD<br/>(語音偵測)"]
-            WAKEWORD["OpenWakeWord<br/>(喚醒詞)"]
-        end
-        
-        subgraph "無狀態服務層"
-            CONV["AudioConverter<br/>(FFmpeg/SciPy)"]
-            REC["Recording Service<br/>(批次後處理)"]
-            MIC["Microphone Capture<br/>(音訊輸入)"]
-            TIMER["Timer Service<br/>(計時管理)"]
-        end
-        
-        subgraph "ASR 提供者池"
-            POOL["Provider Pool Manager<br/>(租借機制+並行處理)"]
-            WHISPER["Whisper Instances[]<br/>(Faster Whisper)"]
-            FUNASR["FunASR Instances[]"]
-            VOSK["Vosk Instances[]"]
-            GOOGLE["Google STT Instances[]"]
-            OPENAI["OpenAI API Instances[]"]
-        end
-    end
-    
-    WEB -->|HTTP SSE| SSE
-    MOBILE -->|WebRTC| WEBRTC
-    IOT -->|Redis| REDIS
-    
-    SSE -->|Action| STORE
-    WEBRTC -->|Action| STORE
-    REDIS -->|Action| STORE
-    
-    STORE --> REDUCER
-    REDUCER --> EFFECTS
-    EFFECTS --> SELECTOR
-    SELECTOR --> FSM
-    
-    FSM --> STRATEGY
-    STRATEGY --> QUEUE
-    
-    MIC --> CONV
-    CONV --> QUEUE
-    QUEUE --> BUFFER
-    BUFFER --> ENHANCE
-    ENHANCE --> DENOISE
-    DENOISE --> VAD
-    VAD --> WAKEWORD
-    
-    WAKEWORD --> REC
-    REC --> POOL
-    
-    POOL --> WHISPER
-    POOL --> FUNASR
-    POOL --> VOSK
-    POOL --> GOOGLE
-    POOL --> OPENAI
-    
-    WHISPER -->|Transcript| EFFECTS
-    FUNASR -->|Transcript| EFFECTS
-    VOSK -->|Transcript| EFFECTS
-    GOOGLE -->|Transcript| EFFECTS
-    OPENAI -->|Transcript| EFFECTS
-    
-    EFFECTS -->|SSE 事件| SSE
-    EFFECTS -->|WebRTC 信令| WEBRTC
-    EFFECTS -->|Redis 發布| REDIS
-    
-    TIMER -.->|計時控制| REC
-```
+1) 系統概覽
+   ```mermaid
+    %% 啟用自動換行與最大換行寬度（可調 200~320）
+    %% 需要 Mermaid >= 10.1.0
+    %%{init: { "flowchart": { "wrappingWidth": 270, "htmlLabels": true } }}%%
+    flowchart TB
+    CLIENT["Client"]:::client
+    PROT["API 協議層"]:::proto
+    CORE["核心狀態管理"]:::core
+    SERVICE["無狀態服務"]:::pipe
+    POOL["ASR 提供者池"]:::pool
+    OUT["輸出事件"]:::proto
 
+    CLIENT --> PROT --> CORE --> SERVICE --> POOL -.-> CORE -.-> OUT
+
+    classDef client fill:#E6F4FF,stroke:#1A73E8,color:#0B2851,stroke-width:1px;
+    classDef proto  fill:#FFF4E5,stroke:#FB8C00,color:#5F370E,stroke-width:1px;
+    classDef core   fill:#E8F5E9,stroke:#2E7D32,color:#0B2F14,stroke-width:1px;
+    classDef pipe   fill:#FDEDED,stroke:#C62828,color:#4A1212,stroke-width:1px;
+    classDef pool   fill:#E3F2FD,stroke:#1565C0,color:#0D2A4C,stroke-width:1px;
+   ```
+2) 協議入口（Ingress）細節
+   ```mermaid
+    %% 啟用自動換行與最大換行寬度（可調 200~320）
+    %% 需要 Mermaid >= 10.1.0
+    %%{init: { "flowchart": { "wrappingWidth": 270, "htmlLabels": true } }}%%
+   flowchart TB
+    CLIENT[Client]:::client
+    SSE["HTTP SSE<br/>FastAPI + SSEManager<br/>Session 重用"]:::proto
+    WEBRTC["WebRTC<br/>LiveKit<br/>低延遲"]:::proto
+    REDIS["Redis Pub/Sub<br/>頻道管理<br/>分散式"]:::proto
+    STORE["PyStoreX Store<br/>(單一真相來源)"]:::core
+
+    CLIENT -->|HTTP SSE| SSE -->|Action| STORE
+    CLIENT -->|WebRTC| WEBRTC -->|Action| STORE
+    CLIENT -->|Redis| REDIS -->|Action| STORE
+
+    classDef client fill:#E6F4FF,stroke:#1A73E8,color:#0B2851;
+    classDef proto  fill:#FFF4E5,stroke:#FB8C00,color:#5F370E;
+    classDef core   fill:#E8F5E9,stroke:#2E7D32,color:#0B2F14;
+   ```
+3) 核心狀態與事件（單向資料流 + FSM）
+   ```mermaid
+    %% 啟用自動換行與最大換行寬度（可調 200~320）
+    %% 需要 Mermaid >= 10.1.0
+    %%{init: { "flowchart": { "wrappingWidth": 270, "htmlLabels": true } }}%%
+    flowchart TB
+    STORE["Store"]:::core
+    REDUCER["Reducer<br/>(純函數)"]:::core
+    EFFECTS["Effects<br/>(組合無狀態服務)"]:::core
+    SELECTOR["Selectors<br/>(狀態查詢/派生)"]:::core
+    FSM["Session FSM<br/>IDLE → PROCESSING → BUSY"]:::fsm
+    STRATEGY["策略模式<br/>BATCH / NON_STREAMING / STREAMING"]:::fsm
+    OUT["對外事件<br/>SSE / WebRTC / Redis"]:::proto
+
+    STORE --> REDUCER --> EFFECTS
+    STORE --> SELECTOR -.-> FSM -.-> STRATEGY
+    EFFECTS -.-> OUT
+
+    classDef core fill:#E8F5E9,stroke:#2E7D32,color:#0B2F14;
+    classDef fsm  fill:#F3E5F5,stroke:#7B1FA2,color:#3D0E47;
+    classDef proto fill:#FFF4E5,stroke:#FB8C00,color:#5F370E;
+
+   ```
+4) 無狀態服務（Stateless，按實際資料流排序）
+   ```mermaid
+     %%{init: { "flowchart": { "wrappingWidth": 270, "htmlLabels": true } }}%%
+    flowchart TB
+        %% 無狀態服務（按實際資料流排序）
+        CONV["AudioConverter<br/>(FFmpeg/SciPy → 16kHz)"]:::pipe
+        QUEUE["AudioQueueManager<br/>(時間戳索引儲存)"]:::pipe
+        BUFFER["BufferManager<br/>(智能窗口: 固定/滑動/動態)"]:::pipe
+        OWW["OpenWakeWord<br/>(喚醒詞檢測)"]:::pipe
+        VAD["Silero VAD<br/>(語音活動偵測)"]:::pipe
+        REC["Recording Service<br/>(錄音管理)"]:::pipe
+        TIMER["Timer Service<br/>(靜音計時)"]:::pipe
+        DENOISE["DeepFilterNet<br/>(批量降噪)"]:::pipe
+        ENHANCE["AudioEnhancer<br/>(音頻增強)"]:::pipe
+
+        CONV --> QUEUE --> BUFFER --> OWW --> VAD --> REC
+        TIMER -.->|靜音超時| REC
+        REC -->|批量後處理| DENOISE --> ENHANCE
+
+        classDef pipe fill:#FDEDED,stroke:#C62828,color:#4A1212;
+   ```
+5) Provider 池與結果回傳
+   ```mermaid
+    %%{init: { "flowchart": { "wrappingWidth": 270, "htmlLabels": true } }}%%
+    flowchart TB
+        AUDIO["Enhanced Audio<br/>or Recording File"]:::pipe
+        POOL["Provider Pool Manager<br/>(lease_context 租借機制)"]:::pool
+        PROVIDERS["Provider Instances[]<br/>(Whisper/FunASR/Vosk/Google/OpenAI)"]:::pool
+        EFFECTS["Effects<br/>(transcribe_done)"]:::core
+        OUT["Event Output<br/>(SSE/WebRTC/Redis)"]:::proto
+
+        AUDIO --> POOL -->|租借| PROVIDERS -->|TranscriptionResult| EFFECTS --> OUT
+
+        classDef pipe fill:#FDEDED,stroke:#C62828,color:#4A1212;
+        classDef pool fill:#E3F2FD,stroke:#1565C0,color:#0D2A4C;
+        classDef core fill:#E8F5E9,stroke:#2E7D32,color:#0B2F14;
+        classDef proto fill:#FFF4E5,stroke:#FB8C00,color:#5F370E
+   ```
+  序列圖：一次典型的串流辨識
+  
+   ```mermaid
+       sequenceDiagram
+       autonumber
+       participant C as Client
+       participant API as API Layer<br/>(SSE/WebRTC/Redis)
+       participant Store as Store<br/>(PyStoreX)
+       participant SE as Session Effects
+       participant FSM as FSM<br/>(State Machine)
+       participant AQ as Audio Queue<br/>(Timestamped)
+       participant PS as Processing Services<br/>(VAD/WakeWord)
+       participant PP as Provider Pool
+       participant ASR as ASR Provider<br/>(Whisper/FunASR)
+       
+       Note over C,ASR: === 連線建立階段 ===
+       C->>API: 建立連線 (SSE/WebRTC/Redis)
+       API->>Store: dispatch(create_session)
+       Store->>SE: on_create_session
+       SE->>FSM: 初始化 FSM (IDLE)
+       SE-->>API: session_created event
+       API-->>C: 連線就緒
+       
+       Note over C,ASR: === 開始聆聽階段 ===
+       C->>API: start_listening(params)
+       API->>Store: dispatch(start_listening)
+       Store->>SE: on_start_listening
+       SE->>FSM: trigger(START_LISTENING)
+       FSM-->>FSM: IDLE → PROCESSING
+       SE-->>API: listening_started event
+       API-->>C: 開始接收音訊
+       
+       Note over C,ASR: === 音訊處理階段 ===
+       loop 持續音訊串流
+           C->>API: 音訊數據 (byte)
+           API->>Store: dispatch(receive_audio_chunk)
+           Store->>SE: on_receive_audio_chunk
+           SE->>AQ: push(timestamp, audio)
+           
+           alt 喚醒詞檢測
+               SE->>PS: openwakeword.detect()
+               PS-->>SE: 喚醒詞觸發
+               SE->>FSM: trigger(WAKE_ACTIVATED)
+               FSM-->>FSM: PROCESSING → ACTIVATED
+               SE->>AQ: pull_with_preroll(500ms)
+           else VAD 檢測
+               SE->>PS: silero_vad.detect()
+               PS-->>SE: 語音/靜音狀態
+               alt 語音結束
+                   SE->>AQ: pull_with_tail(300ms)
+               end
+           end
+       end
+       
+       Note over C,ASR: === ASR 轉譯階段 ===
+       SE->>PP: lease(session_id)
+       PP-->>SE: ASR Provider 實例
+       SE->>ASR: transcribe(audio_segment)
+       ASR-->>SE: TranscriptionResult
+       SE->>Store: dispatch(transcribe_done)
+       Store->>SE: on_transcribe_done
+       SE->>FSM: trigger(TRANSCRIBE_DONE)
+       FSM-->>FSM: TRANSCRIBING → ACTIVATED
+       SE-->>API: transcribe_done event
+       API-->>C: 轉譯結果 (SSE/WebRTC/Redis)
+       
+       Note over C,ASR: === 結束階段 ===
+       C->>API: 結束連線
+       API->>Store: dispatch(delete_session)
+       Store->>SE: on_delete_session
+       SE->>PP: release(session_id)
+       SE->>FSM: 清理狀態
+       SE-->>API: session_deleted
+   ```
 ### 📁 專案結構
 
 ```
@@ -300,81 +369,6 @@ ASRHub/
     └── wakeword/               # 喚醒詞模型
 ```
 
-## 🔧 音訊處理流程
-
-### 完整處理管線
-
-```mermaid
-flowchart LR
-    subgraph "Input"
-        RAW[原始音訊]
-    end
-    
-    subgraph "Pre-Processing"
-        CONV[AudioConverter<br/>轉換 16kHz]
-        QUEUE[AudioQueue<br/>儲存轉換音訊]
-        BUFFER[BufferManager<br/>智慧切窗]
-    end
-    
-    subgraph "Enhancement"
-        ENHANCE[AudioEnhancer<br/>音量調整]
-        DENOISE[DeepFilterNet<br/>深度降噪]
-    end
-    
-    subgraph "Detection"
-        VAD[Silero VAD<br/>語音偵測]
-        WAKE[OpenWakeWord<br/>喚醒詞]
-    end
-    
-    subgraph "ASR"
-        POOL[Provider Pool]
-        ASR1[Whisper]
-        ASR2[FunASR]
-        ASR3[其他]
-    end
-    
-    RAW --> CONV
-    CONV --> QUEUE
-    QUEUE --> BUFFER
-    BUFFER --> ENHANCE
-    ENHANCE --> DENOISE
-    DENOISE --> VAD
-    VAD --> WAKE
-    WAKE --> POOL
-    POOL --> ASR1
-    POOL --> ASR2
-    POOL --> ASR3
-```
-
-### 關鍵組件說明
-
-1. **AudioQueueManager**: 
-   - 儲存已轉換的 16kHz 音訊
-   - Thread-safe 佇列操作
-   - 支援多 Session 並行
-
-2. **BufferManager**:
-   - Fixed 模式：固定大小窗口（VAD 使用）
-   - Sliding 模式：滑動窗口（Whisper 使用）
-   - Dynamic 模式：動態聚合
-
-3. **AudioEnhancer**:
-   - 自動音量調整（解決麥克風音量過小）
-   - 動態壓縮、軟限幅
-   - 智慧處理系統 auto_enhance()
-
-4. **DeepFilterNet**:
-   - 深度學習降噪
-   - 消除背景噪音
-   - 增強人聲品質
-
-5. **Provider Pool Manager**:
-   - 租借機制（Lease）分配 provider
-   - 老化機制防止飢餓
-   - 配額管理防止壟斷
-   - 健康檢查自動修復
-
-
 ## 🚀 快速開始
 
 ### 系統需求
@@ -462,27 +456,6 @@ ffmpeg -version
 ```
 
 
-#### 處理流程
-
-```mermaid
-sequenceDiagram
-    participant Audio as 音訊輸入
-    participant Queue as 時間戳佇列
-    participant Wake as 喚醒詞檢測
-    participant VAD as VAD檢測
-    participant Rec as 錄音服務
-    participant ASR as ASR服務
-    
-    Audio->>Queue: push(audio) → timestamp
-    Queue->>Wake: pull_from_timestamp("wake_word")
-    Wake-->>Queue: 檢測到喚醒詞 at T
-    Queue->>Rec: get_audio_between(T-0.5, ...)
-    Queue->>VAD: pull_from_timestamp("vad", T-0.5)
-    VAD-->>Queue: 檢測到靜音 at T2
-    Queue->>Rec: get_audio_between(..., T2+0.3)
-    Rec->>ASR: 完整錄音（含 pre-roll + tail padding）
-```
-
 
 ## ⚙️ 配置管理
 
@@ -568,8 +541,6 @@ model = config.providers.whisper.model
 - **避免 Action 濫用**: 只在必要時創建新的 Action
 - **設計模式適度**: 可以使用設計模式，但不要過度設計
 
-## 📝 更新日誌
-
 ## 📄 授權條款
 
 本專案採用 MIT 授權條款 - 詳見 [LICENSE](LICENSE) 檔案
@@ -578,19 +549,24 @@ model = config.providers.whisper.model
 
 感謝以下開源專案和貢獻者：
 
+- [openWakeWord](https://github.com/dscripka/openWakeWord) - 喚醒詞檢測
+- [Silero VAD](https://github.com/snakers4/silero-vad) - 語音活動檢測
+- [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) - 深度學習降噪模型
 - [OpenAI Whisper](https://github.com/openai/whisper) - 強大的語音識別模型
+- [Faster Whisper](https://github.com/SYSTRAN/faster-whisper) - 更快的 Whisper 模型
 - [FunASR](https://github.com/alibaba-damo-academy/FunASR) - 阿里巴巴語音識別
 - [Vosk](https://github.com/alphacep/vosk-api) - 離線語音識別
-- [PyStoreX](https://github.com/pytorchx/pystorex) - 狀態管理框架
+- [PyStoreX](https://pypi.org/project/pystorex) - 狀態管理框架
 - [yaml2py](https://pypi.org/project/yaml2py/) - YAML 配置管理
 - [pretty-loguru](https://pypi.org/project/pretty-loguru/) - 美化日誌輸出
+- [redis-toolkit](https://pypi.org/project/redis-toolkit/) - Redis 工具包
 
 特別感謝所有貢獻者的努力和支持！
 
 ## 📧 聯絡我們
 
-- **問題回報**: [GitHub Issues](https://github.com/yourusername/ASRHub/issues)
-- **功能建議**: [GitHub Discussions](https://github.com/yourusername/ASRHub/discussions)
+- **問題回報**: [GitHub Issues](https://github.com/JonesHong/ASRHub/issues)
+- **功能建議**: [GitHub Discussions](https://github.com/JonesHong/ASRHub/discussions)
 - **安全問題**: security@asrhub.io
 
 ---
