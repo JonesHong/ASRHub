@@ -92,21 +92,16 @@ graph TB
     
     subgraph "ASRHub 統一中介層"
         subgraph "API 協議層"
-            SSE["HTTP SSE<br/>+ SSEManager<br/>+ Session 重用"]
-            WS["WebSocket<br/>+ 二進制傳輸<br/>+ 低延遲"]
-            SIO["Socket.IO<br/>+ 自動重連<br/>+ 房間管理"]
-        end
-        
-        subgraph "路由系統"
-            R1[SSE Routes]
-            R2[WS Routes]
-            R3[SIO Routes]
+            SSE["HTTP SSE<br/>FastAPI + SSEManager<br/>+ Session 重用"]
+            WEBRTC["WebRTC<br/>aiortc + 房間管理<br/>+ 低延遲"]
+            REDIS["Redis Pub/Sub<br/>+ 頻道管理<br/>+ 分散式"]
         end
         
         subgraph "核心狀態管理"
             STORE["PyStoreX Store<br/>(單一真相來源)"]
             REDUCER[Sessions Reducer]
             EFFECTS["Session Effects<br/>(副作用處理)"]
+            SELECTOR["Selectors<br/>(狀態查詢)"]
         end
         
         subgraph "FSM 狀態機"
@@ -115,62 +110,75 @@ graph TB
         end
         
         subgraph "音訊處理管線"
-            QUEUE["AudioQueueManager<br/>(存儲 16kHz 轉換音訊)"]
-            BUFFER["BufferManager<br/>(智慧切窗)"]
-            ENHANCE["AudioEnhancer<br/>(音量增強)"]
+            QUEUE["AudioQueueManager<br/>(時間戳支援+16kHz)"]
+            BUFFER["BufferManager<br/>(Fixed/Sliding/Dynamic)"]
+            ENHANCE["AudioEnhancer<br/>(auto_enhance)"]
             DENOISE["DeepFilterNet<br/>(深度降噪)"]
             VAD["Silero VAD<br/>(語音偵測)"]
             WAKEWORD["OpenWakeWord<br/>(喚醒詞)"]
         end
         
+        subgraph "無狀態服務層"
+            CONV["AudioConverter<br/>(FFmpeg/SciPy)"]
+            REC["Recording Service<br/>(批次後處理)"]
+            MIC["Microphone Capture<br/>(音訊輸入)"]
+            TIMER["Timer Service<br/>(計時管理)"]
+        end
+        
         subgraph "ASR 提供者池"
-            POOL["Provider Pool Manager<br/>(並行處理管理)"]
-            WHISPER["Whisper Instances[]"]
+            POOL["Provider Pool Manager<br/>(租借機制+並行處理)"]
+            WHISPER["Whisper Instances[]<br/>(Faster Whisper)"]
             FUNASR["FunASR Instances[]"]
             VOSK["Vosk Instances[]"]
             GOOGLE["Google STT Instances[]"]
+            OPENAI["OpenAI API Instances[]"]
         end
     end
     
-    WEB -->|協議選擇| SSE
-    MOBILE -->|協議選擇| WS
-    IOT -->|協議選擇| SIO
+    WEB -->|HTTP SSE| SSE
+    MOBILE -->|WebRTC| WEBRTC
+    IOT -->|Redis| REDIS
     
-    SSE --> R1
-    WS --> R2
-    SIO --> R3
-    
-    R1 -->|Action| STORE
-    R2 -->|Action| STORE
-    R3 -->|Action| STORE
+    SSE -->|Action| STORE
+    WEBRTC -->|Action| STORE
+    REDIS -->|Action| STORE
     
     STORE --> REDUCER
     REDUCER --> EFFECTS
-    EFFECTS --> FSM
+    EFFECTS --> SELECTOR
+    SELECTOR --> FSM
     
     FSM --> STRATEGY
     STRATEGY --> QUEUE
     
+    MIC --> CONV
+    CONV --> QUEUE
     QUEUE --> BUFFER
     BUFFER --> ENHANCE
     ENHANCE --> DENOISE
     DENOISE --> VAD
     VAD --> WAKEWORD
     
-    WAKEWORD --> POOL
+    WAKEWORD --> REC
+    REC --> POOL
+    
     POOL --> WHISPER
     POOL --> FUNASR
     POOL --> VOSK
     POOL --> GOOGLE
+    POOL --> OPENAI
     
-    WHISPER -->|結果| EFFECTS
-    FUNASR -->|結果| EFFECTS
-    VOSK -->|結果| EFFECTS
-    GOOGLE -->|結果| EFFECTS
+    WHISPER -->|Transcript| EFFECTS
+    FUNASR -->|Transcript| EFFECTS
+    VOSK -->|Transcript| EFFECTS
+    GOOGLE -->|Transcript| EFFECTS
+    OPENAI -->|Transcript| EFFECTS
     
-    EFFECTS -->|事件推送| SSE
-    EFFECTS -->|事件推送| WS
-    EFFECTS -->|事件推送| SIO
+    EFFECTS -->|SSE 事件| SSE
+    EFFECTS -->|WebRTC 信令| WEBRTC
+    EFFECTS -->|Redis 發布| REDIS
+    
+    TIMER -.->|計時控制| REC
 ```
 
 ### 📁 專案結構
@@ -180,76 +188,109 @@ ASRHub/
 ├── src/
 │   ├── core/                    # 🎯 核心系統
 │   │   ├── asr_hub.py          # 系統入口點與初始化
-│   │   ├── audio_queue_manager.py  # 音訊佇列管理（應移至 service/）
-│   │   ├── buffer_manager.py       # 緩衝區管理（應移至 service/）
-│   │   ├── fsm_transitions.py      # FSM 狀態轉換定義（StrategyPlugin）
-│   │   └── exceptions.py           # 自定義例外處理
+│   │   ├── audio_queue_manager.py  # 音訊佇列管理（時間戳支援）
+│   │   ├── buffer_manager.py       # 緩衝區管理（智慧切窗）
+│   │   └── fsm_transitions.py      # FSM 狀態機轉換定義
 │   │
 │   ├── api/                     # 📡 API 協議層
-│   │   ├── base.py             # API 基類定義
 │   │   ├── http_sse/           # HTTP SSE 實現
-│   │   │   ├── server.py       # SSE 伺服器
-│   │   │   ├── handlers.py     # 請求處理器
-│   │   │   ├── routes.py       # 路由定義（新）
-│   │   │   └── sse_manager.py  # SSE 連接管理（新）
-│   │   ├── websocket/          # WebSocket 實現
-│   │   │   ├── server.py       # WS 伺服器
-│   │   │   ├── handlers.py     # 消息處理器
-│   │   │   └── routes.py       # 路由定義（新）
-│   │   └── socketio/           # Socket.IO 實現
-│   │       ├── server.py       # SIO 伺服器
-│   │       ├── __init__.py     # 事件註冊
-│   │       └── routes.py       # 路由定義（新）
+│   │   │   ├── server.py       # SSE 伺服器（FastAPI）
+│   │   │   ├── endpoints.py    # 端點定義
+│   │   │   └── models.py       # 請求/回應模型
+│   │   ├── webrtc/             # WebRTC 實現
+│   │   │   ├── server.py       # WebRTC 伺服器（aiortc）
+│   │   │   ├── room_manager.py # 房間管理
+│   │   │   ├── signals.py      # 信令處理
+│   │   │   └── models.py       # WebRTC 資料模型
+│   │   ├── redis/              # Redis Pub/Sub 實現
+│   │   │   ├── server.py       # Redis 服務
+│   │   │   ├── channels.py     # 頻道定義
+│   │   │   └── models.py       # Redis 消息模型
+│   │   ├── websocket/          # WebSocket 實現（規劃中）
+│   │   ├── socketio/           # Socket.IO 實現（規劃中）
+│   │   └── grpc/               # gRPC 實現（規劃中）
+│   │       └── proto/          # Protocol Buffer 定義
 │   │
 │   ├── store/                   # 🗄️ PyStoreX 狀態管理
-│   │   ├── __init__.py         # Store 初始化
-│   │   ├── sessions/           # Session 管理
-│   │   │   ├── sessions_actions.py    # Action 定義
-│   │   │   ├── sessions_reducer.py    # Reducer 邏輯（支援時間戳）
-│   │   │   ├── sessions_effects.py    # Effects 處理（原版）
-│   │   │   ├── sessions_effect_v2.py  # SessionEffects（時間戳版+FSM驗證）
-│   │   │   └── sessions_selectors.py  # 狀態選擇器
-│   │   └── global_store.py     # 全域 Store 實例
+│   │   ├── main_store.py       # 全域 Store 實例
+│   │   └── sessions/           # Session 管理
+│   │       ├── sessions_state.py    # 狀態定義
+│   │       ├── sessions_action.py   # Action 類型
+│   │       ├── sessions_reducer.py  # Reducer 純函數
+│   │       ├── sessions_effect.py   # Effects 副作用處理
+│   │       ├── sessions_selector.py # 選擇器
+│   │       └── handlers/            # 事件處理器（規劃中）
 │   │
 │   ├── service/                 # ⚙️ 無狀態服務層（Stateless Services）
 │   │   ├── audio_converter/        # 音訊格式轉換
+│   │   │   ├── service.py          # 轉換服務入口
 │   │   │   ├── scipy_converter.py  # SciPy 轉換器（GPU 支援）
 │   │   │   └── ffmpeg_converter.py # FFmpeg 轉換器
-│   │   ├── audio_enhancer.py       # 音訊增強（音量調整、動態壓縮）
+│   │   ├── audio_enhancer.py       # 音訊增強（自動音量、動態壓縮）
 │   │   ├── denoise/                 # 降噪服務
 │   │   │   └── deepfilternet_denoiser.py # DeepFilterNet 深度降噪
-│   │   ├── vad/                     # VAD 偵測服務
-│   │   │   └── silero_vad.py       # Silero VAD 實現
+│   │   ├── vad/                     # 語音活動偵測
+│   │   │   ├── silero_vad.py       # Silero VAD 實現
+│   │   │   └── usage_example.py    # 使用範例
 │   │   ├── wakeword/                # 喚醒詞偵測
-│   │   │   └── openwakeword.py     # OpenWakeWord 實現
-│   │   └── recording/               # 錄音服務
+│   │   │   ├── openwakeword.py     # OpenWakeWord 實現
+│   │   │   └── usage_example.py    # 使用範例
+│   │   ├── recording/               # 錄音服務
+│   │   │   └── recording.py        # 錄音管理
+│   │   ├── microphone_capture/      # 麥克風擷取
+│   │   │   └── microphone_capture.py # 音訊輸入
+│   │   ├── timer/                   # 計時服務
+│   │   │   ├── timer.py            # 計時器實現
+│   │   │   ├── timer_service.py    # 計時服務
+│   │   │   └── usage_example.py    # 使用範例
+│   │   └── service_loader.py       # 服務載入器
 │   │
-│   ├── provider/                # 🎙️ ASR 提供者 (注意：是 provider 不是 providers)
+│   ├── provider/                # 🎙️ ASR 提供者（注意：單數形式）
 │   │   ├── provider_manager.py # Provider Pool 管理器（並行處理）
-│   │   ├── whisper/            # Whisper 實現
+│   │   ├── whisper/            # Whisper 本地模型
+│   │   │   ├── whisper_provider.py        # 原始 Whisper
+│   │   │   ├── faster_whisper_provider.py # Faster Whisper
+│   │   │   └── model_loader.py           # 模型載入器
 │   │   ├── funasr/             # FunASR 實現
 │   │   ├── vosk/               # Vosk 實現
-│   │   ├── google_stt/         # Google STT
-│   │   └── openai/             # OpenAI API
+│   │   ├── google_stt/         # Google STT API
+│   │   └── openai/             # OpenAI Whisper API
 │   │
 │   ├── interface/               # 📐 服務介面定義
-│   │   ├── audio_queue.py      # 音訊佇列介面
-│   │   ├── buffer.py           # 緩衝區管理介面
+│   │   ├── action.py           # Action 基礎介面
+│   │   ├── asr_provider.py     # ASR Provider 介面
+│   │   ├── audio.py            # 音訊資料介面
 │   │   ├── audio_converter.py  # 音訊轉換介面
-│   │   ├── asr_provider.py     # ASR Provider 基礎介面
-│   │   └── provider_pool_interfaces.py # Provider Pool 相關介面
+│   │   ├── audio_metadata.py   # 音訊元資料
+│   │   ├── audio_queue.py      # 音訊佇列介面
+│   │   ├── buffer.py           # 緩衝區介面
+│   │   ├── exceptions.py       # 例外定義
+│   │   ├── microphone.py       # 麥克風介面
+│   │   ├── provider_pool_interfaces.py # Provider Pool 介面
+│   │   ├── recording.py        # 錄音介面
+│   │   ├── state.py            # 狀態介面
+│   │   ├── strategy.py         # 策略模式介面
+│   │   ├── timer.py            # 計時器介面
+│   │   ├── vad.py              # VAD 介面
+│   │   └── wake.py             # 喚醒詞介面
 │   │
 │   ├── utils/                   # 🛠️ 工具模組
-│   │   ├── logger.py           # pretty-loguru 日誌
-│   │   ├── audio_format_detector.py # 格式檢測
-│   │   └── validators.py       # 資料驗證
+│   │   ├── logger.py           # pretty-loguru 日誌系統
+│   │   ├── id_provider.py      # UUID v7 ID 生成器
+│   │   ├── model_downloader.py # 模型下載器
+│   │   ├── rxpy_async.py       # RxPY 非同步工具
+│   │   ├── singleton.py        # 單例模式
+│   │   ├── string_case.py      # 字串轉換工具
+│   │   └── visualization/      # 視覺化工具
+│   │       ├── base.py         # 基礎視覺化
+│   │       ├── panels.py       # 面板元件
+│   │       └── waveform_visualizer.py # 波形視覺化
 │   │
-│   └── models/                  # 📦 資料模型
-│       ├── audio.py            # 音訊資料模型
-│       ├── transcript.py       # 轉譯結果模型
-│       └── session.py          # Session 模型
+│   └── config/                  # 📦 配置類別（自動生成）
+│       ├── manager.py          # ConfigManager 單例
+│       └── schema.py           # 配置結構定義
 │
-├── config/                      # ⚙️ 配置管理
+├── config/                      # ⚙️ 配置檔案
 │   ├── config.yaml             # 主配置檔（不納入版控）
 │   └── config.sample.yaml      # 配置範例
 │
@@ -333,11 +374,6 @@ flowchart LR
    - 配額管理防止壟斷
    - 健康檢查自動修復
 
-## 📚 核心設計文件
-
-- **[AUDIO_PROCESSING_PIPELINE_DESIGN.md](./AUDIO_PROCESSING_PIPELINE_DESIGN.md)** - 音訊處理管線設計與實作狀態
-- **[FSM_PYSTOREX_INTEGRATION.md](./FSM_PYSTOREX_INTEGRATION.md)** - FSM 與 PyStoreX 整合架構詳解
-- **[CLAUDE.md](./CLAUDE.md)** - Claude Code 開發指引與架構原則
 
 ## 🚀 快速開始
 
@@ -347,6 +383,7 @@ flowchart LR
 - **作業系統**：Linux、macOS、Windows
 - **記憶體**：建議 4GB 以上（依 ASR 模型而定）
 - **儲存空間**：至少 2GB（Whisper 模型需額外空間）
+- **GPU（選用）**：NVIDIA GPU with CUDA 11.8+ for acceleration
 
 ### 安裝步驟
 
@@ -370,7 +407,14 @@ pip install -r requirements.txt
 pip install -e .  # 開發模式安裝
 ```
 
-4. **配置設定**
+1. **安裝 PyTorch**
+```bash
+pip install torch==2.6.0+cu126 torchvision==0.21.0+cu126 torchaudio==2.6.0 --extra-index-url https://download.pytorch.org/whl/cu126
+
+```
+
+
+1. **配置設定**
 ```bash
 # 複製範例配置檔
 cp config/config.sample.yaml config/config.yaml
@@ -379,63 +423,44 @@ cp config/config.sample.yaml config/config.yaml
 nano config/config.yaml
 ```
 
-5. **生成配置類別**
+6. **生成配置類別**
 ```bash
 # 使用 yaml2py 生成類型安全的配置類別
 yaml2py --config config/config.yaml --output ./src/config
 ```
 
-6. **啟動服務**
+7. **啟動服務**
 ```bash
-# 啟動主服務
-python -m src.core.asr_hub
-
-# 或使用 Makefile
-make run
+# 啟動主系統
+python main.py
 ```
 
-### 🕐 時間戳音訊佇列使用
+**系統依賴**：
+```bash
+# Ubuntu/Debian
+sudo apt-get install ffmpeg portaudio19-dev
 
-#### 啟用方式
+# macOS
+brew install ffmpeg portaudio
+
+# Windows
+# 下載 FFmpeg: https://ffmpeg.org/download.html
+# PyAudio 需要 Visual C++ Build Tools
+```
+
+### 驗證安裝
 
 ```bash
-# 方式一：環境變數
-export USE_TIMESTAMP_EFFECTS=true
-python -m src.core.asr_hub
+# 檢查 PyTorch 是否正確安裝
+python -c "import torch; print(f'PyTorch: {torch.__version__}')"
 
-# 方式二：使用專用啟動腳本
-python run_with_timestamp.py
+# 檢查 CUDA 是否可用（如果有 GPU）
+python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}')"
+
+# 檢查 FFmpeg
+ffmpeg -version
 ```
 
-#### 程式碼使用範例
-
-```python
-from src.core.audio_queue_manager import audio_queue
-
-# 推送音訊並獲取時間戳
-timestamp = audio_queue.push(session_id, audio_chunk)
-
-# 多讀取器非破壞性讀取
-wake_chunks = audio_queue.pull_from_timestamp(
-    session_id, 
-    reader_id="wake_word",
-    from_timestamp=start_time
-)
-
-# 獲取時間範圍內的音訊（用於錄音）
-recording = audio_queue.get_audio_between_timestamps(
-    session_id,
-    start_timestamp=wake_time - 0.5,  # Pre-roll
-    end_timestamp=silence_time + 0.3   # Tail padding
-)
-
-# 阻塞式讀取（用於實時處理）
-timestamped = audio_queue.pull_blocking_timestamp(
-    session_id,
-    reader_id="vad",
-    timeout=1.0
-)
-```
 
 #### 處理流程
 
@@ -474,151 +499,6 @@ from src.config.manager import ConfigManager
 config = ConfigManager()
 port = config.api.http_sse.port
 model = config.providers.whisper.model
-```
-
-### 配置檔案結構
-
-```yaml
-# config/config.yaml
-app:
-  name: "ASRHub"
-  version: "1.0.0"
-  debug: true
-
-api:
-  http_sse:
-    host: "0.0.0.0"
-    port: 8080
-    cors_enabled: true
-  
-  websocket:
-    host: "0.0.0.0"
-    port: 8081
-    
-  socketio:
-    host: "0.0.0.0"
-    port: 8082
-
-providers:
-  whisper:
-    model: "base"
-    device: "cpu"
-    language: "zh"
-    
-  funasr:
-    model_dir: "./models/funasr"
-    
-  google:
-    credentials_path: "./credentials/google.json"
-
-operators:
-  vad:
-    enabled: true
-    threshold: 0.5
-    
-  denoiser:
-    enabled: false
-    level: "medium"
-    
-  sample_rate:
-    target: 16000
-```
-
-### ASR 提供者設定
-
-#### Whisper 配置
-```yaml
-providers:
-  whisper:
-    model: "base"  # tiny, base, small, medium, large
-    device: "cuda"  # cpu, cuda
-    compute_type: "float16"
-    language: "zh"
-    initial_prompt: "以下是中文語音內容"
-```
-
-#### FunASR 配置
-```yaml
-providers:
-  funasr:
-    model_dir: "./models/funasr"
-    use_gpu: true
-    batch_size: 1
-```
-
-### 協議參數調整
-
-```yaml
-api:
-  http_sse:
-    max_connections: 100
-    timeout: 30
-    buffer_size: 8192
-    
-  websocket:
-    ping_interval: 25
-    ping_timeout: 5
-    max_message_size: 10485760  # 10MB
-```
-
-## 🛠️ 開發指南
-
-### 專案結構說明
-
-- **src/core**: 核心系統，包含 ASRHub 主類別和 FSM 狀態機
-- **src/api**: 各種通訊協議的實現
-- **src/operators**: 音訊處理運算子，由 SessionEffects 管理
-- **src/providers**: ASR 服務提供者的適配器
-- **src/store**: PyStoreX 事件驅動狀態管理
-- **src/stream**: 音訊串流控制和緩衝管理
-
-### 開發流程
-
-1. **設定開發環境**
-```bash
-# 安裝開發依賴
-pip install -r requirements-dev.txt
-
-# 安裝 pre-commit hooks
-pre-commit install
-```
-
-2. **執行測試**
-```bash
-# 執行所有測試
-make test
-
-# 執行測試並生成覆蓋率報告
-make test-cov
-
-# 執行特定測試
-pytest tests/test_whisper.py
-```
-
-3. **新增 ASR 提供者**
-```python
-# src/providers/custom_provider.py
-from src.providers.base import ProviderBase
-
-class CustomProvider(ProviderBase):
-    def initialize(self, config):
-        # 初始化提供者
-        pass
-    
-    def transcribe(self, audio_data):
-        # 實現轉譯邏輯
-        return transcript
-```
-
-4. **新增音訊處理運算子**
-```python
-# src/operators/custom_operator.py
-from src.operators.base import OperatorBase
-
-class CustomOperator(OperatorBase):
-    def process(self, audio_stream):
-        # 處理音訊串流
-        return processed_stream
 ```
 
 

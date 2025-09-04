@@ -1,78 +1,72 @@
 # ASR Hub 依賴套件
 
 # 核心依賴
-yaml2py
-pretty-loguru
-redis-toolkit
-pystorex
-pydantic
-python-dotenv
+yaml2py==0.2.0
+pretty-loguru==1.2.0
+redis-toolkit>=0.4.0
+pystorex==0.2.1
+pydantic>=2.11.7
+python-dotenv>=1.1.1
 
 # 響應式和資料結構
-reactivex  # PyStoreX 依賴
-immutables  # PyStoreX 使用的不可變資料結構
+reactivex>=4.0.4  # PyStoreX 依賴
+immutables>=0.21  # PyStoreX 使用的不可變資料結構
 
 # 系統工具
-watchdog  # 文件監控（ConfigManager 使用）
-redis  # Redis 客戶端
-requests  # HTTP 請求
-tqdm  # 進度條
-schedule  # 定時任務排程
+watchdog>=6.0.0  # 文件監控（ConfigManager 使用）
+redis>=6.4.0  # Redis 客戶端
+requests>=2.32.0  # HTTP 請求
+tqdm>=4.67.0  # 進度條
+schedule>=1.2.0  # 定時任務排程
 # 非同步框架
-fastapi
-uvicorn[standard]
-aiofiles
-httpx
-sse-starlette
-python-multipart
+fastapi>=0.116.0
+uvicorn[standard]>=0.35.0
+aiofiles>=24.1.0
+httpx>=0.28.0
+sse-starlette>=3.0.0
+python-multipart>=0.0.20
 
 # WebSocket 和 Socket.io
-websockets
-python-socketio
-aiohttp
+websockets>=15.0.0
+python-socketio>=5.13.0
+aiohttp>=3.12.0
 
 # WebRTC (LiveKit)
 livekit>=1.0.12
 livekit-api>=1.0.5
 
 # 音訊處理
-numpy
-scipy>=1.11.0  # 高品質音訊重新取樣
-soundfile
-librosa
-pydub
-pyaudio
-sounddevice>=0.4.6  # 主要音訊後端
-gradio>=4.0.0  # Web UI 視覺化
+numpy>=2.3.0
+scipy>=1.16.0  # 高品質音訊重新取樣
+soundfile>=0.13.0
+librosa>=0.11.0
+pydub>=0.25.1
+# pyaudio>=0.2.14  # 需要系統級安裝
+sounddevice>=0.5.0  # 主要音訊後端
+# gradio>=4.0.0  # Web UI 視覺化（大型套件，選用）
 
 # GPU 加速 (選用 - 需要 CUDA)
+# cupy-cuda13x  # 取消註解以啟用 GPU 支援 (需要 CUDA 13.x)
 # cupy-cuda12x  # 取消註解以啟用 GPU 支援 (需要 CUDA 12.x)
 # cupy-cuda11x  # 或使用這個 for CUDA 11.x
 
 # 視覺化和系統監控
-matplotlib
-psutil
-
+matplotlib>=3.10.0
 # VAD 和機器學習
-onnxruntime
+onnxruntime>=1.22.0
 
-# ASR Providers
+# ASR Providers (選用 - 大型模型)
 # Whisper
-openai-whisper
-faster-whisper
+openai-whisper>=20250625
+faster-whisper>=1.2.0
 
 # 測試工具（選用）
-pytest
-pytest-asyncio
-pytest-cov
-coverage
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+pytest-cov>=6.0.0
 sseclient-py>=1.8.0  # SSE 客戶端測試用
-
-# 視覺化和分析（選用）
-colorama
-matplotlib
 
 
 # 其他工具
-uuid6  # UUID v7 支援（更好的時間排序）
-transitions  # 狀態機管理
+uuid6==2025.0.1  # UUID v7 支援（更好的時間排序）
+transitions==0.9.3  # 狀態機管理
